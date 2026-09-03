@@ -750,3 +750,7 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 }
 .og-load-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .seed-scope { display: inline-flex; align-items: center; gap: 6px; }
+.og-chip-label {
+  font-size: 11px; color: var(--muted); opacity: .75;
+  align-self: center; margin-right: 2px;
+}

@@ -141,6 +141,17 @@ const RelEdge = memo(RelEdgeInner)
 const nodeTypes = { candidate: CandidateNode, ghost: GhostNode }
 const edgeTypes = { rel: RelEdge }
 
+// 热度分层（数据驱动）：本体库实测 90% 条目 mentions=1，按 mentions 分档才真正
+// 有区分度；而 kind 目前 100% 是 entity，类型芯片暂时退化。两档都保留。
+const BUCKETS: [string, (m: number) => boolean, string][] = [
+  ['core', (m) => m >= 5, '核心 · 提及≥5'],
+  ['common', (m) => m >= 3 && m <= 4, '常见 · 3~4'],
+  ['rare', (m) => m === 2, '偶发 · =2'],
+  ['tail', (m) => m <= 1, '长尾 · ≤1'],
+]
+const bucketOf = (m: number) =>
+  (BUCKETS.find(([, f]) => f(m)) ?? BUCKETS[BUCKETS.length - 1])[0]
+
 // ---------------- graph building ----------------
 
 function toFlowData(nodes: Cand[], edgesRaw: Rel[]): { nodes: Node[]; edges: Edge[] } {
@@ -205,6 +216,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   // 本体库渐进加载：默认最热 50 → 300 → 全部；type 芯片可整类加入
   const [loadLimit, setLoadLimit] = useState(50)
   const [kindAdds, setKindAdds] = useState<Set<string>>(new Set())
+  const [bucketAdds, setBucketAdds] = useState<Set<string>>(new Set())
   const [pinned, setPinned] = useState<Set<number>>(new Set())  // 手动点开的项
   const relaid = useRef(false)
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -235,18 +247,32 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
     return [...m.entries()].sort((a, b) => b[1] - a[1])
   }, [visible])
 
+  // 热度分层计数（只显示非空的档位）
+  const bucketCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of visible) {
+      const k = bucketOf(c.mentions)
+      m.set(k, (m.get(k) ?? 0) + 1)
+    }
+    return BUCKETS
+      .map(([k, , label]) => [k, label, m.get(k) ?? 0] as const)
+      .filter(([, , n]) => n > 0)
+  }, [visible])
+
   const term = q.trim().toLowerCase()
-  /** 已加载集合 = 最热前 N ∪ 已勾选 kind 的全部 ∪ 搜索命中 ∪ 手动点开项 */
+  /** 已加载集合 = 最热前 N ∪ 已勾选 kind 的全部 ∪ 已勾选热度档 ∪ 搜索命中 ∪ 点开项 */
   const loaded = useMemo(() => {
     const s = new Set<number>()
     const n = Math.min(loadLimit === Infinity ? Number.MAX_SAFE_INTEGER : loadLimit,
       hotRanked.length)
     for (let i = 0; i < n; i++) s.add(hotRanked[i].id)
     if (kindAdds.size) for (const c of visible) if (kindAdds.has(c.kind)) s.add(c.id)
+    if (bucketAdds.size) for (const c of visible)
+      if (bucketAdds.has(bucketOf(c.mentions))) s.add(c.id)
     if (term) for (const c of visible) if (c.name.toLowerCase().includes(term)) s.add(c.id)
     for (const id of pinned) s.add(id)
     return s
-  }, [hotRanked, loadLimit, kindAdds, visible, term, pinned])
+  }, [hotRanked, loadLimit, kindAdds, bucketAdds, visible, term, pinned])
 
   const loadedVisible = useMemo(
     () => visible.filter((c) => loaded.has(c.id)), [visible, loaded])
@@ -266,9 +292,19 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
     })
     relaid.current = false   // 让新加入的整类节点走一次 dagre 自动排版
   }
+  const toggleBucket = (k: string) => {
+    setBucketAdds((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+    relaid.current = false
+  }
   const expandTo = (n: number) => { setLoadLimit(n); relaid.current = false }
   const collapseLoaded = () => {
-    setLoadLimit(50); setKindAdds(new Set()); setPinned(new Set())
+    setLoadLimit(50); setKindAdds(new Set()); setBucketAdds(new Set())
+    setPinned(new Set())
     relaid.current = false
   }
 
@@ -757,16 +793,30 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
               {' · '}节点 {loadedVisible.length} / 关系 {loadedEdges.length}/{edgesRaw.length}
               <span className="note">（按 mentions 热度排序，度数为辅）</span>
             </div>
-            {kindCounts.length > 0 && (
+            <div className="og-kind-chips">
+              <span className="og-chip-label">类型</span>
+              {kindCounts.map(([k, n]) => (
+                <button key={k}
+                  className={`og-chip ${kindAdds.has(k) ? 'on' : ''}`}
+                  onClick={() => toggleKind(k)}
+                  title={kindAdds.has(k)
+                    ? `已加入「${k}」全部 ${n} 个，点击移除`
+                    : `加入「${k}」全部 ${n} 个到列表与画布`}>
+                  {kindAdds.has(k) ? '✓' : '+'} {k} · {n}
+                </button>
+              ))}
+            </div>
+            {bucketCounts.length > 1 && (
               <div className="og-kind-chips">
-                {kindCounts.map(([k, n]) => (
+                <span className="og-chip-label">热度</span>
+                {bucketCounts.map(([k, label, n]) => (
                   <button key={k}
-                    className={`og-chip ${kindAdds.has(k) ? 'on' : ''}`}
-                    onClick={() => toggleKind(k)}
-                    title={kindAdds.has(k)
-                      ? `已加入「${k}」全部 ${n} 个，点击移除`
-                      : `加入「${k}」全部 ${n} 个到列表与画布`}>
-                    {kindAdds.has(k) ? '✓' : '+'} {k} · {n}
+                    className={`og-chip ${bucketAdds.has(k) ? 'on' : ''}`}
+                    onClick={() => toggleBucket(k)}
+                    title={bucketAdds.has(k)
+                      ? `已加入「${label}」全部 ${n} 个，点击移除`
+                      : `加入「${label}」全部 ${n} 个到列表与画布`}>
+                    {bucketAdds.has(k) ? '✓' : '+'} {label} · {n}
                   </button>
                 ))}
               </div>
