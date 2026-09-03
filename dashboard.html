@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rag-mvp · 数字人创建工具 — 项目分析 Dashboard</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --ink:#1a2332; --ink2:#5b6472; --ink3:#8a94a6;
+    --line:#e6eaf2; --brand:#2563eb; --brand-soft:#eef3fe;
+    --teal:#0f766e; --teal-soft:#e6f5f2;
+    --amber:#b45309; --amber-soft:#fdf3e3;
+    --violet:#6d28d9; --violet-soft:#f2edfd;
+    --rose:#be123c; --rose-soft:#fdeef2;
+    --green:#15803d; --green-soft:#e9f7ee;
+    --shadow:0 1px 2px rgba(20,30,55,.04),0 8px 24px rgba(20,30,55,.06);
+    --shadow-lg:0 12px 40px rgba(20,30,55,.12);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.6;font-size:14px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
+
+  /* header */
+  header{padding:28px 0 8px}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;
+    letter-spacing:.06em;color:var(--brand);text-transform:uppercase}
+  .kicker::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 4px var(--brand-soft)}
+  h1{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:10px 0 6px}
+  .sub{font-size:15px;color:var(--ink2);max-width:820px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .tag{font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;border:1px solid var(--line);
+    background:#fff;color:var(--ink2)}
+  .tag b{color:var(--ink);font-weight:700}
+
+  /* stat cards */
+  .stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:26px 0 8px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
+  .stat .n{font-size:26px;font-weight:800;letter-spacing:-.02em;line-height:1}
+  .stat .l{font-size:12px;color:var(--ink3);margin-top:6px;font-weight:500}
+  .stat.b .n{color:var(--brand)} .stat.t .n{color:var(--teal)}
+  .stat.a .n{color:var(--amber)} .stat.v .n{color:var(--violet)}
+  .stat.g .n{color:var(--green)} .stat.r .n{color:var(--rose)}
+
+  section{margin-top:34px}
+  h2{font-size:20px;font-weight:800;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+  h2 .no{width:26px;height:26px;border-radius:8px;background:var(--brand);color:#fff;font-size:13px;
+    display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex:none}
+  .lead{font-size:13px;color:var(--ink2);margin-top:6px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow);margin-top:16px}
+
+  /* positioning */
+  .hero-note{background:linear-gradient(135deg,var(--brand-soft),#fff);border:1px solid #dbe4fb;
+    border-radius:16px;padding:20px 22px;margin-top:18px}
+  .hero-note .big{font-size:16px;font-weight:700;color:var(--brand)}
+  .hero-note p{font-size:13.5px;color:var(--ink2);margin-top:8px}
+
+  /* pipeline flow */
+  .flow{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;counter-reset:step}
+  .step{flex:1 1 170px;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:14px 14px 12px;position:relative;box-shadow:var(--shadow);transition:transform .15s ease,box-shadow .15s ease}
+  .step:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+  .step .idx{position:absolute;top:12px;right:12px;width:22px;height:22px;border-radius:7px;font-size:11px;
+    font-weight:700;display:flex;align-items:center;justify-content:center;color:#fff}
+  .step .t{font-weight:700;font-size:13.5px;margin-bottom:5px;padding-right:24px}
+  .step .d{font-size:12px;color:var(--ink2);line-height:1.5}
+  .step .b{display:inline-block;margin-top:8px;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px}
+  .c-blue{background:var(--brand)} .c-teal{background:var(--teal)} .c-amber{background:var(--amber)}
+  .c-violet{background:var(--violet)} .c-gray{background:#64748b}
+  .b-blue{background:var(--brand-soft);color:var(--brand)} .b-teal{background:var(--teal-soft);color:var(--teal)}
+  .b-amber{background:var(--amber-soft);color:var(--amber)} .b-violet{background:var(--violet-soft);color:var(--violet)}
+  .b-gray{background:#eef1f6;color:#64748b} .b-green{background:var(--green-soft);color:var(--green)}
+
+  /* tech stack */
+  .stack{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+  .layer{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;box-shadow:var(--shadow)}
+  .layer .h{padding:12px 16px;font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px}
+  .layer .h .dot{width:9px;height:9px;border-radius:50%}
+  .layer .body{padding:14px 16px;border-top:1px solid var(--line)}
+  .layer ul{list-style:none}
+  .layer li{font-size:13px;color:var(--ink2);padding:7px 0;border-bottom:1px dashed var(--line);display:flex;gap:8px}
+  .layer li:last-child{border-bottom:none}
+  .layer li b{color:var(--ink);font-weight:600}
+  .layer li .em{color:var(--ink3);font-size:12px}
+
+  /* unique tech cards */
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:18px}
+  .tech{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:var(--shadow);
+    border-top:3px solid transparent;transition:transform .15s ease,box-shadow .15s ease}
+  .tech:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+  .tech .h{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .tech .ic{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    font-size:16px;flex:none}
+  .tech .t{font-weight:700;font-size:15px}
+  .tech .d{font-size:13px;color:var(--ink2)}
+  .tech .d code{background:var(--brand-soft);color:var(--brand);border-radius:5px;padding:1px 6px;font-size:12px;
+    font-family:ui-monospace,Consolas,monospace}
+  .t-brand{border-top-color:var(--brand)} .t-teal{border-top-color:var(--teal)} .t-amber{border-top-color:var(--amber)}
+  .t-violet{border-top-color:var(--violet)} .t-green{border-top-color:var(--green)} .t-rose{border-top-color:var(--rose)}
+  .ic-brand{background:var(--brand-soft)} .ic-teal{background:var(--teal-soft)} .ic-amber{background:var(--amber-soft)}
+  .ic-violet{background:var(--violet-soft)} .ic-green{background:var(--green-soft)} .ic-rose{background:var(--rose-soft)}
+
+  /* TODO / roadmap */
+  .todobar{display:flex;gap:14px;margin-top:18px}
+  .todocard{flex:1;border-radius:14px;padding:20px;box-shadow:var(--shadow)}
+  .todocard .n{font-size:30px;font-weight:800;line-height:1}
+  .todocard .l{font-size:12.5px;color:var(--ink2);margin-top:6px;font-weight:600}
+  .done{background:linear-gradient(135deg,var(--green-soft),#fff);border:1px solid #c9e8d4}
+  .done .n{color:var(--green)}
+  .roadmap{background:linear-gradient(135deg,var(--amber-soft),#fff);border:1px solid #f2dfb6}
+  .roadmap .n{color:var(--amber)}
+  table{width:100%;border-collapse:collapse;margin-top:18px;font-size:13px}
+  th{text-align:left;font-weight:700;color:var(--ink2);font-size:11.5px;letter-spacing:.04em;
+    text-transform:uppercase;padding:10px 12px;border-bottom:2px solid var(--line)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--ink2);vertical-align:top}
+  td b{color:var(--ink)}
+  tr:last-child td{border-bottom:none}
+  .pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+  .p-core{background:var(--amber-soft);color:var(--amber)} .p-enh{background:#eef1f6;color:#64748b}
+  .p-part{background:var(--teal-soft);color:var(--teal)}
+
+  /* modules */
+  .mods{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+  .mod{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 13px;display:flex;
+    justify-content:space-between;align-items:center;font-size:13px}
+  .mod .m{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;font-weight:600;color:var(--ink)}
+  .mod .s{font-size:11px;color:var(--ink3);white-space:nowrap}
+  .mod .s b{color:var(--brand);font-weight:700}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--ink3);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+
+  @media(max-width:900px){
+    .stats{grid-template-columns:repeat(3,1fr)}
+    .stack,.grid2,.mods{grid-template-columns:1fr}
+    .todobar{flex-direction:column}
+  }
+  @media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="kicker">Project Analysis Dashboard</span>
+    <h1>rag-mvp · 数字人创建工具</h1>
+    <p class="sub">把部门文档 / 知识资料，经「RAG 提取 → 本体构建 → 审批 → 对话 → 幻觉基准」一条链路，产出一个<strong>有据可依、能对答、绝不凭空捏造</strong>的数字人（AI 分身）。当前为 MVP 原型，单机 localhost 运行。</p>
+    <div class="meta">
+      <span class="tag">技术栈 <b>FastAPI + React + SQLite</b></span>
+      <span class="tag">模型 <b>V4-Flash(提名) + GLM 5.2(判卷) + Ollama bge-m3(嵌入)</b></span>
+      <span class="tag">定位 <b>知识包构建 / 数字人孵化工具</b></span>
+      <span class="tag">运行 <b>http://localhost:8000</b></span>
+    </div>
+  </header>
+
+  <!-- stats -->
+  <div class="stats">
+    <div class="stat b"><div class="n">6.3k</div><div class="l">后端 Python 行</div></div>
+    <div class="stat t"><div class="n">3.0k</div><div class="l">前端 TS/TSX 行</div></div>
+    <div class="stat v"><div class="n">158</div><div class="l">单元测试用例</div></div>
+    <div class="stat a"><div class="n">19</div><div class="l">SQLite 数据表</div></div>
+    <div class="stat g"><div class="n">0</div><div class="l">代码内 TODO 标记</div></div>
+    <div class="stat r"><div class="n">13</div><div class="l">已设计未落地项</div></div>
+  </div>
+
+  <!-- 1. 是什么 -->
+  <section>
+    <h2><span class="no">1</span>这个项目在做什么</h2>
+    <p class="lead">一句话：<strong>给一个「数字人」装上一套可追溯、可审批、可回滚的本体知识，并让它只按这套知识回答。</strong></p>
+    <div class="hero-note">
+      <div class="big">「LLM 无终审权」是贯穿全代码的第一原则</div>
+      <p>所有大模型（V4-Flash / GLM 5.2）在这里都只做<strong>提名与生成</strong>，最终裁决永远是「确定性代码 + 用户」。一条候选本体必须逐字命中原文、过三关校验、再经人审批，才能进入数字人的知识；模型凭空编造的证据当场丢弃。这让数字人回答时可逐字回指原文——而不是 ChatGPT 式的自信幻觉。</p>
+    </div>
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:4px">端到端闭环（已全部实现）</h3>
+      <p style="font-size:13px;color:var(--ink2)">配置模型 → 扫描入库（分段·摘要·标签·嵌入）→ 身份预筛（锚点）→ 本体提取（EDC + 三关校验）→ 出题考核 → 二次编排清洗 → 本体装配 → 数字人对话 → 四组对照幻觉基准 → 错误归因与版本管理。</p>
+    </div>
+  </section>
+
+  <!-- 2. 流水线 -->
+  <section>
+    <h2><span class="no">2</span>核心流水线（10 阶段）</h2>
+    <p class="lead">颜色语义：蓝 = 确定性代码 / 前端，青 = 本地 Ollama·嵌入，橙 = 公司大模型（V4-Flash / GLM），紫 = 数字人专属段，灰 = 任务态。</p>
+    <div class="flow">
+      <div class="step"><span class="idx c-gray">0</span><div class="t">配置</div><div class="d">填 V4-Flash 与 GLM 端点、拉 bge-m3、选工作目录</div><span class="b b-gray">任务态</span></div>
+      <div class="step"><span class="idx c-blue">1</span><div class="t">入库 ingest</div><div class="d">md/txt/pdf → 分段 → Flash 摘要+标签 → 嵌入 → SQLite</div><span class="b b-teal">bge-m3 嵌入</span></div>
+      <div class="step"><span class="idx c-blue">2</span><div class="t">身份预筛</div><div class="d">高频词统计(0 LLM) → LLM 提名身份+锚点 → 用户批准</div><span class="b b-blue">锚点引导</span></div>
+      <div class="step"><span class="idx c-amber">3</span><div class="t">本体提取</div><div class="d">EDC 开放抽取 SPO 候选 → 结构/证据/语义三关校验</div><span class="b b-amber">LLM 只提名</span></div>
+      <div class="step"><span class="idx c-amber">4</span><div class="t">考题考核</div><div class="d">提取同次调用出题 → 审批前用题考核候选本体</div><span class="b b-violet">异源判卷</span></div>
+      <div class="step"><span class="idx c-blue">5</span><div class="t">二次编排</div><div class="d">确定性规则清洗 + GLM 相关度分档 → 一键终审</div><span class="b b-gray">delete/merge</span></div>
+      <div class="step"><span class="idx c-violet">6</span><div class="t">本体装配</div><div class="d">L0锚点/L1规则/L2GLM 三层筛 → 复制进数字人 ontology 段</div><span class="b b-violet">六元语之一</span></div>
+      <div class="step"><span class="idx c-violet">7</span><div class="t">数字人对话</div><div class="d">动态检索窗口 + 本体约束 + GLM 生成，超范围就说不知道</div><span class="b b-green">防幻觉</span></div>
+      <div class="step"><span class="idx c-amber">8</span><div class="t">四组对照基准</div><div class="d">G0裸/G1本体/G2RAG/G3叠加 → GLM 判卷 → 量化增益</div><span class="b b-amber">A/B 幻觉</span></div>
+      <div class="step"><span class="idx c-blue">9</span><div class="t">归因·版本管理</div><div class="d">错误归因提名 → 用户审 → 快照/应用/回滚，版本 v+1</div><span class="b b-gray">可回滚</span></div>
+    </div>
+  </section>
+
+  <!-- 3. 技术栈 -->
+  <section>
+    <h2><span class="no">3</span>技术栈与架构</h2>
+    <div class="stack">
+      <div class="layer">
+        <div class="h"><span class="dot" style="background:var(--brand)"></span>模型层（三通道，职责分离）</div>
+        <div class="body"><ul>
+          <li><b>V4-Flash</b><span class="em">OpenAI 兼容 · 提名/生成</span></li>
+          <li><b>GLM 5.2</b><span class="em">判卷/核验/归因 · 不设规则降级</span></li>
+          <li><b>Ollama bge-m3</b><span class="em">本地 1024 维嵌入 · WSL2</span></li>
+          <li><b>qwen2.5:7b-32k</b><span class="em">本地对话 baseline · num_ctx 32768</span></li>
+          <li><b>hash / 规则降级</b><span class="em">无 LLM 也能跑通全链路</span></li>
+        </ul></div>
+      </div>
+      <div class="layer">
+        <div class="h"><span class="dot" style="background:var(--teal)"></span>应用层（FastAPI + React）</div>
+        <div class="body"><ul>
+          <li><b>FastAPI</b><span class="em">REST + WebSocket 事件流 + 托管 dist</span></li>
+          <li><b>React + Vite + TS</b><span class="em">自绘 SVG 图谱 · 5 个页面</span></li>
+          <li><b>job 执行器</b><span class="em">一切长操作皆任务 · 暂停/恢复/续跑</span></li>
+          <li><b>自适应并发</b><span class="em">起 4 并发，429 步进下降</span></li>
+          <li><b>WS 断线重连</b><span class="em">指数退避 + seq 增量补齐</span></li>
+        </ul></div>
+      </div>
+      <div class="layer">
+        <div class="h"><span class="dot" style="background:var(--amber)"></span>存储 & 部署（单机 Windows）</div>
+        <div class="body"><ul>
+          <li><b>SQLite</b><span class="em">任务态+数据态同库 · WAL · 免索引标记</span></li>
+          <li><b>PG + pgvector</b><span class="em">正式模式换装点 · Store 接口预留</span></li>
+          <li><b>WSL2</b><span class="em">Ollama + PG · localhost 端口转发</span></li>
+          <li><b>start.ps1</b><span class="em">一键启动 · DPAPI 密码缓存</span></li>
+          <li><b>pytest</b><span class="em">158 用例 · 零网络零外部依赖</span></li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 独特技术点 -->
+  <section>
+    <h2><span class="no">4</span>和别人不一样的地方</h2>
+    <p class="lead">以下不是「用了哪个库」，而是这个项目在方法论与工程上的独有设计。</p>
+    <div class="grid2">
+      <div class="tech t-brand">
+        <div class="h"><span class="ic ic-brand">⚖️</span><span class="t">「LLM 无终审权」铁律 + 三关校验</span></div>
+        <div class="d">LLM 只提名，模型输出永远过三层确定性关卡：<b>结构关</b>（闭集枚举/类型/长度）→ <b>证据关</b>（mention 必须逐字出现在 chunk 原文，幻觉 span 当场丢弃）→ <b>语义关</b>（去重）。用户是唯一终审点。</div>
+      </div>
+      <div class="tech t-amber">
+        <div class="h"><span class="ic ic-amber">🔀</span><span class="t">异源交叉核验（dual-LLM）</span></div>
+        <div class="d">V4-Flash 生成、GLM 5.2 判卷，两个不同模型互相制衡。判卷通道<strong>故意不设规则降级</strong>——杜绝「同一个模型给自己的输出打分」的同源偏差。代码注释里明确：判卷失败必须抛错，不允许静默自判。</div>
+      </div>
+      <div class="tech t-teal">
+        <div class="h"><span class="ic ic-teal">🪟</span><span class="t">动态检索窗口（非平铺截断）</span></div>
+        <div class="d">把本体注入 prompt 不是「取前 N 个」，而是：字面匹配打分（0 LLM）→ 沿关系图 1/2 跳扩展 → 在 <code>20% 预算</code>内按「锚点→命中本体→命中关系→扩展」分层填充。0 命中时再调一次 LLM 抽概念词兜底，但<strong>LLM 只出概念、不碰实体选择权</strong>。</div>
+      </div>
+      <div class="tech t-violet">
+        <div class="h"><span class="ic ic-violet">📊</span><span class="t">四组对照幻觉基准（A/B 量化）</span></div>
+        <div class="d">同一批题跑 G0 裸模型 / G1 仅本体 / G2 仅 RAG / G3 叠加四臂，GLM 判卷后算出<strong>本体边际、RAG 边际、总增益</strong>，用数据回答「本体到底有没有用」。这是把「防幻觉」做成可复现实验，而非口号。</div>
+      </div>
+      <div class="tech t-green">
+        <div class="h"><span class="ic ic-green">🎯</span><span class="t">身份预筛 · 锚点注入（引导非白名单）</span></div>
+        <div class="d">提取前先做高频词统计（0 LLM）→ LLM 提名 3~5 个数字人身份 + 锚点本体 → 注入提取 prompt 加速并精简。但锚点是<strong>引导不是白名单</strong>，锚点外的实体照常提名，全量提取语义不被破坏。</div>
+      </div>
+      <div class="tech t-rose">
+        <div class="h"><span class="ic ic-rose">🔍</span><span class="t">证据可逐字回原文 + 考题考核</span></div>
+        <div class="d">每条候选都带 <code>span_start/span_end/span_text</code>，能定位到原文坐标。提取同次调用顺带出 2~3 道题，审批前用题考核候选——答案的 <code>quote</code> 必须逐字命中原文、<code>used</code> 必须命中候选闭集，否则判 fail。</div>
+      </div>
+      <div class="tech t-brand">
+        <div class="h"><span class="ic ic-brand">🔄</span><span class="t">job + 断点续跑 + 断电恢复</span></div>
+        <div class="d">一切长操作统一为 job，chunk 级 checkpoint，进程重启后自动续跑。429 限流特判：<strong>并发窗口步进下降 1 并重排该 chunk</strong>，而非暂停整任务。WS 事件流按 seq 增量补齐，前端断线无缝恢复。</div>
+      </div>
+      <div class="tech t-amber">
+        <div class="h"><span class="ic ic-amber">🛠️</span><span class="t">被实测逼出来的工程细节</span></div>
+        <div class="d">Windows SearchIndexer 会把 SQLite WAL 抓进 3.5GB/30s 的爬取循环 → 用 <code>FILE_ATTRIBUTE_NOT_CONTENT_INDEXED</code> 标记数据目录；Ollama 默认 <code>num_ctx=2048</code> 会静默截断注入的本体、破坏幻觉 A/B 基线 → 定制 32k Modelfile 规避。每条都是真实踩坑后的修复。</div>
+      </div>
+      <div class="tech t-teal">
+        <div class="h"><span class="ic ic-teal">🔒</span><span class="t">零依赖降级 + 优雅启动</span></div>
+        <div class="d">本地演示模式：内存存储 + hash 嵌入 + 规则摘要，无 PG、无 key 也能跑通全链路。WSL2/Ollama 不可用不阻塞启动，嵌入自动降级 hash。sudo 密码走 DPAPI 加密缓存（绑定 Windows 用户+本机），不落明文。</div>
+      </div>
+      <div class="tech t-green">
+        <div class="h"><span class="ic ic-green">🧬</span><span class="t">本体版本管理（快照 / 回滚）</span></div>
+        <div class="d">基准测试的错误归因会提名「标注/修改/删除」本体条目，用户审后一键 merge 前先<strong>快照当前本体段</strong>，版本 v+1 落库；任意版本可回滚，回滚前自动再快照（回滚本身也可逆）。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. TODO -->
+  <section>
+    <h2><span class="no">5</span>还剩多少 TODO</h2>
+    <div class="todobar">
+      <div class="todocard done">
+        <div class="n">0</div>
+        <div class="l">代码内 TODO / FIXME / XXX / 待办 标记</div>
+        <p style="font-size:12.5px;color:var(--ink2);margin-top:8px">后端 15 个模块与前端 5 个页面均无遗留 TODO 注释。grep 命中的 <code>pass #</code> 均为「降级/容错绝不打断管线」的护栏，非待办。</p>
+      </div>
+      <div class="todocard roadmap">
+        <div class="n">13</div>
+        <div class="l">「已设计、未落地」路线图项（集中在完整版 DESIGN.md）</div>
+        <p style="font-size:12.5px;color:var(--ink2);margin-top:8px">核心搁置 6 项 + 部分落地 2 项 + v2 增强 5 项。下方逐条列出，均可定位到对应设计文档。</p>
+      </div>
+    </div>
+
+    <div class="card" style="padding:8px 8px 4px">
+      <table>
+        <thead><tr><th style="width:34%">待办项</th><th style="width:16%">状态</th><th style="width:50%">说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>定时任务 / 调度器</b>（R3）</td><td><span class="pill p-core">核心搁置</span></td><td>用户明示搁置「任务规划」；DESIGN.md 设计用 APScheduler，MVP 只保留手动触发 job。</td></tr>
+          <tr><td><b>分时用模</b>（R9）</td><td><span class="pill p-core">核心搁置</span></td><td>白天本地模型 / 夜间公司大模型，任务领取时按时间窗切换。</td></tr>
+          <tr><td><b>PG / pgvector 正式存储</b></td><td><span class="pill p-core">核心搁置</span></td><td>当前数据态也放 SQLite（DM7）；Store 接口已留 PG 换装点，接 PG 只换实现不动管线。</td></tr>
+          <tr><td><b>扫描件 OCR</b></td><td><span class="pill p-core">核心搁置</span></td><td>PDF 仅文本层，扫描件标记跳过并提示。</td></tr>
+          <tr><td><b>本地小 LLM 自动选型</b></td><td><span class="pill p-core">核心搁置</span></td><td>按 CPU/GPU 自动选型；MVP 简化为「仅本地 embedding」。</td></tr>
+          <tr><td><b>断电重连增强</b></td><td><span class="pill p-core">核心搁置</span></td><td>已保留 chunk 级 checkpoint 基本能力；更细的续跑协议列完整版。</td></tr>
+          <tr><td><b>GLM 5.2 归纳核验</b>（§6）</td><td><span class="pill p-part">部分落地</span></td><td>已以「判卷 + 二次编排相关度分档 + 错误归因」形式部分落地，完整归纳核验仍按 §6 延后。</td></tr>
+          <tr><td><b>File System Access API 选目录</b>（D5）</td><td><span class="pill p-part">部分落地</span></td><td>当前手动输入绝对路径；浏览器原生目录选择器列为增强。</td></tr>
+          <tr><td><b>跨时间窗长任务换模型</b></td><td><span class="pill p-enh">v2 增强</span></td><td>长任务在 chunk 提交边界重新领取客户端，「白天本地起步、入夜自动换公司」。</td></tr>
+          <tr><td><b>watchdog 文件实时监听</b></td><td><span class="pill p-enh">v2 增强</span></td><td>本期用定时扫描 + mtime/hash 判重；实时监听列后续。</td></tr>
+          <tr><td><b>Windows 凭据管理器读回</b>（DM3）</td><td><span class="pill p-enh">v2 增强</span></td><td>sudo 密码当前用 DPAPI 文件缓存；凭据管理器因 PS 5.1 P/Invoke 成本高列 v2。</td></tr>
+          <tr><td><b>周末/节假日整日走公司</b></td><td><span class="pill p-enh">v2 增强</span></td><td>分时用模的时间窗策略补充。</td></tr>
+          <tr><td><b>本体分解器</b>（README 下一步）</td><td><span class="pill p-enh">v2 增强</span></td><td>无模式 EDC + 基于模式 GraphRAG → 规范化 → 候选本体 → ontology.yaml，设计已定未实现。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 6. 模块 -->
+  <section>
+    <h2><span class="no">6</span>代码规模与模块清单</h2>
+    <div class="mods">
+      <div class="mod"><span class="m">ontology.py</span><span class="s"><b>961</b> 行</span></div>
+      <div class="mod"><span class="m">main.py</span><span class="s"><b>853</b> 行</span></div>
+      <div class="mod"><span class="m">chat.py</span><span class="s"><b>792</b> 行</span></div>
+      <div class="mod"><span class="m">assembly.py</span><span class="s"><b>572</b> 行</span></div>
+      <div class="mod"><span class="m">benchmark.py</span><span class="s"><b>539</b> 行</span></div>
+      <div class="mod"><span class="m">orchestration.py</span><span class="s"><b>524</b> 行</span></div>
+      <div class="mod"><span class="m">identity.py</span><span class="s"><b>404</b> 行</span></div>
+      <div class="mod"><span class="m">llm.py</span><span class="s"><b>391</b> 行</span></div>
+      <div class="mod"><span class="m">db.py</span><span class="s"><b>356</b> 行</span></div>
+      <div class="mod"><span class="m">ingest.py</span><span class="s"><b>295</b> 行</span></div>
+      <div class="mod"><span class="m">jobs.py</span><span class="s"><b>290</b> 行</span></div>
+      <div class="mod"><span class="m">embedding.py</span><span class="s"><b>131</b> 行</span></div>
+      <div class="mod"><span class="m">settings_store.py</span><span class="s"><b>107</b> 行</span></div>
+      <div class="mod"><span class="m">chunking.py</span><span class="s"><b>63</b> 行</span></div>
+      <div class="mod"><span class="m">loaders.py</span><span class="s"><b>52</b> 行</span></div>
+    </div>
+    <div class="card" style="margin-top:14px;padding:16px 18px">
+      <div style="display:flex;flex-wrap:wrap;gap:24px;font-size:13px;color:var(--ink2)">
+        <span>后端 <b style="color:var(--ink)">15</b> 个模块 / <b style="color:var(--ink)">6,332</b> 行</span>
+        <span>前端 <b style="color:var(--ink)">5</b> 页面（入库·RAG预览·本体图谱·对话·设置）/ <b style="color:var(--ink)">2,977</b> 行</span>
+        <span>测试 <b style="color:var(--ink)">15</b> 文件 / <b style="color:var(--ink)">158</b> 用例</span>
+        <span>git <b style="color:var(--ink)">20+</b> 提交</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>由 WorkBuddy 自动分析生成 · 数据基于 D:\workspace2\rag_ontology_prototype 源码快照（2026-09-03）</span>
+    <span>rag-mvp · 数字人创建工具 · MVP v1</span>
+  </footer>
+
+</div>
+</body>
+</html>

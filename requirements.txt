@@ -1,0 +1,6 @@
+# RAG 雏形依赖（本地演示模式无需任何第三方依赖即可运行）
+# 正式模式（pgvector + 外部 embedding/LLM）需要安装：
+#   pip install psycopg[binary] pgvector openai
+psycopg[binary]>=3.1
+pgvector>=0.2.5
+openai>=1.40

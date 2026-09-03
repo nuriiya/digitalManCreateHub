@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+client/dist/
+client/*.timestamp-*.mjs
+
+# Runtime data (settings with token, sqlite db, credential cache)
+data/
+*.db
+wsl_cred
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
