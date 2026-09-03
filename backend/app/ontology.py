@@ -898,36 +898,54 @@ def delete_candidates(conn, ids: list[int]) -> int:
 
 def graph(conn, include_status: list[str] | None = None) -> dict:
     """Nodes + edges for the frontend SVG graph.
-    Default view: approved + pending (rejected/merged hidden)."""
+    Default view: approved + pending (rejected/merged hidden).
+
+    Perf: the old version ran ~13k queries on a 4k-candidate library (one
+    mentions count per candidate + one relations fetch per candidate + one
+    target-name lookup per relation) and took ~2.4s per call — and the frontend
+    refetches on EVERY event. All three are now single batched queries, keeping
+    the returned payload byte-identical (mentions count, exam, dangling flags).
+    """
     statuses = include_status or ["approved", "pending"]
     marks = ",".join("?" for _ in statuses)
     rows = conn.execute(
         f"SELECT id, kind, name, definition, status, merged_into FROM candidates"
         f" WHERE status IN ({marks}) ORDER BY id", statuses).fetchall()
     exam = _exam_by_candidate(conn)
-    nodes = []
+
+    # 1) mention counts in ONE query (was: one per candidate)
+    mentions = {r["candidate_id"]: r["c"] for r in conn.execute(
+        "SELECT candidate_id, COUNT(*) c FROM mentions GROUP BY candidate_id"
+    ).fetchall()}
+
     id_set = {r["id"] for r in rows}
-    for r in rows:
-        mention_count = conn.execute(
-            "SELECT COUNT(*) c FROM mentions WHERE candidate_id=?", (r["id"],)).fetchone()["c"]
-        nodes.append({"id": r["id"], "kind": r["kind"], "name": r["name"],
-                      "definition": r["definition"], "status": r["status"],
-                      "merged_into": r["merged_into"], "mentions": mention_count,
-                      "exam": exam.get(r["id"])})
+    nodes = [{"id": r["id"], "kind": r["kind"], "name": r["name"],
+              "definition": r["definition"], "status": r["status"],
+              "merged_into": r["merged_into"],
+              "mentions": mentions.get(r["id"], 0),
+              "exam": exam.get(r["id"])} for r in rows]
+
+    # 2) target-name -> entity id in ONE query (was: one per relation).
+    #    lowest id wins on duplicate names (deterministic; old code picked an
+    #    arbitrary row via fetchone()).
+    name_to_id: dict[str, int] = {}
+    for r in conn.execute(
+            "SELECT id, name FROM candidates WHERE kind='entity' ORDER BY id"
+    ).fetchall():
+        name_to_id.setdefault(r["name"], r["id"])
+
+    # 3) relations in ONE query (was: one per candidate source)
     edges = []
-    for r in rows:
-        rels = conn.execute(
-            "SELECT id, target_name, relation_type FROM relations WHERE source_id=?",
-            (r["id"],)).fetchall()
-        for rel in rels:
-            tgt_row = conn.execute(
-                "SELECT id, status FROM candidates WHERE kind='entity' AND name=?",
-                (rel["target_name"],)).fetchone()
-            tgt_id = tgt_row["id"] if tgt_row else None
-            edges.append({"id": rel["id"], "source": r["id"], "target": tgt_id,
-                          "target_name": rel["target_name"],
-                          "relation_type": rel["relation_type"],
-                          "dangling": tgt_id not in id_set if tgt_id else True})
+    for rel in conn.execute(
+            "SELECT id, source_id, target_name, relation_type FROM relations"
+            " ORDER BY source_id, id").fetchall():
+        if rel["source_id"] not in id_set:
+            continue          # only edges leaving a visible candidate
+        tgt_id = name_to_id.get(rel["target_name"])
+        edges.append({"id": rel["id"], "source": rel["source_id"],
+                      "target": tgt_id, "target_name": rel["target_name"],
+                      "relation_type": rel["relation_type"],
+                      "dangling": tgt_id not in id_set if tgt_id else True})
     return {"nodes": nodes, "edges": edges, "exam": exam_stats(conn)}
 
 

@@ -335,3 +335,75 @@ def test_resume_continues_from_checkpoint(env, workdir, fake_llm):
     names = [r["name"] for r in env.execute(
         "SELECT name FROM candidates").fetchall()]
     assert names.count("报销系统") == 1
+
+
+def test_graph_batching_keeps_data_identical(env, workdir, fake_llm):
+    """graph() now batches mentions / relations / target lookups (was ~13k
+    queries on a 4k library). Verify the batched result still matches the old
+    naive per-row computation exactly — perf fix must not change data."""
+    from app import ontology
+    _ingest(env, workdir)
+    _extract(env, fake_llm)
+    g = ontology.graph(env)
+    assert g["nodes"] and g["edges"]
+    ids = {n["id"] for n in g["nodes"]}
+
+    for n in g["nodes"]:
+        naive = env.execute(
+            "SELECT COUNT(*) c FROM mentions WHERE candidate_id=?",
+            (n["id"],)).fetchone()["c"]
+        assert n["mentions"] == naive          # batched GROUP BY == per-row count
+
+    for e in g["edges"]:
+        assert e["source"] in ids              # only visible sources
+        tgt = env.execute(
+            "SELECT id FROM candidates WHERE kind='entity' AND name=?"
+            " ORDER BY id LIMIT 1", (e["target_name"],)).fetchone()
+        assert e["target"] == (tgt["id"] if tgt else None)
+        assert e["dangling"] == ((e["target"] not in ids) if e["target"] else True)
+
+    # dangling target (a relation to a name with no entity candidate) stays visible
+    env.execute(
+        "INSERT INTO relations(source_id, target_name, relation_type, chunk_id)"
+        " VALUES(?, '不存在的目标', '指向', NULL)", (sorted(ids)[0],))
+    env.commit()
+    g2 = ontology.graph(env)
+    dangling = [e for e in g2["edges"] if e["target_name"] == "不存在的目标"]
+    assert dangling and dangling[0]["dangling"] is True
+    assert dangling[0]["target"] is None
+
+
+def test_graph_batching_keeps_data_identical(env, workdir, fake_llm):
+    """graph() now batches mentions / relations / target lookups (was ~13k
+    queries on a 4k library). Verify the batched result still matches the old
+    naive per-row computation exactly — perf fix must not change data."""
+    from app import ontology
+    _ingest(env, workdir)
+    _extract(env, fake_llm)
+    g = ontology.graph(env)
+    assert g["nodes"] and g["edges"]
+    ids = {n["id"] for n in g["nodes"]}
+
+    for n in g["nodes"]:
+        naive = env.execute(
+            "SELECT COUNT(*) c FROM mentions WHERE candidate_id=?",
+            (n["id"],)).fetchone()["c"]
+        assert n["mentions"] == naive          # batched GROUP BY == per-row count
+
+    for e in g["edges"]:
+        assert e["source"] in ids              # only visible sources
+        tgt = env.execute(
+            "SELECT id FROM candidates WHERE kind='entity' AND name=?"
+            " ORDER BY id LIMIT 1", (e["target_name"],)).fetchone()
+        assert e["target"] == (tgt["id"] if tgt else None)
+        assert e["dangling"] == ((e["target"] not in ids) if e["target"] else True)
+
+    # dangling target (a relation to a name with no entity candidate) stays visible
+    env.execute(
+        "INSERT INTO relations(source_id, target_name, relation_type, chunk_id)"
+        " VALUES(?, '不存在的目标', '指向', NULL)", (sorted(ids)[0],))
+    env.commit()
+    g2 = ontology.graph(env)
+    dangling = [e for e in g2["edges"] if e["target_name"] == "不存在的目标"]
+    assert dangling and dangling[0]["dangling"] is True
+    assert dangling[0]["target"] is None
