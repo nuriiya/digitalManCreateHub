@@ -305,8 +305,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         benchmark_id INTEGER NOT NULL REFERENCES persona_benchmarks(id) ON DELETE CASCADE,
         ontology_id INTEGER,                    -- persona_ontology.id (no FK: rollback replaces rows)
         name TEXT NOT NULL,
-        action TEXT NOT NULL,                   -- annotate|update|delete
-        suggested_definition TEXT,              -- update: the fixed definition
+        kind TEXT,                              -- 'entity' for add; NULL for annotate/update/delete
+        action TEXT NOT NULL,                   -- annotate|update|delete|add
+        suggested_definition TEXT,              -- update: fixed definition · add: new entity definition
         note TEXT,                              -- annotate: the annotation note
         reason TEXT,                            -- GLM nomination reason
         evidence TEXT,                          -- JSON [{quiz_id, question, reply}]
@@ -338,6 +339,10 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     po_cols = [r["name"] for r in conn.execute("PRAGMA table_info(persona_ontology)")]
     if "note" not in po_cols:
         conn.execute("ALTER TABLE persona_ontology ADD COLUMN note TEXT")
+    # migration: the `add` action records the kind of the new entity it inserts
+    poc_cols = [r["name"] for r in conn.execute("PRAGMA table_info(persona_ontology_changes)")]
+    if "kind" not in poc_cols:
+        conn.execute("ALTER TABLE persona_ontology_changes ADD COLUMN kind TEXT")
     conn.commit()
 
 

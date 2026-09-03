@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>前沿工程本体论：框架罗列与对比（2025–2026）</title>
+<style>
+  :root{
+    --bg:#15171c; --panel:#1d2027; --panel2:#232730; --line:#333842;
+    --text:#e6e8ee; --muted:#9aa3b2; --accent:#4f9dff; --accent2:#7ee0c0;
+    --warn:#ffb454; --red:#ff6b6b; --green:#5fd38a; --purple:#b79cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 26px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px}
+  h1{font-size:27px;margin:0 0 8px;font-weight:700;letter-spacing:.3px}
+  .sub{color:var(--muted);font-size:14px}
+  h2{font-size:21px;margin:38px 0 14px;padding-left:12px;border-left:4px solid var(--accent);font-weight:700}
+  h3{font-size:17px;margin:24px 0 8px;color:var(--accent2);font-weight:600}
+  p{margin:10px 0}
+  .lead{font-size:16px;color:#cfd5e0}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .tag.a{color:var(--accent);border-color:#2f4d7a}
+  .tag.b{color:var(--accent2);border-color:#2c5a4c}
+  .tag.c{color:var(--purple);border-color:#4a3f73}
+  .tag.d{color:var(--warn);border-color:#5a4a2c}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:18px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h4{margin:0 0 6px;font-size:16px;color:#fff}
+  .card .meta{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+  .card ul{margin:6px 0 0;padding-left:18px}
+  .card li{margin:4px 0;font-size:13.5px}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#fff;font-weight:600;position:sticky;top:0}
+  td:first-child,th:first-child{color:var(--accent2);font-weight:600;white-space:nowrap}
+  tr:nth-child(even) td{background:#191c22}
+  .pill{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11.5px;margin:1px 0}
+  .yes{background:#1d3a2a;color:var(--green)}
+  .part{background:#3a341d;color:var(--warn)}
+  .no{background:#3a1f1f;color:#ff8e8e}
+  .map{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:16px 0}
+  .map .m{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .map .m b{display:block;color:var(--accent);font-size:15px;margin-bottom:4px}
+  .map .m span{font-size:12px;color:var(--muted)}
+  .note{background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--warn);
+    border-radius:8px;padding:12px 16px;margin:16px 0;font-size:13.5px}
+  .note b{color:var(--warn)}
+  ul.clean{padding-left:20px}
+  ul.clean li{margin:7px 0}
+  code{background:#0f1115;padding:1px 6px;border-radius:5px;color:#cfe3ff;font-size:12.5px}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+  a{color:var(--accent)}
+  @media(max-width:820px){.grid,.map{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>前沿工程本体论：框架罗列与对比</h1>
+  <div class="sub">面向 AI / 数字工程时代的本体架构全景 · 调研截至 2025–2026 · 含与 Palantir 五原语映射</div>
+  <div style="margin-top:12px">
+    <span class="tag a">A 运营/动态本体</span>
+    <span class="tag b">B 工业/数字孪生本体</span>
+    <span class="tag c">C 基础/顶层本体</span>
+    <span class="tag d">D 标准与工程工具</span>
+  </div>
+</header>
+
+<p class="lead">工程本体论（Engineering Ontology）正从"静态知识描述"走向"动态、可执行的语义世界"。本报告的"工程"取两层含义：一是<strong>工程领域（制造/流程/建筑）的数据互操作本体</strong>，二是<strong>软件与 AI 系统的工程化语义层（承载 Agent 与企业决策闭环）</strong>。后者正是你正在做的 Palantir 五原语升级的直接参照系。</p>
+
+<div class="note">
+  <b>核心结论先行：</b>当前最前沿的不是某一个"标准本体"，而是两条路线正在融合——(1) 以 <b>Palantir Ontology / OAG</b> 为代表的<strong>运营型动态本体</strong>（把本体变成运行时、可执行、可治理的语义闭环）；(2) 以 <b>IOF / AAS / ISO 23726(IDO)</b> 为代表的<strong>工业形式化本体</strong>（用逻辑根基保证跨系统语义一致）。LLM 的加入（GraphRAG、本体驱动 Agent、LLM 辅助本体生成）正在把两者桥接为"神经-符号"混合架构。
+</div>
+
+<!-- ============ A ============ -->
+<h2>A. 运营型 / 动态本体（Operational & Dynamic Ontology）</h2>
+<p>这类本体的共同特征：不止"描述世界"，还要<strong>驱动世界</strong>——对象属性变化即事件，可触发规则、动作与写回。最贴合你 v2.0 的定位。</p>
+
+<div class="grid">
+  <div class="card">
+    <h4>Palantir Ontology（五原语）</h4>
+    <div class="meta">运营语义层 · 闭源平台但可导出 OWL/RDF</div>
+    <ul>
+      <li><b>五原语：</b>Object / Link / Action / Function / Interface</li>
+      <li>Object+Link 描述语义（"是什么"），Action+Function 描述动能（"能做什么"），Interface 做抽象</li>
+      <li>双轨持久化：Dataset（事实层）↔ Ontology（语义层），通过 Mapping / Materialization 解耦</li>
+      <li>Logic Engine 监听属性变化→触发 Action；MAC + PBAC 嵌入式强制访问控制</li>
+      <li>2025 新：Tracing 可观测性、AAS 与 NVIDIA 模型推送、OAG（Ontology-Augmented Generation）对抗 RAG 幻觉</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>OAG（Ontology-Augmented Generation）</h4>
+    <div class="meta">RAG 的替代范式 · 2025 起成为热点</div>
+    <ul>
+      <li>预先用本体沉淀企业知识与逻辑，LLM 在受约束的语义世界上推理，而非即兴向量检索</li>
+      <li>可追溯、稳定；临床领域 RDF/OWL 本体+KG 接 LLM：准确率 ChatGPT-4 的 37% → <b>98%</b>，幻觉率 63% → <b>1.7%</b></li>
+      <li>OG-RAG（本体结构化检索）事实召回 +55%，优势在<strong>多跳关系型问题</strong></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Agentic Ontology of Work（Skan AI AOW）</h4>
+    <div class="meta">面向工作流编排治理 · v1.0 白皮书 2026</div>
+    <ul>
+      <li><b>8 个规范实体：</b>Agents、Skills、Intents、Contexts、Policies、Memory、Confidence、Outcomes</li>
+      <li>对标当年 SOA 对服务描述/发现的规范化；聚焦"谁在什么策略下、以什么置信度做了什么"</li>
+      <li>可建于 JSON-LD / RDF-OWL / 属性图之上，非专有格式</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>三层企业 Agent 本体框架</h4>
+    <div class="meta">2025–2026 文献 · 生产级验证</div>
+    <ul>
+      <li>Role / Domain / Interaction 三层本体约束 LLM 推理</li>
+      <li>6 级成熟度模型 L0–L5（从裸 LLM 到全闭环神经符号集成）</li>
+      <li>据称在 22 个行业、650+ 专用 Agent 的生产系统验证</li>
+      <li>注意：<i>"全量注入本体"反而可能因上下文干扰降低效果</i>，需置信度感知的<strong>选择性注入</strong></li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ B ============ -->
+<h2>B. 工业 / 数字孪生本体（Industrial & Digital-Twin Ontology）</h2>
+<p>面向制造、流程、建筑资产的互操作。强调<strong>标准化子模型 / 外部词典 / 实例-类型分离</strong>，目标是"跨厂商机器可读语义"。</p>
+
+<div class="grid">
+  <div class="card">
+    <h4>AAS — Asset Administration Shell（IEC 63278）</h4>
+    <div class="meta">工业 4.0 数字孪生标准 · IDTA 维护</div>
+    <ul>
+      <li>资产被"壳"包裹，内含多个 <b>Submodel</b>（Nameplate/Technical/Operational…）</li>
+      <li>子模型元素引用 ECLASS / IEC CDD 等外部词典 → 机器可读语义</li>
+      <li>类型丰富：Property / Range / MultiLanguageProperty / SubmodelElementCollection…</li>
+      <li>实例壳 vs 类型壳（贴合 PLM：设计定义→多个制造单元）</li>
+      <li>AASX 包交换；Type1 文件 / Type2 服务 / Type3 P2P</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>DTDL — Digital Twin Definition Language</h4>
+    <div class="meta">Microsoft Azure Digital Twins · JSON-LD</div>
+    <ul>
+      <li>Interface + DTMI 标识；元素：Property / Telemetry / Command / Component / Relationship</li>
+      <li>图原生运行时：实例经关系连成孪生图，SQL 风格查询</li>
+      <li>v3 增加语义类型（如 Temperature+单位）、QuantitativeTypes 扩展</li>
+      <li>优势：开发者友好、上手快；短板：生态重心在 Azure，跨厂商词典弱于 AAS</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>IOF — Industrial Ontology Foundry</h4>
+    <div class="meta">NIST 主导 · 基于 BFO · OAGi 旗下</div>
+    <ul>
+      <li>IOF Core（中层本体）+ 领域本体（材料/质量/供应链/维护）</li>
+      <li>2025-07 发布首个子域参考本体：Biopharma Manufacturing Core</li>
+      <li>引入 Allen 区间代数、OWL-Time、QUDT 量纲单位、SHACL 校验</li>
+      <li>定位："计算机可解释、可逻辑一致性校验"的制造数据标准</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>ISO 系列（15926 / 10303 / 23247 / 23726）</h4>
+    <div class="meta">流程与产品全生命周期 · 国际标准</div>
+    <ul>
+      <li><b>ISO 15926：</b>流程工厂全生命周期，通用数据模型 + 参考数据库（RDL）；Part7 用 OWL</li>
+      <li><b>ISO 10303 STEP：</b>产品数据，EXPRESS 语言；AP221/227/239 面向流程厂</li>
+      <li><b>ISO 23247：</b>制造数字孪生框架（参考架构/数字表示/信息交换）</li>
+      <li><b>ISO 23726（OBI）：</b>本体驱动互操作，基础为 IDO（Industrial Data Ontology）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ C ============ -->
+<h2>C. 基础 / 顶层本体（Foundational / Top-level Ontology）</h2>
+<p>形式化的哲学根基，给领域本体提供"不重复造轮子"的通用范畴（对象/事件/质量/部分-整体/依赖）。是 IOF、医疗本体（OBO）、国防本体的共同底座。</p>
+
+<table>
+  <thead>
+    <tr><th>顶层本体</th><th>哲学立场</th><th>核心二分</th><th>规模(术语)</th><th>形式化</th><th>代表应用</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>BFO</td><td>实在论(realist)</td><td>Continuant / Occurrent（持续体/发生体）</td><td>~35</td><td>OWL + CLIF(FOL)</td><td>IOF、OBO 生物本体、<b>美国防部/情报界基线标准(2024)</b></td></tr>
+    <tr><td>DOLCE</td><td>描述论(descriptive)</td><td>Endurant / Perdurant</td><td>~100</td><td>KIF → OWL</td><td>认知/语言工程、多种领域本体</td></tr>
+    <tr><td>GFO</td><td>综合</td><td>3D 对象 + 4D 过程</td><td>~243</td><td>OWL</td><td>允许 universals+concepts 同存</td></tr>
+    <tr><td>UFO</td><td>统一</td><td>3D；type 理论</td><td>中等</td><td>OWL/UFO-S</td><td>概念建模、软件工程</td></tr>
+    <tr><td>Cyc/SUMO</td><td>大型常识</td><td>广泛</td><td>数十万(Cyc)</td><td>CycL / SUO-KIF</td><td>常识推理、早期 FO</td></tr>
+  </tbody>
+</table>
+<div class="note"><b>选型建议：</b>若要做"工业/工程语义底座"，<b>BFO</b> 是当前实证最稳（被标准组织与国防采纳、IOF 选定）；若偏认知/语言建模，<b>DOLCE/UFO</b> 更自然；GFO 适合需要同时表达普遍性与个体的场景。注意：不同顶层本体之间<strong>只有少量实体可无损对齐</strong>，早期选错改造成本高。</div>
+
+<!-- ============ D ============ -->
+<h2>D. 语义网标准与本体工程工具（Standards & Engineering）</h2>
+<div class="grid">
+  <div class="card">
+    <h4>W3C 语义栈</h4>
+    <div class="meta">RDF 1.1 / OWL 2 / SHACL / SPARQL</div>
+    <ul>
+      <li><b>RDF：</b>主-谓-宾三元组，图的基础（2014 推荐）</li>
+      <li><b>OWL 2：</b>描述逻辑，三档剖面 EL/QL/RL；开放世界假设→支持推理</li>
+      <li><b>SHACL：</b>形状约束语言，<strong>封闭世界校验</strong>，企业数据质量必备</li>
+      <li><b>SPARQL：</b>图查询语言</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>OMG 模型驱动标准</h4>
+    <div class="meta">ODM / DOL / SBVR / FIBO</div>
+    <ul>
+      <li><b>ODM：</b>UML Profile 映射 RDF/OWL/Common Logic/Topic Maps，MDA 落地</li>
+      <li><b>DOL：</b>分布式本体/模型/规范语言，跨逻辑框架集成互操作</li>
+      <li><b>SBVR：</b>业务词汇与规则的结构化英语</li>
+      <li><b>FIBO：</b>金融业商业本体（法律实体/金融工具）</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>LLM 辅助本体工程</h4>
+    <div class="meta">2025 新方法 · 降本增效</div>
+    <ul>
+      <li><b>Ontogenia / Memoryless CQbyCQ</b>（Lippolis 等, arXiv 2503.05388）：从用户故事+能力问题直接生成 OWL 草案，o1-preview 达新手工程师水平</li>
+      <li><b>Guiding Table 法</b>（Cappelli & Di Marzo Serugendo, 2025）：领域知识→结构化提示，人在回路校验</li>
+      <li>本体<strong>实例化</strong>：LLM 作 oracle 自动填充实例，质量较 SOTA 提升最高 5×</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>GraphRAG / 神经-符号</h4>
+    <div class="meta">知识图谱 + LLM 的落地范式</div>
+    <ul>
+      <li>图从"检索源"升级为 Agent 的"<b>推理与协调地图</b>"</li>
+      <li>NeSy 2025 主题：本体嵌入、提示工程本体、本体对齐</li>
+      <li>Temporal KG / Agentic KG 构建成为新前沿</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ 对比表 ============ -->
+<h2>总对比表（核心维度）</h2>
+<table>
+  <thead>
+    <tr>
+      <th>框架</th><th>类别</th><th>建模原语</th><th>形式化/推理</th><th>动态/运行时</th>
+      <th>LLM·Agent 集成</th><th>标准化/开放</th><th>工具生态</th><th>成熟度</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Palantir Ontology</td><td>A</td>
+      <td>Object/Link/Action/Function/Interface</td>
+      <td><span class="pill part">弱逻辑</span>规则+类型系统</td>
+      <td><span class="pill yes">强</span>事件驱动闭环</td>
+      <td><span class="pill yes">强</span>OAG/AIP</td>
+      <td><span class="pill part">平台专有</span>可导出 OWL</td>
+      <td><span class="pill yes">丰富</span></td>
+      <td><span class="pill yes">生产级</span></td>
+    </tr>
+    <tr>
+      <td>OAG（本体增强生成）</td><td>A</td>
+      <td>本体+KG 约束</td>
+      <td><span class="pill yes">强</span>逻辑推断</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">强</span>对抗幻觉</td>
+      <td><span class="pill yes">开放</span>RDF/OWL</td>
+      <td><span class="pill part">成长中</span></td>
+      <td><span class="pill yes">已验证</span></td>
+    </tr>
+    <tr>
+      <td>Skan AOW</td><td>A</td>
+      <td>8 规范实体</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill part">中</span>治理导向</td>
+      <td><span class="pill yes">强</span>Agent 编排</td>
+      <td><span class="pill yes">开放</span>JSON-LD/RDF</td>
+      <td><span class="pill part">早期</span></td>
+      <td><span class="pill part">v1.0</span></td>
+    </tr>
+    <tr>
+      <td>AAS (IEC 63278)</td><td>B</td>
+      <td>Shell/Submodel/Property/…</td>
+      <td><span class="pill part">弱</span>类型校验</td>
+      <td><span class="pill yes">强</span>CRUD+通信</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">标准</span>IEC/IDTA</td>
+      <td><span class="pill yes">丰富</span></td>
+      <td><span class="pill yes">生产级</span></td>
+    </tr>
+    <tr>
+      <td>DTDL</td><td>B</td>
+      <td>Interface/Property/Telemetry/Command/Rel/Comp</td>
+      <td><span class="pill part">弱</span></td>
+      <td><span class="pill yes">强</span>图原生</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill part">开放规范</span>生态偏 Azure</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">生产级</span></td>
+    </tr>
+    <tr>
+      <td>IOF</td><td>B/C</td>
+      <td>Core+领域；基于 BFO 范畴</td>
+      <td><span class="pill yes">强</span>OWL+SHACL</td>
+      <td><span class="pill no">弱</span>偏数据标准</td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">开放</span>OAGi/NIST</td>
+      <td><span class="pill part">成长中</span></td>
+      <td><span class="pill yes">发布中</span></td>
+    </tr>
+    <tr>
+      <td>ISO 15926 / 23726</td><td>B</td>
+      <td>通用数据模型+RDL / IDO</td>
+      <td><span class="pill yes">强</span>EXPRESS/OWL</td>
+      <td><span class="pill no">弱</span></td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">国际标准</span></td>
+      <td><span class="pill yes">工具多</span></td>
+      <td><span class="pill yes">成熟</span></td>
+    </tr>
+    <tr>
+      <td>BFO/DOLCE/GFO/UFO</td><td>C</td>
+      <td>顶层范畴(对象/事件/质量…)</td>
+      <td><span class="pill yes">强</span>FOL/OWL</td>
+      <td><span class="pill no">无</span>纯形式层</td>
+      <td><span class="pill part">间接</span></td>
+      <td><span class="pill yes">开放</span></td>
+      <td><span class="pill yes">Protege 等</span></td>
+      <td><span class="pill yes">成熟</span></td>
+    </tr>
+    <tr>
+      <td>W3C 栈 (RDF/OWL/SHACL)</td><td>D</td>
+      <td>类/属性/三元组/形状</td>
+      <td><span class="pill yes">强</span></td>
+      <td><span class="pill part">中</span></td>
+      <td><span class="pill yes">强</span>GraphRAG 底座</td>
+      <td><span class="pill yes">W3C 标准</span></td>
+      <td><span class="pill yes">最丰富</span></td>
+      <td><span class="pill yes">成熟</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============ 映射 ============ -->
+<h2>与 Palantir 五原语的映射（对你 v2.0 的直接参照）</h2>
+<p>你正在落地的"需求对齐 / 需求文档 / 需求审核"三实体 + 五原语，可对照下列工业/Agent 本体的成熟做法来补强：</p>
+<div class="map">
+  <div class="m"><b>Object</b><span>≈ AAS 的 Instance Shell、IOF 的 BFO 个体、OWL 的 Individual</span></div>
+  <div class="m"><b>Link</b><span>≈ DTDL Relationship、RDF 谓词、AAS Submodel 引用</span></div>
+  <div class="m"><b>Action</b><span>≈ AAS Command、DTDL Command、OAG 的写回动作</span></div>
+  <div class="m"><b>Function</b><span>≈ Palantir Logic Engine、SHACL 约束、SBVR 规则</span></div>
+  <div class="m"><b>Interface</b><span>≈ AOW 的 Policy/Context 抽象、DOL 跨本体接口</span></div>
+</div>
+<div class="note"><b>给 v2.0 的三点增强建议：</b>
+  <ul class="clean" style="margin:8px 0 0">
+    <li><b>语义一致性：</b>把"需求文档/需求对齐/需求审核"的对象属性用 <code>SHACL</code> 形状约束校验，避免脆性问题（呼应 MIT 报告批评的 brittle workflows）。</li>
+    <li><b>动能闭环：</b>需求审核 Action 触发"需求文档状态变更"写入，并用 Logic Engine 监听——这正是 Palantir 的运行时闭环，也是 AAS 的 Command 思路。</li>
+    <li><b>可治理：</b>引入 PBAC/MAC 式强制访问控制（谁能触发"审核通过"Action），把安全做进语义层而非外层。</li>
+  </ul>
+</div>
+
+<!-- ============ 趋势 ============ -->
+<h2>选型与趋势总结</h2>
+<ul class="clean">
+  <li><b>路线融合：</b>运营型（Palantir/OAG）与形式化（IOF/BFO/ISO）并非对立——前沿做法是"用 BFO/IOF 打语义地基，用 Palantir 式动态层驱动业务"。</li>
+  <li><b>LLM 是放大器也是风险：</b>本体驱动可把临床问答幻觉从 63% 压到 1.7%；但"全量注入本体"会触发上下文干扰，需<strong>选择性注入</strong>。</li>
+  <li><b>Agent 化：</b>本体正从"知识库"变成"Agent 的世界模型与 coordination map"（AOW、三层框架、L0–L5 成熟度）。</li>
+  <li><b>工程化提效：</b>Ontogenia/CQbyCQ、Guiding Table 让本体构建从"专家手工"走向"LLM 草稿 + 人在回路"，可显著降低你们 v2.0 实体建模成本。</li>
+  <li><b>开放性优先：</b>若要避免供应商锁定，底层优先选 W3C(RDF/OWL/SHACL) 或 ISO 23726(IDO)，而非纯平台专有格式。</li>
+</ul>
+
+<div class="foot">
+  资料来源：Palantir Foundry Building Blocks / 53AI & 腾讯云技术分析（2025）；AAS vs DTDL vs OPC UA（iotdigitaltwinplm, 2026）；Schmidt 等 Sensors 2023（DTDL→AAS 转换）；NIST 生物制造数据基础设施（2025）、IOF Release 2025/2026；ISO/TC184/SC4 在研标准；designpattern.fyi《Ontologies for Agentic AI》研究简报（2025–2026）；Lippolis 等 arXiv 2503.05388（LLM 本体生成）；Atlan / W3C / OMG ODM 文档。本报告为调研综述，部分 2026 预印本尚未同行评审，具体数值视为方向性参考。
+</div>
+
+</div>
+</body>
+</html>

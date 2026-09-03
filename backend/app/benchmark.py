@@ -14,12 +14,15 @@ the user is the sole final approver — LLM 无终审权):
      filter + refusal markers) -> per-arm stats -> conclusion rendered by a
      code template (no LLM ever writes conclusions)
   4. for ontology-arm failures GLM nominates problematic ontology entries
-     (annotate / update / delete) -> closed-set validation (the name must be
-     among that question's injected ontology AND active in persona_ontology)
-     -> pending change set (persona_ontology_changes)
+     (annotate / update / delete) or a missing key concept (add) -> closed-set
+     validation (annotate/update/delete names must be among that question's
+     injected ontology AND active in persona_ontology; add must be a genuinely
+     new entity with a suggested definition) -> pending change set
+     (persona_ontology_changes)
   5. the user reviews pending changes on the persona card; merge snapshots
      the current ontology 段 (persona_ontology_versions) then applies the
-     changes (annotate -> note, update -> definition, delete -> deprecated);
+     changes (annotate -> note, update -> definition, delete -> deprecated,
+     add -> insert a new entity);
      any version can be rolled back by restoring its snapshot (rollback
      snapshots the current state first, so it is itself reversible).
 
@@ -35,9 +38,9 @@ ARMS = ("none", "ontology", "rag", "rag_ontology")
 ARM_LABELS = {"none": "G0 裸模型", "ontology": "G1 仅本体",
               "rag": "G2 仅RAG", "rag_ontology": "G3 RAG+本体"}
 VERDICTS = ("correct", "partial", "wrong", "refused")
-ACTIONS = ("annotate", "update", "delete")
-ACTION_LABELS = {"annotate": "标注", "update": "修改", "delete": "删除"}
-_ACTION_PRIORITY = {"annotate": 1, "update": 2, "delete": 3}
+ACTIONS = ("annotate", "update", "delete", "add")
+ACTION_LABELS = {"annotate": "标注", "update": "修改", "delete": "删除", "add": "新增"}
+_ACTION_PRIORITY = {"annotate": 1, "update": 2, "delete": 3, "add": 4}
 REFUSAL_MARKERS = ("我不知道", "本体里没有", "本体知识", "无法回答", "没有掌握",
                    "没有这方面", "资料里没有", "不掌握")
 DEFAULT_LIMIT = 15
@@ -45,6 +48,7 @@ MAX_LIMIT = 30
 RAG_TOP_K = 3
 ANSWER_TEMPERATURE = 0.1
 ANALYSIS_MAX_ENTRIES = 60   # cap injected entries in the analysis prompt
+MAX_NOMINATIONS = 3        # deterministic cap per failed question (thinking-off GLM over-nominates)
 
 
 # ---------------- selection (0 LLM) ----------------
@@ -177,7 +181,15 @@ def _conclusion(stats: dict) -> str:
     m = stats["margins"]
     ranked = sorted(ARMS, key=lambda a: -arms[a]["accuracy"])
     order = " > ".join(f"{ARM_LABELS[a]} {arms[a]['accuracy']}%" for a in ranked)
-    return (f"{order}（{stats['questions']} 题）· "
+    # 幻觉压制：约束组（本体/RAG）相对裸模型的最低幻觉率，回答「减少多少幻觉」
+    hall_base = arms["none"]["hallucination"]
+    constrained = ("ontology", "rag", "rag_ontology")
+    hall_arm = min(constrained, key=lambda a: arms[a]["hallucination"])
+    hall_best = arms[hall_arm]["hallucination"]
+    hall_drop = round(hall_base - hall_best, 1)
+    return (f"准确率 {order}（{stats['questions']} 题）· "
+            f"幻觉 {ARM_LABELS['none']} {hall_base}% → {ARM_LABELS[hall_arm]} "
+            f"{hall_best}%（−{hall_drop}pp）· "
             f"本体边际 {m['ontology_pp']:+.1f}pp · RAG边际 {m['rag_pp']:+.1f}pp · "
             f"总增益 {m['total_pp']:+.1f}pp")
 
@@ -191,28 +203,44 @@ def _analysis_prompt(question: str, gold: str, evidence: str, reply: str,
         for o in injected) or "（无）"
     return (
         "你是本体质量分析官（只提名，不裁决）。数字人在本体约束下答错了一道题。\n"
-        "请从【注入的本体条目】中找出可能有害的本体（定义错误/误导/与原文矛盾/"
-        "冗余无据），并给出处理建议：\n"
-        "- annotate 标注：本体本身有保留价值但需注记问题；\n"
+        "请从【注入的本体条目】中找出【真正有害】的本体，或识别【缺失的关键概念】，"
+        "并给出处理建议：\n"
+        "- annotate 标注：本体有保留价值但定义需注记；\n"
         "- update 修改：定义写错了，给出修正定义；\n"
-        "- delete 删除：与原文矛盾或纯属噪声，应删除。\n"
+        "- delete 删除：定义与原文矛盾或纯属噪声，应删除；\n"
+        "- add 新增：失败根因是【本体段缺少关键概念】，新增该概念实体"
+        "（给新本体名 + 建议定义）。\n"
+        "判定标准（务必遵守）：\n"
+        "1. 「与本题无关」不等于「有害」——本体定义本身正确、只是没有覆盖本题"
+        "答案的，一律不要 annotate/update/delete；\n"
+        "2. 只有定义【确实错误/误导/与原文矛盾/无依据】才 annotate/update/delete；\n"
+        "3. 若失败根因是「本体段缺少关键概念」（缺少某个定义正确的术语），"
+        "用 add 提名新增该概念，并给出建议定义；\n"
+        "4. add 的新本体名必须【不在注入的本体条目中】，且建议定义要能支撑本题答案；\n"
+        "5. 最多提名 3 条最可疑的本体（add 与其它动作合计）。\n"
         f"【题目】{question}\n"
         f"【标准答案】{gold}\n"
         f"【原文证据】{evidence}\n"
         f"【模型回答（有本体）】{(reply or '').strip()[:1500]}\n"
         f"【注入的本体条目】\n{entries}\n"
         "只输出 JSON：{\"issues\": [{\"name\": \"本体名\", "
-        "\"action\": \"annotate|update|delete\", \"reason\": \"理由\", "
-        "\"suggested_definition\": \"仅 update 时给出修正定义\", "
+        "\"action\": \"annotate|update|delete|add\", \"reason\": \"理由\", "
+        "\"suggested_definition\": \"update 时给修正定义；add 时给新本体定义\", "
         "\"note\": \"仅 annotate 时给出注记\"}]}\n"
-        "不得提名【注入的本体条目】之外的本体名；没有问题时输出 {\"issues\": []}。"
+        "annotate/update/delete 不得提名【注入的本体条目】之外的本体名；"
+        "add 提名的新本体名必须在【注入的本体条目】之外，且必须给出 suggested_definition；"
+        "没有问题时输出 {\"issues\": []}。"
     )
 
 
-def _validate_nominations(raw_issues, allowed: dict[str, int]) -> list[dict]:
-    """allowed: name -> persona_ontology.id (active rows only). Deterministic
-    closed-set validation: drop unknown names/actions, downgrade update
-    without a definition to annotate, drop empty reasons."""
+def _validate_nominations(raw_issues, allowed: dict[str, int],
+                          active_names: set[str]) -> list[dict]:
+    """allowed: name -> persona_ontology.id (active injected rows only);
+    active_names: every active persona_ontology name (add de-dup guard).
+    Deterministic closed-set validation: drop unknown names/actions, downgrade
+    update without a definition to annotate, drop empty reasons; an `add`
+    nomination must NOT already exist in the active ontology and MUST carry a
+    suggested_definition (a missing concept is always an entity)."""
     out: dict[str, dict] = {}
     if not isinstance(raw_issues, list):
         return []
@@ -222,22 +250,33 @@ def _validate_nominations(raw_issues, allowed: dict[str, int]) -> list[dict]:
         name = str(it.get("name") or "").strip()
         action = str(it.get("action") or "").strip()
         reason = str(it.get("reason") or "").strip()
-        if name not in allowed or action not in ACTIONS or not reason:
+        if action not in ACTIONS or not name or not reason:
             continue
-        item = {"name": name, "ontology_id": allowed[name], "reason": reason}
-        if action == "update":
+        if action == "add":
+            # a new concept entity: must be genuinely missing (else it is an
+            # update, not an add) and must carry a definition
             fix = str(it.get("suggested_definition") or "").strip()
-            if fix:
-                item["action"] = "update"
-                item["suggested_definition"] = fix
-            else:  # update without a fixed definition -> just annotate
-                item["action"] = "annotate"
-                item["note"] = reason
-        elif action == "annotate":
-            item["action"] = "annotate"
-            item["note"] = str(it.get("note") or "").strip() or reason
+            if name in active_names or not fix:
+                continue
+            item = {"name": name, "ontology_id": None, "action": "add",
+                    "suggested_definition": fix, "reason": reason}
         else:
-            item["action"] = "delete"
+            if name not in allowed:
+                continue
+            item = {"name": name, "ontology_id": allowed[name], "reason": reason}
+            if action == "update":
+                fix = str(it.get("suggested_definition") or "").strip()
+                if fix:
+                    item["action"] = "update"
+                    item["suggested_definition"] = fix
+                else:  # update without a fixed definition -> just annotate
+                    item["action"] = "annotate"
+                    item["note"] = reason
+            elif action == "annotate":
+                item["action"] = "annotate"
+                item["note"] = str(it.get("note") or "").strip() or reason
+            else:
+                item["action"] = "delete"
         old = out.get(name)
         if old is None or _ACTION_PRIORITY[item["action"]] > _ACTION_PRIORITY[old["action"]]:
             if old is not None:
@@ -255,6 +294,7 @@ def analyze_failures(conn, identity_id: int, benchmark_id: int,
     active = {r["name"]: r["id"] for r in conn.execute(
         "SELECT id, name FROM persona_ontology"
         " WHERE identity_id=? AND status='active'", (identity_id,)).fetchall()}
+    active_names = set(active.keys())
     by_name: dict[str, dict] = {}
     for f in failures:
         # cap the injected list in the prompt (hits first, then degree-sorted
@@ -268,7 +308,11 @@ def analyze_failures(conn, identity_id: int, benchmark_id: int,
             f["question"], f["answer"], f["evidence"], f["reply"], injected)}])
         data = llm.extract_json(raw)
         issues = data.get("issues") if isinstance(data, dict) else None
-        for item in _validate_nominations(issues, allowed):
+        # deterministic cap: thinking-off GLM can over-nominate (e.g. flag every
+        # merely-unrelated ontology entry as delete), so keep at most
+        # MAX_NOMINATIONS per failed question to keep the review set usable.
+        issues = _validate_nominations(issues, allowed, active_names)[:MAX_NOMINATIONS]
+        for item in issues:
             ev = {"quiz_id": f["quiz_id"], "question": f["question"],
                   "reply": (f["reply"] or "").strip()[:200]}
             cur = by_name.get(item["name"])
@@ -287,11 +331,12 @@ def analyze_failures(conn, identity_id: int, benchmark_id: int,
     for item in by_name.values():
         conn.execute(
             "INSERT INTO persona_ontology_changes"
-            " (identity_id, benchmark_id, ontology_id, name, action,"
+            " (identity_id, benchmark_id, ontology_id, name, kind, action,"
             "  suggested_definition, note, reason, evidence, status, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,'pending',?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)",
             (identity_id, benchmark_id, item["ontology_id"], item["name"],
-             item["action"], item.get("suggested_definition"),
+             "entity" if item["action"] == "add" else None, item["action"],
+             item.get("suggested_definition"),
              item.get("note"), item["reason"],
              json.dumps(item.get("evidence", []), ensure_ascii=False), now))
     conn.commit()
@@ -472,8 +517,25 @@ def merge_changes(conn, identity_id: int) -> dict:
          json.dumps(changelog, ensure_ascii=False),
          json.dumps(snapshot, ensure_ascii=False), time.time()))
     version_id = cur.lastrowid
-    applied = {"annotate": 0, "update": 0, "delete": 0}
+    applied = {"annotate": 0, "update": 0, "delete": 0, "add": 0}
     for c in pending:
+        if c["action"] == "add":
+            # add a missing concept entity (GLM-nominated definition, no
+            # source candidate — it never existed in the candidate pool)
+            exists = conn.execute(
+                "SELECT id FROM persona_ontology WHERE identity_id=? AND kind='entity'"
+                " AND name=?", (identity_id, c["name"])).fetchone()
+            if exists is None:
+                conn.execute(
+                    "INSERT INTO persona_ontology(identity_id, kind, name,"
+                    " definition, source_candidate_id, status, created_at)"
+                    " VALUES(?, 'entity', ?, ?, NULL, 'active', ?)",
+                    (identity_id, c["name"],
+                     (c["suggested_definition"] or "").strip(), time.time()))
+            applied["add"] += 1
+            conn.execute("UPDATE persona_ontology_changes SET status='merged',"
+                         " version_id=? WHERE id=?", (version_id, c["id"]))
+            continue
         row = conn.execute(
             "SELECT * FROM persona_ontology WHERE id=? AND identity_id=?",
             (c["ontology_id"], identity_id)).fetchone()

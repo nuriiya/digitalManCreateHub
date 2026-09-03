@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数字人工厂与反思层架构设计</title>
+<style>
+  :root {
+    --bg: #1a1b1e;
+    --surface: #232529;
+    --surface2: #2b2d32;
+    --border: #3a3d44;
+    --text: #e8e9eb;
+    --text2: #b4b7bd;
+    --text3: #8a8e96;
+    --accent: #7F77DD;
+    --accent2: #AFA9EC;
+    --teal: #5DCAA5;
+    --amber: #FAC775;
+    --coral: #F0997B;
+    --green: #97C459;
+    --code-bg: #191a1d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+    padding: 40px 24px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 32px; }
+  h1 { font-size: 26px; font-weight: 600; letter-spacing: 0.5px; }
+  .subtitle { color: var(--text3); font-size: 14px; margin-top: 8px; }
+  h2 { font-size: 20px; font-weight: 600; margin: 44px 0 16px; padding-left: 12px; border-left: 3px solid var(--accent); }
+  h3 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; color: var(--accent2); }
+  p { margin: 10px 0; color: var(--text2); }
+  strong { color: var(--text); font-weight: 600; }
+  ul, ol { margin: 10px 0 10px 22px; color: var(--text2); }
+  li { margin: 5px 0; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .card.tip { border-left: 3px solid var(--teal); }
+  .card.warn { border-left: 3px solid var(--coral); background: #2a2220; }
+  .card.key { border-left: 3px solid var(--accent); }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+  th { background: var(--surface2); color: var(--text); text-align: left; padding: 9px 12px; border: 1px solid var(--border); font-weight: 600; }
+  td { padding: 8px 12px; border: 1px solid var(--border); color: var(--text2); vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  code {
+    font-family: "JetBrains Mono", Consolas, monospace;
+    background: var(--code-bg);
+    color: var(--teal);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 14px 0;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: #cfcebe; font-size: 12.5px; }
+  .yaml-k { color: var(--accent2); }
+  .yaml-s { color: var(--amber); }
+  .yaml-c { color: var(--text3); }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 10px; border-radius: 20px; margin-right: 6px; font-weight: normal; }
+  .b-low { background: rgba(93,202,165,0.15); color: var(--teal); border: 1px solid rgba(93,202,165,0.4); }
+  .b-high { background: rgba(240,153,123,0.15); color: var(--coral); border: 1px solid rgba(240,153,123,0.4); }
+  .b-auto { background: rgba(151,196,89,0.15); color: var(--green); border: 1px solid rgba(151,196,89,0.4); }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+  .flow .step {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 14px; font-size: 13px; color: var(--text);
+  }
+  .flow .ar { color: var(--text3); }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--text3); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>数字人工厂与反思层架构设计</h1>
+  <div class="subtitle">v2.0 · 基于本体约束的数字人自动化创建与自我进化体系 · 2026-08-27</div>
+</header>
+
+<h2>0. 设计目标与决策输入</h2>
+<p>上一轮设计回答了"如何定义一个数字人"（数字人 = 五原语封装体，需求编写人 = 5 实体 7 关系 + 6 动作 + 4 守则）。本轮回答两个新问题：</p>
+<ul>
+  <li><strong>自动化创建</strong>：如何把"手工定制一个数字人"抽象为可复用的流水线，让创建新数字人 = 写一份声明式基因文件；</li>
+  <li><strong>诞生后进化</strong>：如何增加反思层，在每次对话后自我学习——找可改善点、优化工具链与逻辑、建立用户画像，且全过程不破坏"绝对准确"承诺。</li>
+</ul>
+<p>三个策略级决策（已确认）作为架构输入：</p>
+<table>
+  <tr><th>决策点</th><th>选择</th><th>架构含义</th></tr>
+  <tr><td>改进如何固化</td><td>分级审批</td><td>低风险自动生效，高风险人工队列；裁决依据为回归重放结果</td></tr>
+  <tr><td>反思用哪个模型</td><td>混合分工</td><td>Flash 高频单 Trace 分析 + GLM 周期跨 Trace 归纳，关键提议双模交叉核验</td></tr>
+  <tr><td>画像深度</td><td>工作偏好 + 背景推断</td><td>画像分两组字段分级管控，推断类永不参与本体裁决，需完整隐私策略</td></tr>
+</table>
+
+<h2>1. 总体架构：三层视图</h2>
+<div class="flow">
+  <span class="step">工厂层 Foundry（创建期）</span><span class="ar">→</span>
+  <span class="step">运行层 Runtime（对话期）</span><span class="ar">→</span>
+  <span class="step">反思层 Reflection（对话后）</span><span class="ar">↺</span>
+  <span class="step">回流 Spec（进化期）</span>
+</div>
+<p>三层共用同一条铁律——<strong>LLM 永远只有提名权，本体拥有裁决权，代码拥有执行权</strong>。工厂层把它用在"造人"上（Spec 提名一个数字人，元本体裁决合法性）；反思层把它用在"学习"上（反思提名改进，回归重放裁决有效性）。机制完全同构，这是本架构最重要的一致性。</p>
+<div class="card key">
+  <p><strong>核心设计判断：学习成果回流 Spec 层，而非运行时热改。</strong>任何时刻，运行中的数字人都是某个确定版本 Spec 的编译产物——可追溯、可复现、可回滚。运行时不允许出现"边跑边改规则"的幽灵状态，否则"绝对准确"就退化成"大概率准确"。</p>
+</div>
+
+<h2>2. 工厂层：数字人是编译出来的</h2>
+
+<h3>2.1 数字人基因 Spec</h3>
+<p>每个数字人 = 一份声明式 YAML（约 100–200 行），五个基因段。以需求编写人为例：</p>
+<pre><code><span class="yaml-k">spec_version</span>: 1.0
+<span class="yaml-k">identity</span>:
+  <span class="yaml-k">name</span>: <span class="yaml-s">需求编写人</span>
+  <span class="yaml-k">mission</span>: <span class="yaml-s">将需求对齐实体转写为可验证的需求文档</span>
+  <span class="yaml-k">boundaries</span>: [<span class="yaml-s">不裁决冲突</span>, <span class="yaml-s">不扩充需求</span>, <span class="yaml-s">不改优先级</span>, <span class="yaml-s">不跨域</span>]  <span class="yaml-c"># 生成 System Prompt 的硬约束段</span>
+<span class="yaml-k">ontology</span>:                      <span class="yaml-c"># 实体依赖声明（复用 &gt; 新增）</span>
+  <span class="yaml-k">reuse</span>: [需求对齐实体, 需求文档实体, 需求审核实体]
+  <span class="yaml-k">define</span>:
+    - <span class="yaml-k">object</span>: 需求条目实体      <span class="yaml-c"># 字段表、枚举闭集（同上轮设计）</span>
+    - <span class="yaml-k">object</span>: 澄清请求实体
+  <span class="yaml-k">links</span>: [溯源于, 包含于, 覆盖, 针对, 被阻塞于, 审核于, 修订自]
+<span class="yaml-k">actions</span>:                        <span class="yaml-c"># 可提名动作 → 编译为 tools schema</span>
+  - <span class="yaml-k">name</span>: 撰写需求条目
+  - <span class="yaml-k">name</span>: 创建澄清请求
+  - <span class="yaml-k">name</span>: 组装文档并导出 Word
+  - <span class="yaml-k">name</span>: 发起需求审核
+  <span class="yaml-c"># ...共 6 个，每个含参数 schema + 前置状态条件</span>
+<span class="yaml-k">guardians</span>:                      <span class="yaml-c"># 守护规则 → 编译为 SHACL + 状态机</span>
+  - <span class="yaml-k">ref</span>: evidence_span_rule          <span class="yaml-c"># 复用全局规则：证据逐字匹配</span>
+  - <span class="yaml-k">ref</span>: relative_time_forbidden
+  - <span class="yaml-k">rule</span>: <span class="yaml-s">条目提交前完备性检查（对齐项三选一）</span>
+<span class="yaml-k">interface</span>:
+  <span class="yaml-k">tone</span>: <span class="yaml-s">严谨、克制、只陈述可证明的事</span>
+  <span class="yaml-k">output_cards</span>: [对齐确认卡, 澄清请求卡, 文档预览卡]
+  <span class="yaml-k">unknown_policy</span>: <span class="yaml-s">显式挂起，绝静默编造</span></code></pre>
+
+<h3>2.2 元本体：约束 Spec 的本体</h3>
+<p>工厂能自动化的前提是"什么是合法数字人"本身可机器判定。元本体定义 Spec 的合法性约束：</p>
+<table>
+  <tr><th>元本体规则</th><th>约束对象</th><th>违反后果</th></tr>
+  <tr><td>identity.mission 与 boundaries 不得语义重叠冲突</td><td>身份段</td><td>拒绝创建，要求改写</td></tr>
+  <tr><td>ontology.reuse 中的实体必须存在于全局本体库且版本兼容</td><td>本体段</td><td>拒绝创建，提示版本对齐</td></tr>
+  <tr><td>actions 中每个动作的参数字段必须能落到某个实体的 schema</td><td>动作段</td><td>拒绝创建（防"无本体依据的动作"）</td></tr>
+  <tr><td>guardians 引用的全局规则 ID 必须真实存在</td><td>守护段</td><td>拒绝创建（防引用悬空）</td></tr>
+  <tr><td>每个 Action 必须声明失败路径（含拒答/转人工出口）</td><td>动作段</td><td>拒绝创建（防"无出口死循环"）</td></tr>
+</table>
+<div class="card tip">
+  <p><strong>自举结构</strong>：元本体约束 Spec → Spec 编译出数字人 → 数字人的反思层可以提议改进元本体 → 但元本体改动需最高级别人工审批。工厂编译器本身实现为一个 Function 原语（纯代码、零 LLM），它自己也在本体体系之内，不是体系之外的魔法。</p>
+</div>
+
+<h3>2.3 编译流水线五步</h3>
+<table>
+  <tr><th>步骤</th><th>做什么</th><th>产物 / 出口</th></tr>
+  <tr><td>① Spec 校验</td><td>用元本体校验基因文件合法性</td><td>不合法 → 带原因拒绝</td></tr>
+  <tr><td>② 本体合并</td><td>复用实体与新定义实体合并，检测同名异构冲突</td><td>冲突 → 拒绝，要求显式版本对齐</td></tr>
+  <tr><td>③ 编译产出</td><td>同一份 Spec 生成五类产物，保证单一事实源</td><td>System Prompt 模板 / Function Calling tools schema / SHACL 校验规则 / 状态机转移表 / SQLAlchemy 模型 + Alembic 迁移</td></tr>
+  <tr><td>④ 冒烟测试</td><td>跑内置"上岗测试"：一组最小对话样例，验证提名-裁决闭环可走通、拒答路径可用</td><td>失败 → 拒绝注册</td></tr>
+  <tr><td>⑤ 版本化注册</td><td>产物打版本号入库，实例化运行时，自动挂载反思层</td><td>数字人上线</td></tr>
+</table>
+
+<h3>2.4 版本化与灰度</h3>
+<ul>
+  <li>Spec vN → 编译产物 vN，一一对应，git-like 版本链；</li>
+  <li>修改 Spec（含反思层回流的学习成果）触发重新编译 → vN+1；</li>
+  <li>灰度切换：新版本接新对话，旧版本实例跑完存量对话后退役；</li>
+  <li>任何行为异常可整体回滚到 vN——因为运行时状态全部落在实体库里，回滚只回滚"行为逻辑"，不丢数据。</li>
+</ul>
+
+<h2>3. 反思层：受提名-裁决约束的自我学习</h2>
+
+<h3>3.1 五阶段闭环</h3>
+<div class="flow">
+  <span class="step">① Trace 采集</span><span class="ar">→</span>
+  <span class="step">② 反思提名（LLM）</span><span class="ar">→</span>
+  <span class="step">③ 回归裁决（纯代码）</span><span class="ar">→</span>
+  <span class="step">④ 分级固化</span><span class="ar">→</span>
+  <span class="step">⑤ 回流 Spec 重编译</span><span class="ar">↺</span>
+</div>
+
+<h3>3.2 Trace：反思的原料</h3>
+<p>对话轨迹实体（Conversation Trace）是新增的核心 Object。反思层的全部能力上限由 Trace 质量决定。采集内容：</p>
+<table>
+  <tr><th>采集项</th><th>为什么重要</th></tr>
+  <tr><td>每次 LLM 提名的原始 JSON + 三关裁决结果（通过/打回/拒绝 + 原因）</td><td>规则缺口与误伤的直接证据</td></tr>
+  <tr><td>修复循环次数（几次提名才通过）</td><td>次数高 = 本体规则或 prompt 表述有问题</td></tr>
+  <tr><td><strong>用户改写 AI 输出的具体位置（diff）</strong></td><td>黄金信号：模型"以为对了"和"用户认为对"的差距</td></tr>
+  <tr><td>澄清请求的答复内容与答复率</td><td>澄清模板化（R3）的依据；反复同类澄清说明本体缺枚举</td></tr>
+  <tr><td>工具调用延迟、失败率、参数错误</td><td>工具链优化（R4）的依据</td></tr>
+  <tr><td>用户表达习惯的原文样本</td><td>画像构建（R5）的证据来源</td></tr>
+</table>
+
+<h3>3.3 六类改进提议（R1–R6）</h3>
+<p>反思层的输出是"改进提议实体"（Improvement Proposal）——又一个受本体约束的 Object。每条提议必须引用具体 Trace 证据，否则在结构关即被丢弃（反思的反思：防止反思本身幻觉）。</p>
+<table>
+  <tr><th>类型</th><th>触发信号</th><th>提议内容</th><th>风险级</th></tr>
+  <tr><td>R1 规则缺口</td><td>某错误输出未被拦截就到达了用户</td><td>新增守护规则</td><td><span class="badge b-high">高风险</span></td></tr>
+  <tr><td>R2 规则误伤</td><td>合法输出被拒/被降级 unknown，用户随后确认它本该通过</td><td>放宽或修订规则</td><td><span class="badge b-high">高风险</span></td></tr>
+  <tr><td>R3 澄清模板化</td><td>同类澄清请求反复出现且答复一致</td><td>将答案固化为枚举值/术语表/默认值</td><td><span class="badge b-low">低风险</span></td></tr>
+  <tr><td>R4 工具链优化</td><td>某动作延迟高、失败率高、参数错误集中</td><td>调整编排/缓存/参数校验前置</td><td><span class="badge b-high">高风险</span></td></tr>
+  <tr><td>R5 画像信号</td><td>用户稳定的行为模式（≥3 次一致）</td><td>画像属性更新提议</td><td><span class="badge b-low">低风险</span></td></tr>
+  <tr><td>R6 用户修正模式</td><td>用户反复改写同类表述</td><td>prompt 模板微调 / 输出模板调整</td><td><span class="badge b-high">高风险</span></td></tr>
+</table>
+
+<h3>3.4 双模型分工（混合部署落地）</h3>
+<table>
+  <tr><th>环节</th><th>模型</th><th>理由</th></tr>
+  <tr><td>单 Trace 反思（每次对话后异步触发）</td><td>DeepSeek V4 Flash</td><td>高频、低成本、任务结构固定（扫描+分类+引证据）</td></tr>
+  <tr><td>跨 Trace 归纳（每日/每 N 条批量）</td><td>GLM 5.2</td><td>长上下文 + 长程归纳能力强，发现单次看不到的模式</td></tr>
+  <tr><td>关键提议交叉核验（R1/R2/R4）</td><td>两模型独立分析同一批 Trace</td><td>结论不一致 → 提议降级为"待观察"，不进入裁决</td></tr>
+</table>
+<p>注意：反思分析的<strong>产出只是提议</strong>，即使模型较弱，最坏结果也只是"提议质量低、被回归裁决丢弃"，不会污染运行时——这正是提名-裁决架构对模型质量的容错。</p>
+
+<h3>3.5 回归裁决：确定性重放</h3>
+<p>裁决器在沙箱中把"提议改动后的数字人"对历史 Trace 库整体重放：</p>
+<ul>
+  <li><strong>必须修复</strong>：提议时引用的目标失败案例，重放后变为通过；</li>
+  <li><strong>不得破坏</strong>：所有既有通过案例重放后仍然通过（回归保护）；</li>
+  <li><strong>一致性检查</strong>：新规则不与现有规则集冲突（规则可判定）；</li>
+  <li>全程零 LLM 参与——重放执行的是纯编译产物。</li>
+</ul>
+<div class="card warn">
+  <p><strong>冷启动问题</strong>：初期 Trace 库小，"不得破坏既有案例"的保护覆盖不足，误改规则的风险高。对策：<strong>前 N 条（建议 ≥50）改进一律走人工审批</strong>，Trace 积累到阈值后再放开低风险自动固化。这是分级审批的时间维度：不只按风险类型分级，还按系统成熟度分级。</p>
+</div>
+
+<h3>3.6 分级审批矩阵</h3>
+<table>
+  <tr><th>提议类型</th><th>裁决通过后</th><th>生效方式</th></tr>
+  <tr><td>R3 澄清模板 / R5 画像（且系统成熟）</td><td><span class="badge b-auto">自动生效</span></td><td>写入 Spec → 定期批量重编译（如每日一次）</td></tr>
+  <tr><td>R1 / R2 / R4 / R6</td><td><span class="badge b-high">人工队列</span></td><td>审批人看到：提议 + Trace 证据 + 重放前后对比报告 → 一键批准/拒绝/追问</td></tr>
+  <tr><td>涉及元本体的改动</td><td><span class="badge b-high">最高审批</span></td><td>必须两人复核（架构 Owner + 数字人 Owner）</td></tr>
+  <tr><td>所有固化产物</td><td>—</td><td>全部版本化，可整体回滚</td></tr>
+</table>
+
+<h2>4. 用户画像：受本体约束的个性化</h2>
+
+<h3>4.1 画像实体结构</h3>
+<p>用户画像实体（User Profile）同样走提名-裁决：每个属性必须附对话证据 + 置信度，LLM 不能自由发挥画像内容。</p>
+<table>
+  <tr><th>字段组</th><th>内容</th><th>管控</th></tr>
+  <tr><td>A 工作偏好（低风险）</td><td>术语偏好、格式偏好、验收标准写法习惯、澄清答复风格</td><td><span class="badge b-low">低风险</span> 回归通过自动生效</td></tr>
+  <tr><td>B 背景推断（高风险）</td><td>项目背景、组织角色、业务领域</td><td><span class="badge b-high">高风险</span> 每条附置信度+证据链；仅影响个性化呈现</td></tr>
+</table>
+
+<h3>4.2 生命周期四环</h3>
+<ol>
+  <li><strong>证据提名</strong>：R5 提议画像属性，须引 ≥3 次一致的对话证据；</li>
+  <li><strong>运行时应用</strong>：画像只注入 Interface 层（术语映射表、格式模板选择、澄清话术风格）——<strong>画像只能影响"怎么说"，永远不能影响"什么是对的"</strong>。本体裁决路径上不读取画像；</li>
+  <li><strong>反馈纠正</strong>：用户改写输出即纠正信号，直接更新画像（这是用户亲手给出的真值，无需回归裁决）；</li>
+  <li><strong>定期衰减</strong>：证据过期（如 90 天）自动降权，防止画像僵化成过时印象。</li>
+</ol>
+
+<h3>4.3 隐私与安全边界</h3>
+<ul>
+  <li><strong>透明</strong>：画像用户可见——数字人可主动说"我记得你偏好表格呈现，对吗"；</li>
+  <li><strong>可纠正、可删除</strong>：用户可单条修正或整体清空画像，删除即时生效并留审计记录；</li>
+  <li><strong>用途隔离</strong>：背景推断永不参与本体裁决、永不进入需求文档内容本身（防止"迎合画像"污染可验证输出）；</li>
+  <li><strong>存储策略</strong>：画像与 Trace 分库存储，画像表不含对话原文（只存归因结论 + 证据指针）。</li>
+</ul>
+
+<h2>5. 新增本体清单</h2>
+<table>
+  <tr><th>新增实体</th><th>角色</th><th>关键关系</th></tr>
+  <tr><td>数字人规格实体（Persona Spec）</td><td>数字人的基因，全部行为的唯一事实源</td><td>编译自 ← 改进提议；版本化为 → 版本实体</td></tr>
+  <tr><td>对话轨迹实体（Conversation Trace）</td><td>反思的原料，运行时全程留痕</td><td>产生于 → 对话；被引用于 → 改进提议 / 画像属性</td></tr>
+  <tr><td>改进提议实体（Improvement Proposal）</td><td>反思层的学习提名（R1–R6）</td><td>引用 → Trace；裁决结果 → 通过/丢弃/待观察；固化后 → 回流 Spec</td></tr>
+  <tr><td>用户画像实体（User Profile）</td><td>个性化呈现依据，两组字段分级</td><td>归属于 → 用户；证据指针 → Trace；衰减于 → 时间</td></tr>
+  <tr><td>版本实体（Version）</td><td>所有可固化产物（Spec/规则/模板/画像）的版本锚点</td><td>锚定 → 任意固化产物；回滚指向 → 前一版本</td></tr>
+</table>
+<p>五原语映射增量：Spec/Trace/提议/画像/版本全部是 <strong>Object</strong>；"引用/回流/锚定"是 <strong>Link</strong>；"反思分析、裁决、衰减"是 <strong>Function</strong>（纯代码）；"审批动作"是 <strong>Action</strong>（人类执行）；画像注入与审批界面是 <strong>Interface</strong>。</p>
+
+<h2>6. 能力边界（必须诚实告知）</h2>
+<div class="card warn">
+  <ul>
+    <li><strong>反思看不见没发生过的事</strong>：学习完全基于 Trace，Trace 覆盖不到的盲区（如从未被问过的场景）它无法预见。本体设计初期的深层缺陷仍需人工评审发现；</li>
+    <li><strong>回归测试集本身可能是错的</strong>：若历史 Trace 中含未被发现的错误裁决，重放会"保护错误"。缓解：用户改写信号（黄金信号）优先级最高，用户确认过的案例不可被回归裁决否决；</li>
+    <li><strong>交叉核验成本翻倍</strong>：关键提议两模型都跑，延迟与算力×2——仅对 R1/R2/R4 启用；</li>
+    <li><strong>画像推断可能错</strong>：错误画像的个性化反而惹人烦——所以推断必须可纠正、会衰减、只影响呈现；</li>
+    <li><strong>进化有下限速度</strong>：冷启动期（约前 50 条改进）实际是"半自动学习"（全部人工审批），这是安全换速度的刻意选择。</li>
+  </ul>
+</div>
+
+<h2>7. 实施路线</h2>
+<table>
+  <tr><th>阶段</th><th>范围</th><th>验收标志</th></tr>
+  <tr><td>一（先工厂）</td><td>元本体 v1 + 需求编写人 Spec 化（把上轮手工设计改写为 YAML）+ 编译流水线 + 版本化注册</td><td>用 Spec 一键编译出等价于上轮手工设计的数字人</td></tr>
+  <tr><td>二（再反思·只观察）</td><td>Trace 采集 + Flash 单 Trace 反思 + 提议全部进人工队列（不自动固化）</td><td>连续 2 周，反思提议的人工采纳率 ≥ 30%</td></tr>
+  <tr><td>三（开放低风险）</td><td>回归重放裁决器 + R3/R5 自动固化 + GLM 跨 Trace 归纳 + 画像实体与注入</td><td>自动固化的低风险改进零事故，回滚演练通过</td></tr>
+  <tr><td>四（复制造人）</td><td>用工厂创建第 2 个数字人（建议：需求审核人），验证"换基因不换机制"</td><td>新数字人 Spec ≤ 200 行，2 天内上线</td></tr>
+</table>
+
+<footer>
+  数字人工厂与反思层架构设计 · 衔接《本体约束输出架构设计》与《需求编写人数字人设计》 · D:\workspace\调研
+</footer>
+
+</div>
+</body>
+</html>

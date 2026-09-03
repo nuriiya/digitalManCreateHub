@@ -244,13 +244,31 @@ def active_job(conn, kind: str) -> dict | None:
     return job_to_dict(row) if row else None
 
 
-def recover_stale_jobs(conn) -> int:
+def recover_stale_jobs(conn, started_at: float | None = None) -> int:
     """Power-cut recovery: any job left 'running' from a previous process
-    is marked failed (progress is persisted; user re-runs). Returns count."""
+    is marked failed (progress is persisted; user re-runs).
+
+    A running row is stale iff it was created before `started_at` (this
+    process's start time): at startup the current process has not created
+    any job yet, so every 'running' row older than it can only belong to a
+    killed previous process. Using creation time — not a 60s updated_at
+    heuristic — closes the gap where a job killed within 60s of a restart
+    was skipped and left a permanent zombie (which then blocks its kind via
+    the `active_job` concurrency guard). Returns count."""
+    if started_at is None:
+        started_at = db.now()
     rows = conn.execute(
-        "SELECT id FROM jobs WHERE status='running' AND updated_at < ?",
-        (db.now() - 60,)).fetchall()  # >60s stale = not this process
+        "SELECT id, kind FROM jobs WHERE status='running' AND created_at < ?",
+        (started_at,)).fetchall()
     for r in rows:
+        if r["kind"] == "benchmark":
+            # link table mirrors the job status; without this the card keeps
+            # showing "running" and polls forever (run_benchmark never got a
+            # chance to write its own failure before the process died)
+            conn.execute(
+                "UPDATE persona_benchmarks SET status='failed',"
+                " error='interrupted (service restart)'"
+                " WHERE job_id=? AND status='running'", (r["id"],))
         finish_job(conn, r["id"], ok=False, error="interrupted (service restart)")
     return len(rows)
 

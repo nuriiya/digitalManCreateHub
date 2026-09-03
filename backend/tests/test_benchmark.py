@@ -70,6 +70,7 @@ def test_stats_and_conclusion():
     assert stats["margins"]["total_pp"] == 0.0
     c = _conclusion(stats)
     assert "2 题" in c and "总增益 +0.0pp" in c and "G0 裸模型" in c
+    assert "幻觉" in c and "准确率" in c   # conclusion must answer both asks
 
     # a clear win for rag / rag_ontology over the bare model
     results = ([{"quiz_id": 1, "arm": "none", "verdict": "wrong"},
@@ -80,6 +81,9 @@ def test_stats_and_conclusion():
     assert stats["margins"]["ontology_pp"] == 0.0    # G3 - G2 (both correct)
     assert stats["margins"]["rag_pp"] == 100.0       # G3 - G1 (ontology arm missed)
     assert stats["margins"]["total_pp"] == 100.0     # G3 - G0
+    # bare model hallucinated on the single question; constrained arms did not
+    c2 = _conclusion(stats)
+    assert "幻觉 G0 裸模型 100.0%" in c2 and "（−100.0pp）" in c2
 
 
 # ---------------- nomination closed-set validation ----------------
@@ -87,6 +91,7 @@ def test_stats_and_conclusion():
 def test_validate_nominations():
     from app.benchmark import _validate_nominations
     allowed = {"视觉定位": 11, "RefCOCO": 22}
+    active_names = set(allowed)
     issues = [
         {"name": "视觉定位", "action": "update", "reason": "定义有误",
          "suggested_definition": "修正后的定义"},          # ok
@@ -95,16 +100,25 @@ def test_validate_nominations():
         {"name": "RefCOCO", "action": "update", "reason": "无修正定义"},  # no def -> annotate
         {"name": "视觉定位", "action": "delete", "reason": "矛盾"},   # dup, delete wins
         {"name": "RefCOCO", "action": "annotate", "reason": ""},     # no reason -> drop
+        # add: a genuinely missing concept (must be new + carry a definition)
+        {"name": "混杂偏差", "action": "add", "reason": "缺少该概念",
+         "suggested_definition": "选择偏差的一种"},          # ok -> add
+        {"name": "视觉定位", "action": "add", "reason": "已存在",  # dup active name -> drop
+         "suggested_definition": "x"},
+        {"name": "另一概念", "action": "add", "reason": "无定义"},  # no def -> drop
     ]
-    out = _validate_nominations(issues, allowed)
+    out = _validate_nominations(issues, allowed, active_names)
     by_name = {o["name"]: o for o in out}
-    assert set(by_name) == {"视觉定位", "RefCOCO"}
+    assert set(by_name) == {"视觉定位", "RefCOCO", "混杂偏差"}
     assert by_name["视觉定位"]["action"] == "delete"          # priority: delete > update
     assert by_name["视觉定位"]["ontology_id"] == 11
     assert by_name["RefCOCO"]["action"] == "annotate"        # downgraded from update
     assert by_name["RefCOCO"]["note"]                        # reason doubles as note
-    assert _validate_nominations(None, allowed) == []
-    assert _validate_nominations("garbage", allowed) == []
+    assert by_name["混杂偏差"]["action"] == "add"            # new concept survives
+    assert by_name["混杂偏差"]["ontology_id"] is None        # add has no existing row
+    assert by_name["混杂偏差"]["suggested_definition"] == "选择偏差的一种"
+    assert _validate_nominations(None, allowed, active_names) == []
+    assert _validate_nominations("garbage", allowed, active_names) == []
 
 
 def test_select_quizzes_only_persona_linked(env):
@@ -141,6 +155,8 @@ def test_run_benchmark_end_to_end(env, fake_llm):
             return json.dumps({"issues": [
                 {"name": "视觉定位", "action": "delete", "reason": "定义与原文矛盾"},
                 {"name": "不存在本体", "action": "delete", "reason": "越权提名"},
+                {"name": "混杂偏差", "action": "add", "reason": "缺少该概念",
+                 "suggested_definition": "选择偏差的一种"},
             ]}, ensure_ascii=False)
         if "语音识别" in p:
             return '{"verdict": "wrong"}'
@@ -176,12 +192,16 @@ def test_run_benchmark_end_to_end(env, fake_llm):
     assert by_arm["rag"] == "wrong"
     assert by_arm["rag_ontology"] == "wrong"
 
-    # failure attribution: only the closed-set nomination survives
+    # failure attribution: only the closed-set nominations survive
     changes = [dict(r) for r in env.execute(
         "SELECT * FROM persona_ontology_changes WHERE status='pending'").fetchall()]
-    assert len(changes) == 1
-    assert changes[0]["name"] == "视觉定位" and changes[0]["action"] == "delete"
-    ev = json.loads(changes[0]["evidence"])
+    by_name = {c["name"]: c for c in changes}
+    assert len(changes) == 2
+    assert by_name["视觉定位"]["action"] == "delete"
+    assert by_name["混杂偏差"]["action"] == "add"          # missing concept -> add
+    assert by_name["混杂偏差"]["kind"] == "entity"          # add records its kind
+    assert by_name["混杂偏差"]["ontology_id"] is None       # no existing row to point at
+    ev = json.loads(by_name["视觉定位"]["evidence"])
     assert ev[0]["quiz_id"] == seeded["quiz"]
 
     # summary shape for the card
@@ -232,6 +252,13 @@ def test_merge_and_rollback(env):
             " VALUES(?,?,?,?,?,?,?, 'r', '[]', 'pending', ?)",
             (iid, bid, seeded["po"][name], name, action,
              extra.get("suggested_definition"), extra.get("note"), now))
+    # add a missing concept entity (ontology_id NULL, kind='entity')
+    env.execute(
+        "INSERT INTO persona_ontology_changes(identity_id, benchmark_id,"
+        " ontology_id, name, kind, action, suggested_definition, reason,"
+        " evidence, status, created_at)"
+        " VALUES(?,?,?,?, 'entity', 'add', ?, 'r', '[]', 'pending', ?)",
+        (iid, bid, None, "混杂偏差", "选择偏差的一种", now))
     env.commit()
 
     # nothing to merge for an identity without pending changes
@@ -240,12 +267,16 @@ def test_merge_and_rollback(env):
 
     r = benchmark.merge_changes(env, iid)
     assert r["ok"] is True and r["version"] == 1
-    assert r["applied"] == {"annotate": 1, "update": 1, "delete": 1}
+    assert r["applied"] == {"annotate": 1, "update": 1, "delete": 1, "add": 1}
     rows = {r_["name"]: dict(r_) for r_ in env.execute(
         "SELECT * FROM persona_ontology WHERE identity_id=?", (iid,)).fetchall()}
     assert "[测试提名] 定义与原文有偏差" in rows["视觉定位"]["note"]
     assert rows["RefCOCO"]["definition"] == "指代理解基准数据集"
     assert rows["RefCOCO"]["status"] == "deprecated"   # delete = soft delete
+    # add: the new entity exists with its definition, is active, has no source
+    assert rows["混杂偏差"]["definition"] == "选择偏差的一种"
+    assert rows["混杂偏差"]["kind"] == "entity" and rows["混杂偏差"]["status"] == "active"
+    assert rows["混杂偏差"]["source_candidate_id"] is None
     assert all(c["status"] == "merged" for c in env.execute(
         "SELECT status FROM persona_ontology_changes").fetchall())
     v1 = env.execute("SELECT * FROM persona_ontology_versions"
@@ -265,6 +296,7 @@ def test_merge_and_rollback(env):
     assert rows["视觉定位"]["note"] is None                            # pre-merge: no note
     assert rows["RefCOCO"]["definition"] == "指代理解数据集"           # pre-merge definition
     assert rows["RefCOCO"]["status"] == "active"                      # delete undone
+    assert "混杂偏差" not in rows                                      # add undone by rollback
     assert env.execute("SELECT COUNT(*) c FROM persona_ontology_versions"
                        " WHERE identity_id=?", (iid,)).fetchone()["c"] == 2
 

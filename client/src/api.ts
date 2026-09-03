@@ -272,7 +272,8 @@ export interface BenchEvidence { quiz_id: number; question: string; reply: strin
 export interface BenchChange {
   id: number; identity_id: number; benchmark_id: number
   ontology_id: number | null; name: string
-  action: 'annotate' | 'update' | 'delete'
+  kind: string | null
+  action: 'annotate' | 'update' | 'delete' | 'add'
   suggested_definition: string | null; note: string | null
   reason: string | null; evidence: BenchEvidence[]
   status: 'pending' | 'merged' | 'rejected'

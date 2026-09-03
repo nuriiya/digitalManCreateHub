@@ -182,13 +182,21 @@ def _chat_llm2(messages: list[dict], temperature: float, channel: str,
     _notify({"model": s["model"], "channel": channel,
              "prompt_len": sum(len(m.get("content") or "") for m in messages),
              "prompt_preview": _preview(messages[-1].get("content") or "", 600)})
+    # GLM 5.2 defaults to thinking on; the judge channel (verdict + failure
+    # attribution) only NOMINATES and deterministic code adjudicates, so the
+    # reasoning chain is pure latency (its tokens stream as reasoning_content
+    # and are discarded here) and can hang for 10+ minutes or get the
+    # connection dropped by the provider. Disable it on judge only; chat keeps
+    # thinking (GLM's long-context agentic strength).
+    extra_body = {"thinking": {"type": "disabled"}} if channel == "judge" else None
     try:
         if _fake_chat2 is not None:
             reply = _fake_chat2(messages)
         else:
             reply, usage = _call_llm_with_usage(
                 s, messages, temperature,
-                float(s.get("timeout", 90)), float(s.get("hard_timeout", 1800)))
+                float(s.get("timeout", 90)), float(s.get("hard_timeout", 1800)),
+                extra_body=extra_body)
             if usage_out is not None:
                 usage_out.update(usage or {})
     except LLMError:
@@ -205,7 +213,8 @@ def _chat_llm2(messages: list[dict], temperature: float, channel: str,
 
 
 def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
-                         idle_seconds: float, hard_seconds: float) -> tuple[str, dict | None]:
+                         idle_seconds: float, hard_seconds: float,
+                         extra_body: dict | None = None) -> tuple[str, dict | None]:
     """Streaming OpenAI call with a two-tier timeout.
 
     - idle tier (SDK read timeout): trips when the upstream sends NO bytes
@@ -228,9 +237,11 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
             from openai import OpenAI
             client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
                             timeout=idle_seconds, max_retries=0)
-            resp = client.chat.completions.create(
-                model=s["model"], messages=messages, temperature=temperature,
-                stream=True, stream_options={"include_usage": True})
+            kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
+                          stream=True, stream_options={"include_usage": True})
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            resp = client.chat.completions.create(**kwargs)
             parts: list[str] = []
             for chunk in resp:
                 usage = getattr(chunk, "usage", None)

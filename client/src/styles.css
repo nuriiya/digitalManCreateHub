@@ -666,6 +666,7 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .bch-act.annotate { background: rgba(162,119,224,.2); color: var(--purple); }
 .bch-act.update { background: rgba(230,168,60,.18); color: #e6a83c; }
 .bch-act.delete { background: rgba(208,96,96,.2); color: var(--red); }
+.bch-act.add { background: rgba(76,175,80,.18); color: #4caf50; }
 .bch-name { font-weight: 600; flex: 0 0 auto; }
 .bch-reason {
   color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis;

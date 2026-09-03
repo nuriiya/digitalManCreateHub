@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app import jobs, ingest, llm
+from app import db, jobs, ingest, llm
 
 
 LONG_DOC = "。".join(
@@ -180,3 +180,50 @@ def test_api_pause_resume_delete(env, workdir, fake_llm, monkeypatch):
     assert client.get("/api/jobs").json()["jobs"] == []
     assert client.post("/api/jobs/999/pause").status_code == 400
     assert client.delete("/api/jobs/999").status_code == 404
+
+
+# ---------------- stale-job recovery on startup ----------------
+
+def test_recover_stale_jobs_creation_time_boundary(env):
+    # a running job created BEFORE the restart (old process) -> failed
+    old = jobs.create_job(env, "ingest", 0, "old process")
+    # a running job created AFTER the restart (this process) -> untouched
+    new = jobs.create_job(env, "ontology", 0, "this process")
+    env.execute("UPDATE jobs SET created_at=? WHERE id=?", (1000.0, old))
+    env.execute("UPDATE jobs SET created_at=? WHERE id=?", (5000.0, new))
+    env.commit()
+    assert jobs.recover_stale_jobs(env, started_at=3000.0) == 1
+    assert env.execute("SELECT status FROM jobs WHERE id=?",
+                       (old,)).fetchone()["status"] == "failed"
+    assert env.execute("SELECT status FROM jobs WHERE id=?",
+                       (new,)).fetchone()["status"] == "running"
+
+    # paused jobs are user-paused, NOT stale — left resumable across restart
+    paused = jobs.create_job(env, "exam", 0, "paused")
+    env.execute("UPDATE jobs SET status='paused', created_at=? WHERE id=?",
+                (1000.0, paused))
+    env.commit()
+    assert jobs.recover_stale_jobs(env, started_at=3000.0) == 0
+    assert env.execute("SELECT status FROM jobs WHERE id=?",
+                       (paused,)).fetchone()["status"] == "paused"
+
+
+def test_recover_stale_benchmark_updates_link_table(env):
+    env.execute("INSERT INTO identities(name, created_at) VALUES('t', ?)",
+                (db.now(),))
+    ident_id = env.execute("SELECT id FROM identities").fetchone()["id"]
+    job_id = jobs.create_job(env, "benchmark", 0, "bench", ref_id=ident_id)
+    env.execute("UPDATE jobs SET created_at=? WHERE id=?", (1000.0, job_id))
+    env.execute(
+        "INSERT INTO persona_benchmarks"
+        " (identity_id, job_id, model, judge, total, status, created_at)"
+        " VALUES(?,?,?,?,?,'running',?)",
+        (ident_id, job_id, "qwen2.5:7b-32k", "llm2/GLM", 15, db.now()))
+    env.commit()
+    assert jobs.recover_stale_jobs(env, started_at=3000.0) == 1
+    assert env.execute("SELECT status FROM jobs WHERE id=?",
+                       (job_id,)).fetchone()["status"] == "failed"
+    b = env.execute("SELECT status, error FROM persona_benchmarks WHERE job_id=?",
+                    (job_id,)).fetchone()
+    assert b["status"] == "failed"
+    assert b["error"] == "interrupted (service restart)"

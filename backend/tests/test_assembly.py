@@ -404,3 +404,33 @@ def test_multi_persona_confirm_scoped(env):
                         (a,)).fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM persona_ontology WHERE identity_id=?",
                         (b,)).fetchone()["c"] == 0
+
+
+def test_pending_summary_scoped_by_identity(env):
+    """Regression: pending_summary(identity_id) passed two bindings to queries
+    that each use one placeholder, raising sqlite3.ProgrammingError (500 on the
+    assembly card). Scoping must return only the target persona's pending
+    batch/items."""
+    from app import assembly, identity
+    conn = env
+    a = identity.create_identity(conn, "数字人A", "使命A", seed_candidate_ids=[])
+    b = identity.create_identity(conn, "数字人B", "使命B", seed_candidate_ids=[])
+    ca = _insert_candidate(conn, "概念A")
+    cb = _insert_candidate(conn, "概念B")
+    ba = assembly._create_batch(conn, a)
+    bb = assembly._create_batch(conn, b)
+    assembly._insert_items(conn, ba, [{"candidate_id": ca, "action": "adopt",
+                                       "category": "core", "reason": "x"}])
+    assembly._insert_items(conn, bb, [{"candidate_id": cb, "action": "adopt",
+                                       "category": "core", "reason": "x"}])
+
+    # scoped: must not raise, and must return only A's batch
+    s = assembly.pending_summary(conn, a)
+    assert [x["identity_id"] for x in s["batches"]] == [a]
+    assert s["total"] == 1
+    assert s["items"][0]["cand_name"] == "概念A"
+
+    # unscoped: both
+    s_all = assembly.pending_summary(conn)
+    assert {x["identity_id"] for x in s_all["batches"]} == {a, b}
+    assert s_all["total"] == 2

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>需求编写人数字人设计 · 基于本体约束机制</title>
+<style>
+:root{color-scheme:light}
+body{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;max-width:960px;margin:0 auto;padding:40px 32px;color:#26215C;line-height:1.75;background:#FAFAF8}
+h1{font-size:26px;font-weight:600;border-bottom:3px solid #534AB7;padding-bottom:12px}
+h2{font-size:20px;font-weight:600;color:#3C3489;margin-top:44px;border-left:4px solid #534AB7;padding-left:12px}
+h3{font-size:16px;font-weight:600;color:#3C3489;margin-top:28px}
+p{color:#444441}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px}
+th{background:#EEEDFE;color:#26215C;text-align:left;padding:9px 12px;border:1px solid #CECBF6;font-weight:600}
+td{padding:9px 12px;border:1px solid #D3D1C7;color:#444441;vertical-align:top}
+code{background:#EEEDFE;color:#3C3489;padding:1px 6px;border-radius:4px;font-family:Consolas,monospace;font-size:13px}
+pre{background:#26215C;color:#D3D1C7;padding:16px 20px;border-radius:8px;overflow-x:auto;font-size:13px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+.note{background:#FAEEDA;border-left:4px solid #EF9F27;padding:12px 18px;border-radius:0 8px 8px 0;margin:18px 0;font-size:14px}
+.principle{background:#E1F5EE;border-left:4px solid #1D9E75;padding:12px 18px;border-radius:0 8px 8px 0;margin:18px 0;font-size:14px}
+.dialog{border:1px solid #CECBF6;border-radius:10px;padding:6px 20px;margin:18px 0}
+.dialog .u{color:#185FA5;margin:14px 0}
+.dialog .a{color:#0F6E56;margin:14px 0}
+.small{font-size:13px;color:#888780}
+ul li{margin:6px 0}
+</style>
+</head>
+<body>
+
+<h1>需求编写人数字人设计<br><span style="font-size:15px;font-weight:400;color:#888780">基于本体约束输出机制（提名-裁决分离）· v1.0 · 2026-08-27</span></h1>
+
+<h2>一、定位与主要工作</h2>
+<p><strong>需求编写人</strong>是一个由本体约束机制驱动的数字人：它把"需求对齐实体"的结构化产出，翻译成一份每条结论都可溯源、每个缺口都显式挂起的《需求文档》。它与普通"文档生成 Agent"的本质区别是——<strong>它只有提名权，没有决定权</strong>：写下的每一个字都必须能追溯到对齐记录，追溯不到的，它宁可发起澄清也不编造。</p>
+
+<h3>主要工作（职责清单）</h3>
+<table>
+<tr><th style="width:36px">#</th><th>职责</th><th>说明</th></tr>
+<tr><td>1</td><td><strong>翻译：对齐记录 → 需求文档</strong></td><td>核心产出。逐条把需求对齐实体转写为带编号（REQ-001）、带验收标准的"需求条目"，并组装成章节化文档，最终输出 Word。</td></tr>
+<tr><td>2</td><td><strong>缺口管理</strong></td><td>对齐记录中的 unknown、冲突项，一律转为"澄清请求实体"显式挂起；澄清未决前，关联条目冻结为 blocked，绝不带着猜测写作。</td></tr>
+<tr><td>3</td><td><strong>双向溯源维护</strong></td><td>维护"条目 ⇄ 对齐项"的映射链；任何人点击文档中任一条目，都能回看到对话原文证据。</td></tr>
+<tr><td>4</td><td><strong>驱动审核闭环</strong></td><td>文档完备后自动创建"需求审核实体"提交审核；审核意见必须落到具体 item_id，它只做定点修订，不整篇重写。</td></tr>
+<tr><td>5</td><td><strong>守护文档完备性</strong></td><td>提交前执行完备性检查：对齐记录里每一条，要么被条目覆盖、要么挂澄清、要么被显式声明排除（须附理由），三选一，不允许静默丢失。</td></tr>
+</table>
+
+<h3>边界（不做什么）</h3>
+<ul>
+<li>不裁决冲突：两条对齐记录矛盾时（如 P0 vs P2），它不站队，只发起澄清。</li>
+<li>不扩充需求：不"顺手"补充用户没说过的功能（如批量导出），除非有新的对齐记录支撑。</li>
+<li>不跨域回答：文档范畴之外的问题（技术选型、排期承诺等）一律拒答并转交对应数字人。</li>
+<li>不改优先级：条目优先级只能继承自对齐记录，不得自行调整。</li>
+</ul>
+
+<h2>二、数字人 = 五原语的封装体</h2>
+<p>数字人不是第六个原语，而是五原语的组合封装，四层结构自上而下：</p>
+<table>
+<tr><th>层</th><th>原语</th><th>内容</th></tr>
+<tr><td><strong>人设层</strong></td><td>Interface</td><td>用户唯一可见层。身份、语气、拒答姿态；澄清与拒答以"自然语言 + 结构化卡片"双通道呈现。</td></tr>
+<tr><td><strong>行为层</strong></td><td>Action</td><td>6 个可提名动作：propose_outline（提名大纲）、propose_item（提名条目）、request_clarification（发起澄清）、submit_for_review（提交审核）、apply_revision（定点修订）、decline（拒答）。每个动作都遵循提名与执行分离。</td></tr>
+<tr><td><strong>本体层</strong></td><td>Object + Link</td><td>它认知的世界：5 个实体、6 种关系。本体在编译期产出 Function Calling schema + 校验规则 + 状态机，运行时不喂全文。</td></tr>
+<tr><td><strong>守护层</strong></td><td>Function</td><td>纯代码、零 LLM：溯源校验、完备性检查、冲突检测、状态机。任何一层不合法，输出都不会到达用户。</td></tr>
+</table>
+
+<h2>三、主要本体（Object）定义</h2>
+<p>在原有三大实体基础上新增两个实体（加粗）。命名遵循"XX 实体"规范。</p>
+
+<h3>1. 需求对齐实体 AlignmentItem（输入源，已存在）</h3>
+<table>
+<tr><th>字段</th><th>类型</th><th>约束</th></tr>
+<tr><td>alignment_id</td><td>string</td><td>主键，ALN-001 形式</td></tr>
+<tr><td>requirement_text</td><td>string</td><td>需求原文概述，附对话证据 span</td></tr>
+<tr><td>priority</td><td>enum</td><td>P0 / P1 / P2 / unknown / conflict</td></tr>
+<tr><td>status</td><td>enum</td><td>aligned / unknown / conflict / out_of_scope</td></tr>
+</table>
+
+<h3>2. 需求条目实体 RequirementItem（<strong>新增，核心产出</strong>）</h3>
+<p>文档的最小可验证单元。一份文档 = 若干条目的有序组装。</p>
+<table>
+<tr><th>字段</th><th>类型</th><th>约束</th></tr>
+<tr><td>item_id</td><td>string</td><td>主键，REQ-001 形式，自动编号</td></tr>
+<tr><td>title</td><td>string</td><td>一句话概述</td></tr>
+<tr><td>description</td><td>string</td><td>需求描述（生成文本，合法性由溯源关系保证）</td></tr>
+<tr><td>acceptance_criteria</td><td>string[]</td><td>验收标准，每条须含可验证断言（守护层检查可测试性）</td></tr>
+<tr><td>priority</td><td>enum</td><td><strong>只允许继承自所溯源的对齐项</strong>，不得自行修改</td></tr>
+<tr><td>status</td><td>enum</td><td>draft / blocked / confirmed / superseded</td></tr>
+<tr><td>source_alignment_id</td><td>string</td><td><strong>必填</strong>，溯源于哪条对齐记录（引用悬空即拒绝）</td></tr>
+<tr><td>version / revised_from</td><td>int / string</td><td>修订链：v(n) 修订自 v(n-1)</td></tr>
+</table>
+
+<h3>3. 需求文档实体 RequirementDoc（交付物，升级）</h3>
+<table>
+<tr><th>字段</th><th>类型</th><th>约束</th></tr>
+<tr><td>doc_id / version</td><td>string / int</td><td>文档标识与版本，审核按版本锁定</td></tr>
+<tr><td>sections</td><td>Section[]</td><td>章节结构，每章须映射到对齐项的领域域</td></tr>
+<tr><td>status</td><td>enum</td><td>draft → gaps_pending → ready_for_review → in_review → revision → approved / rejected（状态机强制）</td></tr>
+<tr><td>coverage_map</td><td>json</td><td>完备性函数产出：对齐项 → 覆盖/澄清/排除 的映射表</td></tr>
+</table>
+
+<h3>4. 澄清请求实体 ClarificationRequest（<strong>新增</strong>）</h3>
+<p>把"不知道"从隐式行为变成显式可管理的对象——unknown 不再是一个值，而是一条有生命周期的工作项。</p>
+<table>
+<tr><th>字段</th><th>类型</th><th>约束</th></tr>
+<tr><td>cr_id</td><td>string</td><td>主键，CR-001 形式</td></tr>
+<tr><td>question</td><td>string</td><td>面向用户的澄清问题（含候选答案按钮）</td></tr>
+<tr><td>target_alignment_id</td><td>string</td><td>针对哪条对齐记录</td></tr>
+<tr><td>status</td><td>enum</td><td>open / answered / expired</td></tr>
+<tr><td>answer / answered_at</td><td>string / datetime</td><td>答复写回后，关联 blocked 条目解冻</td></tr>
+</table>
+
+<h3>5. 需求审核实体 ReviewRecord（闭环，升级）</h3>
+<table>
+<tr><th>字段</th><th>类型</th><th>约束</th></tr>
+<tr><td>review_id</td><td>string</td><td>主键</td></tr>
+<tr><td>doc_id / doc_version</td><td>string / int</td><td>审核锁定到具体版本</td></tr>
+<tr><td>findings</td><td>Finding[]</td><td><strong>每条意见必须指向具体 item_id</strong>，不允许笼统否决</td></tr>
+<tr><td>verdict</td><td>enum</td><td>approved / needs_revision</td></tr>
+</table>
+
+<h2>四、本体之间的关系（Link）</h2>
+<table>
+<tr><th>关系</th><th>方向与基数</th><th>约束</th><th>守护者</th></tr>
+<tr><td><strong>溯源于 traced_to</strong></td><td>需求条目 → 需求对齐（n:1，必填）</td><td>无来源不写作。引用的对齐记录必须存在，悬空即拒</td><td>溯源校验器（结构+语义关）</td></tr>
+<tr><td><strong>包含于 contained_in</strong></td><td>需求条目 → 需求文档（n:1）</td><td>条目必须归属某文档某章节；孤儿条目不允许提交</td><td>结构关</td></tr>
+<tr><td><strong>覆盖 covers</strong></td><td>需求文档 → 需求对齐（函数检查）</td><td>完备性：∀ 对齐项 ∈ 对齐记录：有条目覆盖 ∨ 挂澄清 ∨ 显式排除（附理由）</td><td>完备性函数（提交前全量执行）</td></tr>
+<tr><td><strong>针对 targets</strong></td><td>澄清请求 → 需求对齐（n:1）</td><td>澄清必须锚定到具体对齐项，不允许泛泛而问</td><td>语义关</td></tr>
+<tr><td><strong>被阻塞于 blocked_by</strong></td><td>需求条目 → 澄清请求（n:1）</td><td>open 状态的澄清冻结关联条目（status=blocked），答复后解冻重提名</td><td>状态机</td></tr>
+<tr><td><strong>审核于 review_of</strong></td><td>需求审核 → 需求文档@版本（n:1）</td><td>审核期间文档锁定；修订产生新版本+新审核</td><td>状态机</td></tr>
+<tr><td><strong>修订自 revises</strong></td><td>需求条目 v(n) → v(n-1)</td><td>定点修订：只允许改被 findings 指摘的条目，旧版标记 superseded</td><td>状态机+语义关</td></tr>
+</table>
+
+<div class="principle"><strong>数字人四守则（人格化的本体约束）</strong><br>
+① 无来源不写作 —— 每个条目必须引用存在的对齐记录；<br>
+② 完备不遗漏 —— 每条对齐项三选一（覆盖/澄清/排除），缺一阻断提交；<br>
+③ 冲突不裁决 —— 矛盾交给用户，数字人只负责问；<br>
+④ 修订最小化 —— 审核意见落到 item 级，只改被指摘的，其余一律不动。</div>
+
+<h2>五、主工作循环</h2>
+<ol>
+<li><strong>对齐记录就绪</strong>（含 unknown 与冲突清单）→ 数字人被唤醒。</li>
+<li><strong>propose_outline</strong>：提名文档大纲，章节必须映射到对齐项的领域域。</li>
+<li><strong>coverage_check</strong>（纯代码）：对每条对齐项判定覆盖/澄清/排除，生成 coverage_map。</li>
+<li><strong>propose_item</strong>：逐条目提名（描述+验收标准+溯源 ID），走三关校验：溯源 ID 存在、枚举合法、验收标准可测试。</li>
+<li><strong>缺口分支</strong>：缺来源或校验失败 → request_clarification，关联条目冻结为 blocked；澄清答复后解冻重提名。修复循环超限（2 次）→ 系统级挂起转人工。</li>
+<li><strong>全部条目 confirmed</strong> → 文档 gaps_pending → ready_for_review。</li>
+<li><strong>submit_for_review</strong>：需求审核实体自动创建，锁定文档版本。</li>
+<li><strong>findings 下发</strong> → <strong>apply_revision</strong> 定点修订，生成修订链，回到待审核。</li>
+<li><strong>approved</strong> → 触发 Word 文档生成（Interface 层出口）。</li>
+</ol>
+
+<h2>六、实例对话演示</h2>
+<p>延续上一轮"导出 Word"实例（对齐记录 #0417：P0 已确认、deadline=unknown、批量导出被剔除），演示数字人如何工作。</p>
+<div class="dialog">
+<p class="u"><strong>用户：</strong>文档写得怎么样了？对了，把批量导出也写进去吧，客户肯定会要的。</p>
+<p class="a"><strong>需求编写人：</strong>文档主体已完成 12 条条目，全部可溯源。关于"批量导出"——对齐记录 #0417 中没有相关条目，按守则①（无来源不写作），我不能直接写入。<br><br>
+已创建澄清请求 <code>CR-012</code>：「是否新增批量导出需求？请提供来源（客户原话 / 会议记录）」，并发起对齐流程补充这条对齐记录。你确认来源后，我会在本轮生成条目 REQ-013 并挂上溯源。<br><br>
+另外提醒：deadline 目前仍为 unknown（CR-007 待你确认"下周五"是否指 2026-09-04），该字段关联的上线时间章节当前为 blocked 状态，不影响其余章节交付。</p>
+</div>
+<div class="note">注意这段回复里数字人做了三件事：拒绝无来源写入（守则①）、把口头新需求转化为显式工作项（澄清请求）、如实报告 blocked 状态而非掩盖缺口——这就是"不知道就说不知道"在数字人身上的具体表现。</div>
+
+<h2>七、与现有系统的衔接</h2>
+<ul>
+<li><strong>实体落地</strong>：5 个实体映射为 SQLAlchemy 2.0 模型，Link 即外键 + 关系约束，coverage_map 与修订链单独建表。</li>
+<li><strong>模型路由</strong>：propose_item 等生成类动作路由到 GLM-5.2（长文本稳、工具调用稳）；clarification 触发的高频轻量重提名可路由到 DeepSeek V4 Flash；关键字段可双模型交叉提名，不一致即降级 unknown。</li>
+<li><strong>本体编译</strong>：沿用"本体库 YAML → 编译器 → tools schema + 校验规则 + 状态机"链路，数字人配置只是本体库之上的一层人设封装（Persona DSL），换一个数字人 = 换一套动作集 + 人设，本体与守护层复用。</li>
+<li><strong>可扩展性</strong>：同一套机制可再封装"需求审核人"（吃 findings 产出裁决建议）等数字人，实体与关系完全复用，只是 Action 集与守则不同。</li>
+</ul>
+
+<h2>八、实施路线</h2>
+<table>
+<tr><th>阶段</th><th>内容</th></tr>
+<tr><td>阶段一</td><td>实体建模：5 实体 + 7 关系的 SQLAlchemy 模型与状态机，本体 YAML 定义</td></tr>
+<tr><td>阶段二</td><td>编写人核心动作：propose_outline / propose_item + 三关校验器 + coverage_check</td></tr>
+<tr><td>阶段三</td><td>澄清闭环与修订链：CR 生命周期、blocked 解冻、apply_revision、Word 导出</td></tr>
+</table>
+
+<p class="small">本文档基于 2026-08-27《本体约束输出架构设计》（提名-裁决分离五层架构）派生，是其在数字人方向的第一个应用实例。</p>
+
+</body>
+</html>

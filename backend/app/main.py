@@ -16,7 +16,7 @@ from . import db, jobs, settings_store, ingest, ontology, orchestration, assembl
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     conn = db.get_conn()
-    recovered = jobs.recover_stale_jobs(conn)
+    recovered = jobs.recover_stale_jobs(conn, db.now())
     if recovered:
         jobs.emit(conn, None, "system.recovered", {"jobs": recovered})
     yield

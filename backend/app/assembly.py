@@ -528,7 +528,7 @@ def pending_summary(conn, identity_id: int | None = None) -> dict:
     if identity_id is not None:
         bq += " AND b.identity_id=?"
         iq += " AND ai.batch_id IN (SELECT id FROM assembly_batches WHERE identity_id=?)"
-        args = (identity_id, identity_id)
+        args = (identity_id,)
     bq += " ORDER BY b.id DESC"
     iq += " ORDER BY ai.id"
     batches = [dict(r) for r in conn.execute(bq, args).fetchall()]

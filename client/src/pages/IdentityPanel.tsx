@@ -203,7 +203,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
     setBchBusy(id)
     try {
       const r = await mergeBenchmark(id)
-      toast(`已合并为版本 v${r.version}：标注 ${r.applied.annotate ?? 0} · 修改 ${r.applied.update ?? 0} · 删除 ${r.applied.delete ?? 0}`, 'ok')
+      toast(`已合并为版本 v${r.version}：标注 ${r.applied.annotate ?? 0} · 修改 ${r.applied.update ?? 0} · 删除 ${r.applied.delete ?? 0} · 新增 ${r.applied.add ?? 0}`, 'ok')
       reloadBench()
       reloadAsm()
     } catch (e: any) { toast(e.message, 'err') }
@@ -357,7 +357,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const BENCH_ARM_LABELS: Record<string, string> = {
     none: 'G0 裸模型', ontology: 'G1 仅本体', rag: 'G2 仅RAG', rag_ontology: 'G3 RAG+本体',
   }
-  const BENCH_ACT_LABELS: Record<string, string> = { annotate: '标', update: '改', delete: '删' }
+  const BENCH_ACT_LABELS: Record<string, string> = { annotate: '标', update: '改', delete: '删', add: '增' }
 
   const benchmarkBlock = (it: Identity) => {
     const s = bench[it.id]
@@ -425,10 +425,10 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
                   {changes.map((c) => (
                     <div key={c.id} className="bch-item">
                       <span className={`bch-act ${c.action}`}>{BENCH_ACT_LABELS[c.action]}</span>
-                      <span className="bch-name" title={c.action === 'update' ? (c.suggested_definition ?? '') : (c.note ?? '')}>{c.name}</span>
+                      <span className="bch-name" title={c.action === 'update' || c.action === 'add' ? (c.suggested_definition ?? '') : (c.note ?? '')}>{c.name}</span>
                       <span className="bch-reason">{c.reason}</span>
-                      {c.action === 'update' && c.suggested_definition && (
-                        <span className="bch-fix" title={c.suggested_definition}>→ {c.suggested_definition.length > 60 ? c.suggested_definition.slice(0, 60) + '…' : c.suggested_definition}</span>
+                      {(c.action === 'update' || c.action === 'add') && c.suggested_definition && (
+                        <span className="bch-fix" title={c.suggested_definition}>{c.action === 'add' ? '新增定义：' : '→ '}{c.suggested_definition.length > 60 ? c.suggested_definition.slice(0, 60) + '…' : c.suggested_definition}</span>
                       )}
                       {c.evidence.length > 0 && (
                         <span className="bch-ev" title={c.evidence.map((e) => e.question).join('\n')}>

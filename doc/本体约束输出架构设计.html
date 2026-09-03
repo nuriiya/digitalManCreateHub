@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本体约束输出架构设计 · Ontology-Guarded Generation</title>
+<style>
+  :root{
+    --bg:#1e1f22; --panel:#26272b; --panel2:#2d2e33; --border:#3a3b40;
+    --text:#e4e5e8; --muted:#a8aab0; --dim:#7d7f86;
+    --accent:#7F77DD; --teal:#5DCAA5; --coral:#F0997B; --amber:#EF9F27;
+    --code-bg:#1a1b1e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.7;font-size:15px;padding:40px 20px}
+  .wrap{max-width:960px;margin:0 auto}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:32px}
+  h1{font-size:26px;font-weight:600;color:var(--text)}
+  .sub{color:var(--muted);margin-top:8px;font-size:14px}
+  .creed{margin-top:16px;padding:14px 18px;background:var(--panel2);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;font-size:15px}
+  .creed b{color:var(--accent)}
+  h2{font-size:19px;font-weight:600;margin:40px 0 14px;padding-top:16px;border-top:1px solid var(--border);color:var(--text)}
+  h2 .no{color:var(--accent);margin-right:8px;font-family:Consolas,monospace}
+  h3{font-size:16px;font-weight:600;margin:22px 0 10px;color:var(--teal)}
+  p{margin:10px 0;color:var(--text)}
+  ul,ol{margin:10px 0 10px 24px}
+  li{margin:6px 0}
+  b{color:#fff}
+  code{background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:Consolas,"Courier New",monospace;font-size:13px;color:#c9c4f0}
+  pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:12px 0}
+  pre code{background:none;border:none;padding:0;color:#d4d5d8;font-size:13px;line-height:1.6}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th{background:var(--panel2);color:var(--text);text-align:left;padding:10px 12px;border:1px solid var(--border);font-weight:600}
+  td{padding:9px 12px;border:1px solid var(--border);color:var(--muted);vertical-align:top}
+  td:first-child{color:var(--text);white-space:nowrap}
+  .tag{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;margin-right:6px}
+  .tag.p{background:rgba(127,119,221,.18);color:#AFA9EC;border:1px solid rgba(127,119,221,.4)}
+  .tag.t{background:rgba(93,202,165,.15);color:#5DCAA5;border:1px solid rgba(93,202,165,.4)}
+  .tag.c{background:rgba(240,153,123,.15);color:#F0997B;border:1px solid rgba(240,153,123,.4)}
+  .tag.a{background:rgba(239,159,39,.15);color:#EF9F27;border:1px solid rgba(239,159,39,.4)}
+  .note{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin:14px 0;font-size:14px;color:var(--muted)}
+  .note.warn{border-left:3px solid var(--coral)}
+  .note.good{border-left:3px solid var(--teal)}
+  .k{color:var(--accent);font-weight:600}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--border);color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>本体约束输出架构设计</h1>
+  <div class="sub">Ontology-Guarded Generation · 无 RAG · 适用于需求对齐 / 需求文档 / 需求审核三实体 · 基座：GLM-5.2 + DeepSeek V4 Flash</div>
+  <div class="creed"><b>设计信条：凡输出的必可验证，不可验证的必不出。</b>"绝对准确"不是模型属性，而是系统属性——模型只有提名权，本体拥有裁决权，代码拥有执行权。</div>
+</header>
+
+<h2><span class="no">00</span>设计目标与边界</h2>
+<table>
+  <tr><th>目标</th><th>达成手段</th><th>验收标准</th></tr>
+  <tr><td>绝对准确</td><td>闭集 schema 约束 + 三关确定性校验 + 事务执行，错误提名无法到达下游</td><td>任何落库/出站数据 100% 通过本体校验</td></tr>
+  <tr><td>不知道就说不知道</td><td>unknown 是合法枚举值 + 证据绑定 + 拒答 Action + 重试超限兜底</td><td>无证据字段一律 unknown，系统级拒答路径常开</td></tr>
+  <tr><td>暂不需要 RAG</td><td>事实来源只有两个：本次对话上下文 + 本体自身闭集；不检索外部知识库</td><td>架构中无向量库、无检索组件</td></tr>
+</table>
+<div class="note">为什么"绝对准确"必须靠架构而非模型：LLM 的输出本质是概率采样，任何 prompt 都无法给出硬保证。唯一可行的路径是让"错误的输出"在结构上无法通过校验——用确定性代码（Python，不是 LLM）做最终裁决。这与 Palantir Ontology 的核心理念一致：本体是操作的契约，不是描述性的文档。</div>
+
+<h2><span class="no">01</span>核心原则：提名-裁决分离（Propose-Adjudicate）</h2>
+<ol>
+  <li><span class="tag p">LLM</span> <b>模型只提名</b>：LLM 的唯一职责是从对话中挑选（select）本体允许的值并组装提名（proposal），通过 Function Calling 提交。它不能创造新的实体类型、新的状态值、新的关系类型。</li>
+  <li><span class="tag t">本体</span> <b>本体当宪法</b>：本体库是唯一事实源（Single Source of Truth），在<b>编译期</b>（不是运行时）编译成三种产物：JSON Schema 工具定义、SHACL 校验规则、状态机转移表。模型和校验器使用同一份口径。</li>
+  <li><span class="tag a">证据</span> <b>证据绑定</b>：LLM 提名的每个事实字段必须附带 evidence——对话原文的逐字引用。校验器做确定性字符串包含检查，无中生有的值在此被拦截。</li>
+  <li><span class="tag c">拒答</span> <b>拒答是一等公民</b>："不知道"不是异常路径而是合法输出。宁输出空对象 + unresolved 问题清单，绝不编造填充。</li>
+</ol>
+
+<h2><span class="no">02</span>总体架构（五层）</h2>
+<table>
+  <tr><th>层</th><th>职责</th><th>实现</th><th>原语归属</th></tr>
+  <tr><td>L0 对话入口</td><td>意图路由：判断用户意图映射到哪个 Action 提名</td><td>FastAPI 端点 + 意图分类（可用轻量规则 + Flash）</td><td>Interface</td></tr>
+  <tr><td>L1 受限生成</td><td>LLM 在闭集 schema 内提名，产出结构化 proposal</td><td>Function Calling，tool_choice=required，temperature=0</td><td>Action（提名）</td></tr>
+  <tr><td>L2 本体校验</td><td>三关确定性校验：结构 → 语义 → 证据</td><td>pydantic + jsonschema + SHACL（pySHACL）+ 自研规则</td><td>Function</td></tr>
+  <tr><td>L3 事务执行</td><td>状态机裁决转移合法性，事务写库</td><td>SQLAlchemy 2.0 事务 + 状态机转移表</td><td>Action（执行）</td></tr>
+  <tr><td>L4 出口网关</td><td>只有通过全部校验的结构化数据可出站；拒答走专用通道</td><td>响应模型（response_model）强制约束</td><td>Interface</td></tr>
+</table>
+<div class="note good"><b>关键点：校验层（L2）不含任何 LLM 调用。</b>这是"绝对准确"的根基——裁决逻辑必须是可测试、可复现的确定性代码。LLM 只出现在 L1（提名）与修复循环的回喂环节。</div>
+
+<h2><span class="no">03</span>本体层与编译器</h2>
+<p>本体库建议用一份声明式 DSL（YAML/Python dataclass）维护，覆盖三实体的类型、属性、关系、状态、基数约束，编译器将其产出三种制品：</p>
+<pre><code>ontology/                      # 单一事实源
+  entities.yaml                # Object：三实体类型定义 + 属性 + 枚举闭集
+  links.yaml                   # Link：关系类型 + 两端类型约束 + 基数
+  actions.yaml                 # Action：可提名操作 + 参数 schema + 状态转移
+  rules.shacl.ttl              # Function：SHACL 校验规则
+compile()  →  tools.json       # 给 L1 的 Function Calling 工具定义
+          →  validators.py     # 给 L2 的 pydantic 模型 + 规则注册表
+          →  transitions.py    # 给 L3 的状态机转移表</code></pre>
+<div class="note"><b>为什么编译期生成而非运行时喂本体提示词：</b>①模型永远只见闭集 schema，无法"理解偏"本体；②schema、校验规则、状态机同源生成，杜绝双维护漂移；③本体变更 = 重新编译 + 全量回归测试，变更可控。</div>
+
+<h2><span class="no">04</span>受限生成层细节</h2>
+<ul>
+  <li><b>闭集约束</b>：所有枚举字段在 schema 中穷举合法值，并强制 <code>additionalProperties: false</code>——模型发明新字段、新状态值在结构层即被拒绝。</li>
+  <li><b>认识论字段</b>：每个可空事实字段都包含 <code>unknown</code> 作为合法枚举值；另设 <code>unresolved</code> 数组承接"对话中缺失、需追问"的信息。模型被明确指示：没有原文依据就填 unknown。</li>
+  <li><b>自由文本隔离</b>：叙述性内容只允许出现在指定的 note/description 字段，且永远标记为"模型陈述"（不参与事实校验、不作为下游 Action 的依据）。</li>
+  <li><b>采样参数</b>：temperature=0（或极低 top_p），禁用创造性行为；两个基座均 OpenAI 兼容，切换只改 model 名。</li>
+  <li><b>不喂本体全文</b>：运行时只喂"当前 Action 的 schema + 少量必要闭集说明"，避免上一轮调研中确认的"全量注入本体导致上下文干扰"问题。</li>
+</ul>
+
+<h2><span class="no">05</span>校验层：三道防线</h2>
+<table>
+  <tr><th>防线</th><th>工具</th><th>拦截什么</th><th>示例</th></tr>
+  <tr><td>第一关 · 结构</td><td>pydantic v2 / jsonschema</td><td>字段缺失、类型错误、多余字段、枚举外的值</td><td>priority 不在 {high, medium, low, unknown} 中 → 拒绝</td></tr>
+  <tr><td>第二关 · 语义</td><td>SHACL（pySHACL）+ 自研规则</td><td>类型错配、基数违规、引用完整性、状态转移非法</td><td>需求审核实体引用了不存在的需求文档 id；status 从 draft 直接跳到 approved</td></tr>
+  <tr><td>第三关 · 证据</td><td>确定性 span 匹配（纯字符串操作）</td><td>无中生有：字段值在对话原文中无逐字依据</td><td>evidence "用户要求支持离线模式" 在原文中不存在 → 拒绝该字段</td></tr>
+</table>
+<p>三关全部通过才进入 L3；任何一关失败即生成<b>结构化违规报告</b>（哪条规则、哪个字段、期望值集合、实际值），回喂给 L1 修复。</p>
+
+<h2><span class="no">06</span>"不知道"协议（Abstention Protocol）</h2>
+<h3>字段级</h3>
+<ul>
+  <li>所有事实枚举字段含 <code>unknown</code> 合法值；填写 unknown 的字段不参与后续校验，落库时标记 <code>epistemic_status: unknown</code>。</li>
+  <li>evidence 为空数组 → 该字段强制视为 unknown（证据绑定使"编造"与"诚实承认不知道"在结构上可区分）。</li>
+</ul>
+<h3>实体级</h3>
+<ul>
+  <li>允许提名空对象：<code>{"objects": [], "unresolved": [{"question": "..."}]}</code> 是完全合法的输出。</li>
+</ul>
+<h3>系统级</h3>
+<ul>
+  <li>专用 Action：<code>declare_insufficient_information</code>——LLM 判断对话信息不足以支撑任何提名时显式调用。</li>
+  <li>修复循环超限（默认 2 次）后，系统<b>主动拒答</b>并转人工队列；绝不降级为自由文本猜测。</li>
+  <li>Prompt 侧配合：system prompt 明示"你的职责是提名而非回答；宁缺毋滥；unknown 是正确答案而非失败"，并配拒答正例 few-shot。</li>
+</ul>
+
+<h2><span class="no">07</span>修复循环（核心代码骨架）</h2>
+<pre><code>MAX_RETRY = 2
+
+def guarded_generate(user_msg: str, ontology: Ontology) -> Response:
+    tools = ontology.compiled_tools()            # 编译期产物，运行时只读
+    msgs = [system_prompt(ontology), user_msg]
+    for attempt in range(MAX_RETRY + 1):
+        proposal = llm.chat(                      # GLM-5.2 / V4 Flash，OpenAI 兼容
+            msgs, tools=tools, tool_choice="required",
+            temperature=0,
+        )
+        report = validator.validate(proposal, ontology)   # 三关，纯确定性代码
+        if report.ok:
+            return executor.commit(proposal)      # 状态机 + SQLAlchemy 事务
+        if attempt == MAX_RETRY:
+            return abstain(report)                # 拒答："无法在本体约束下可靠生成"
+        msgs.append(tool_feedback(report))        # 结构化违规报告回喂，定向修复
+</code></pre>
+<p>违规报告格式（回喂给模型的内容同样是结构化的，避免二次歧义）：</p>
+<pre><code>{
+  "violations": [
+    {"rule": "sh:closed_enum", "field": "priority",
+     "expected": ["high","medium","low","unknown"], "got": "P0",
+     "fix_hint": "请从合法值集合中重选，或依据原文填 unknown"}
+  ]
+}</code></pre>
+
+<h2><span class="no">08</span>与 Palantir 五原语的映射</h2>
+<table>
+  <tr><th>原语</th><th>在本架构中的角色</th><th>落地位置</th></tr>
+  <tr><td>Object</td><td>实体类型定义（需求对齐/需求文档/需求审核），编译为 schema definitions</td><td>entities.yaml → tools.json</td></tr>
+  <tr><td>Link</td><td>关系类型闭集 + 两端类型约束 + 基数 + 引用完整性规则</td><td>links.yaml → SHACL 规则</td></tr>
+  <tr><td>Action</td><td>LLM 可提名的操作（唯一写入口）；执行由代码状态机裁决，提名与执行分离</td><td>actions.yaml → tools.json + transitions.py</td></tr>
+  <tr><td>Function</td><td>编译器、三关校验器、状态机——全部是纯确定性函数，零 LLM</td><td>compile() / validator / executor</td></tr>
+  <tr><td>Interface</td><td>对话入口（意图路由）与出口网关（所有出站内容必过校验）</td><td>L0 / L4</td></tr>
+</table>
+
+<h2><span class="no">09</span>三实体落地示例</h2>
+<h3>需求对齐实体 · 抽取提名工具（节选）</h3>
+<pre><code>{
+  "type": "function",
+  "function": {
+    "name": "propose_requirement_alignment",
+    "description": "从对话中提名需求对齐实体。只能依据对话原文；无法确定的信息必须填 unknown，禁止推测。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "objects": {"type": "array", "items": {"$ref": "#/$defs/alignment"}},
+        "unresolved": {"type": "array", "items": {
+          "type": "object",
+          "properties": {"question": {"type": "string"},
+                          "missing": {"type": "string"}},
+          "additionalProperties": false}}
+      },
+      "required": ["objects", "unresolved"],
+      "additionalProperties": false,
+      "$defs": {"alignment": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "priority": {"enum": ["high","medium","low","unknown"]},
+          "status": {"enum": ["draft","aligned","blocked","unknown"]},
+          "evidence": {"type": "array", "items": {"type": "string"},
+                       "description": "支撑本实体的对话原文片段，逐字引用"}
+        },
+        "required": ["title","priority","status","evidence"],
+        "additionalProperties": false
+      }}
+    }
+  }
+}</code></pre>
+<h3>需求审核实体 · 典型校验规则</h3>
+<ul>
+  <li>引用完整性：<code>reviewed_doc_id</code> 必须指向库中已存在的需求文档实体（闭世界）。</li>
+  <li>结论闭集：<code>verdict ∈ {approved, rejected, needs_changes, unknown}</code>。</li>
+  <li>基数约束：一份需求文档至多一条<b>生效中</b>的审核记录。</li>
+  <li>状态机：需求文档 <code>draft → aligned → reviewing → approved / rejected</code>，任何跳跃转移直接拒绝（这正是"需求审核 Action 触发文档状态写回"的运行时闭环）。</li>
+</ul>
+
+<h2><span class="no">10</span>模型路由（结合现有两个基座）</h2>
+<table>
+  <tr><th>环节</th><th>推荐基座</th><th>理由</th></tr>
+  <tr><td>主编排 / 长程对话 / 文档生成</td><td>GLM-5.2</td><td>长程任务稳定性 + 工具调用最稳（Agent 工具最优）</td></tr>
+  <tr><td>高频实体抽取子调用</td><td>DeepSeek V4 Flash</td><td>13B 激活吞吐高、算力省，闭集抽取任务足够</td></tr>
+  <tr><td>关键字段交叉核验</td><td>Flash 核 GLM（或反向）</td><td>两模型独立部署，天然可用于双模型一致性检查（见第 11 节残余风险）</td></tr>
+</table>
+<p>两个模型走<b>同一个 schema 网关</b>：无论哪个模型提名，都必须通过同一份编译期校验规则——切换模型不改架构，这正是 Function 原语"模型无关"的价值。</p>
+
+<h2><span class="no">11</span>准确性边界（诚实清单）</h2>
+<table>
+  <tr><th>保证级别</th><th>内容</th><th>依据</th></tr>
+  <tr><td>结构 100%</td><td>不存在 schema 外字段、枚举外取值、类型错误</td><td>闭集 schema + 第一关校验，数学上封闭</td></tr>
+  <tr><td>语义 100% 拦截已知违规</td><td>引用悬空、基数违规、非法状态转移、关系类型错配</td><td>SHACL 规则逐一声明，可穷举测试</td></tr>
+  <tr><td>证据级强保证</td><td>字段值必须有对话原文逐字依据，编造值被拦截</td><td>span 确定性匹配</td></tr>
+</table>
+<div class="note warn"><b>残余风险（必须知晓）：</b>① span 真实存在但语义归因错位（如把 A 的话归给 B）——字符串校验拦不住语义错位。缓解：关键字段启用双模型交叉核验（GLM 与 Flash 独立抽取，结果不一致 → 该字段降级 unknown）；② 本体规则自身写错——缓解：本体变更走评审流程（需求审核实体本身就是为此设计），配全量回归测试集；③ LLM 在 evidence 里引用了原文但断章取义——缓解：evidence 强制带位置锚点（消息 id + 起止偏移），校验器按偏移截取比对而非全文搜索。<br><b>结论表述：</b>系统保证的不是"模型永不犯错"，而是"模型的错不可能到达下游 + 不可靠时显式说不知道"。这已是工程上"绝对准确"的正确含义。</div>
+
+<h2><span class="no">12</span>实施路线</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>产出</th></tr>
+  <tr><td>一 · 契约先行</td><td>用 YAML 固化三实体本体 + 编译器，产出 tools/validators/transitions；先不接 LLM，用手工提名样本跑通三关校验</td><td>本体库 v1 + 校验器测试套件</td></tr>
+  <tr><td>二 · 单实体闭环</td><td>需求对齐实体接入 LLM（先 Flash 后 GLM 各测一轮），跑通 提名→校验→修复→落库/拒答 全链路</td><td>端到端 demo + 违规率/拒答率基线</td></tr>
+  <tr><td>三 · 三实体联动</td><td>需求文档生成（GLM）与需求审核（状态机写回闭环）接入；上线双模型交叉核验；建回归评测集</td><td>v2.0 本体架构运行时</td></tr>
+</table>
+
+<footer>本体约束输出架构设计 · 2026-08-27 · 配套：工程本体论前沿对比.html · 基座：GLM-5.2 / DeepSeek V4 Flash（公司私有化部署，OpenAI 兼容）</footer>
+</div>
+</body>
+</html>

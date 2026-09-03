@@ -134,3 +134,23 @@ def test_parse_invalid_json_returns_none():
     assert llm.extract_json('{"a": 1} trailing garbage') == {"a": 1}
     assert llm.extract_json('[1, 2, 3]') == [1, 2, 3]
     assert llm.extract_json('') is None
+
+
+def test_judge_channel_disables_thinking(env):
+    """Judge channel (verdict + failure attribution) must disable GLM's
+    reasoning chain; chat keeps it. Regression for the 10+ minute thinking
+    hang that also dropped the provider connection mid-stream (reasoning
+    tokens stream as reasoning_content and are discarded here anyway)."""
+    llm.clear_fake_chat()
+    seen: list = []
+
+    def fake_call(s, messages, temperature, idle_seconds, hard_seconds,
+                  extra_body=None):
+        seen.append(extra_body)
+        return "ok", None
+
+    with patch.object(llm, "_call_llm_with_usage", side_effect=fake_call):
+        llm.chat2([{"role": "user", "content": "judge"}])
+        llm.chat_persona([{"role": "user", "content": "hello"}])
+
+    assert seen == [{"thinking": {"type": "disabled"}}, None]
