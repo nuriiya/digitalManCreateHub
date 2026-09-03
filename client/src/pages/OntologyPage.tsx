@@ -202,12 +202,75 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const [seedMission, setSeedMission] = useState('')
   const [seedCreating, setSeedCreating] = useState(false)
   const [idVer, setIdVer] = useState(0)
+  // 本体库渐进加载：默认最热 50 → 300 → 全部；type 芯片可整类加入
+  const [loadLimit, setLoadLimit] = useState(50)
+  const [kindAdds, setKindAdds] = useState<Set<string>>(new Set())
+  const [pinned, setPinned] = useState<Set<number>>(new Set())  // 手动点开的项
   const relaid = useRef(false)
   const canvasRef = useRef<HTMLDivElement>(null)
   const { fitView, getNodes } = useReactFlow()
   const { toast } = useToast()
 
   const visible = useMemo(() => cands.filter((c) => !hidden.has(c.id)), [cands, hidden])
+
+  // ---------------- 渐进加载：热度排序（mentions 为主，关系度数为辅） ----------------
+  const degreeById = useMemo(() => {
+    const d = new Map<number, number>()
+    for (const e of edgesRaw) {
+      d.set(e.source, (d.get(e.source) ?? 0) + 1)
+      if (e.target != null) d.set(e.target, (d.get(e.target) ?? 0) + 1)
+    }
+    return d
+  }, [edgesRaw])
+
+  const hotRanked = useMemo(() => [...visible].sort((a, b) =>
+    (b.mentions - a.mentions)
+    || ((degreeById.get(b.id) ?? 0) - (degreeById.get(a.id) ?? 0))
+    || (a.id - b.id)), [visible, degreeById])
+
+  // 按实际数据动态统计各 kind 的条数（降序）
+  const kindCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of visible) m.set(c.kind, (m.get(c.kind) ?? 0) + 1)
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [visible])
+
+  const term = q.trim().toLowerCase()
+  /** 已加载集合 = 最热前 N ∪ 已勾选 kind 的全部 ∪ 搜索命中 ∪ 手动点开项 */
+  const loaded = useMemo(() => {
+    const s = new Set<number>()
+    const n = Math.min(loadLimit === Infinity ? Number.MAX_SAFE_INTEGER : loadLimit,
+      hotRanked.length)
+    for (let i = 0; i < n; i++) s.add(hotRanked[i].id)
+    if (kindAdds.size) for (const c of visible) if (kindAdds.has(c.kind)) s.add(c.id)
+    if (term) for (const c of visible) if (c.name.toLowerCase().includes(term)) s.add(c.id)
+    for (const id of pinned) s.add(id)
+    return s
+  }, [hotRanked, loadLimit, kindAdds, visible, term, pinned])
+
+  const loadedVisible = useMemo(
+    () => visible.filter((c) => loaded.has(c.id)), [visible, loaded])
+
+  // 画布只画「两端都在已加载范围内」的关系（避免指向未加载节点的悬空边）
+  const loadedEdges = useMemo(() => edgesRaw.filter(
+    (e) => loaded.has(e.source) && !hidden.has(e.source)
+      && (e.dangling || e.target == null || loaded.has(e.target))),
+    [edgesRaw, loaded, hidden])
+
+  const toggleKind = (k: string) => {
+    setKindAdds((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+    relaid.current = false   // 让新加入的整类节点走一次 dagre 自动排版
+  }
+  const expandTo = (n: number) => { setLoadLimit(n); relaid.current = false }
+  const collapseLoaded = () => {
+    setLoadLimit(50); setKindAdds(new Set()); setPinned(new Set())
+    relaid.current = false
+  }
 
   const reload = useCallback(() => {
     getGraph().then((g) => {
@@ -223,17 +286,24 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   useEffect(() => { if (focusChunkId) reload() }, [focusChunkId, reload])
   useEffect(() => { reloadOrch() }, [reloadOrch, refreshKey])
 
-  // build graph once data changes, but keep user-dragged positions afterwards
+  // build graph when the LOADED scope changes, but keep user-dragged positions;
+  // newly loaded nodes fall back to their fresh dagre spot instead of (0,0)
   useEffect(() => {
-    const srcEdges = edgesRaw.filter((e) => !hidden.has(e.source))
-    const built = toFlowData(visible, srcEdges)
-    let laid = dagreLayout(built.nodes, built.edges)
+    const built = toFlowData(loadedVisible, loadedEdges)
+    let laid
     if (relaid.current) {
-      // preserve dragged positions: only add/remove, don't reset layout
-      laid = built.nodes.map((n) => {
-        const old = nodes.find((o) => o.id === n.id)
-        return old ? { ...n, position: old.position } : n
+      // preserve dragged positions: only add/remove, don't reset layout.
+      // dagre runs only when new nodes joined (keeps search-typing cheap).
+      const oldOf = (id: string) => nodes.find((o) => o.id === id)
+      const fresh = built.nodes.some((n) => !oldOf(n.id))
+        ? dagreLayout(built.nodes, built.edges) : null
+      laid = built.nodes.map((n, i) => {
+        const old = oldOf(n.id)
+        return old ? { ...n, position: old.position }
+          : { ...n, position: (fresh as typeof built.nodes)[i].position }
       })
+    } else {
+      laid = dagreLayout(built.nodes, built.edges)
     }
     setNodes(laid)
     setEdges(built.edges)
@@ -242,7 +312,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
       requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, edgesRaw])
+  }, [loadedVisible, loadedEdges])
 
   // one-click auto-arrange: dagre re-layout of ALL nodes (clears drag chaos
   // / overlaps), then fit view
@@ -308,6 +378,8 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const open = async (id: number) => {
     setSel(id)
     setDetail(null)
+    // 点开的项纳入已加载范围（否则可能在列表中看不到它）
+    setPinned((prev) => (prev.has(id) ? prev : new Set([...prev, id])))
     try {
       const d = await getCandidate(id)
       setDetail(d)
@@ -352,7 +424,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const isDoubtful = (c: Cand) =>
     !!c.exam && (c.exam.fail > 0 || c.exam.missing > 0)
 
-  const filtered = visible.filter((c) =>
+  const filtered = loadedVisible.filter((c) =>
     (statusFilter === 'all' ||
       (statusFilter === 'doubt' ? isDoubtful(c) : c.status === statusFilter)) &&
     (!q || c.name.toLowerCase().includes(q.toLowerCase())),
@@ -668,6 +740,51 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
               </div>
             ))}
             {filtered.length === 0 && <div className="note">无匹配候选</div>}
+          </div>
+
+          {/* 展开框：渐进加载（最热优先）+ 按类型整类加入 */}
+          <div className="og-loadbox">
+            <div className="og-load-stat">
+              已加载 <b>{loadedVisible.length}</b> / 共 {visible.length} 个本体
+              {' · '}节点 {loadedVisible.length} / 关系 {loadedEdges.length}/{edgesRaw.length}
+              <span className="note">（按 mentions 热度排序，度数为辅）</span>
+            </div>
+            {kindCounts.length > 0 && (
+              <div className="og-kind-chips">
+                {kindCounts.map(([k, n]) => (
+                  <button key={k}
+                    className={`og-chip ${kindAdds.has(k) ? 'on' : ''}`}
+                    onClick={() => toggleKind(k)}
+                    title={kindAdds.has(k)
+                      ? `已加入「${k}」全部 ${n} 个，点击移除`
+                      : `加入「${k}」全部 ${n} 个到列表与画布`}>
+                    {kindAdds.has(k) ? '✓' : '+'} {k} · {n}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="og-load-actions">
+              {loadLimit < 300 && visible.length > 50 && (
+                <button className="btn ghost small" onClick={() => expandTo(300)}>
+                  展开最热 300
+                </button>
+              )}
+              {loadLimit < Infinity && loadLimit >= 300 && visible.length > 300 && (
+                <button className="btn ghost small" onClick={() => expandTo(Infinity)}>
+                  加载全部（{visible.length}）
+                </button>
+              )}
+              {loadLimit < Infinity && visible.length > 50 && loadLimit < 300 && (
+                <button className="btn ghost small" onClick={() => expandTo(Infinity)}>
+                  加载全部（{visible.length}）
+                </button>
+              )}
+              {(loadLimit > 50 || kindAdds.size > 0) && (
+                <button className="btn ghost small" onClick={collapseLoaded}>
+                  收起为最热 50
+                </button>
+              )}
+            </div>
           </div>
         </aside>
 
