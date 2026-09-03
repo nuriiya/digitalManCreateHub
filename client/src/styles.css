@@ -692,3 +692,38 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+
+/* ---- 创建数字人弹窗（可预输入 · 留空=自主创建） ---- */
+.dlg-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, .55);
+  display: flex; align-items: center; justify-content: center;
+}
+.dlg {
+  width: min(480px, 92vw); background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.45);
+}
+.dlg-head { font-weight: 600; font-size: 15px; }
+.dlg-tip { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.dlg-field { display: flex; flex-direction: column; gap: 4px; }
+.dlg-field span { font-size: 12px; color: var(--muted); }
+.dlg-field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px;
+}
+.dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* ---- 对话 RAG 开关 + 对比左右臂开关 ---- */
+.chat-ctl.chat-rag { border-color: rgba(96, 176, 230, .35); }
+.cmp-arms { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.cmp-arm-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+  cursor: pointer; user-select: none;
+}
+.cmp-arm-toggle input { width: auto !important; flex: 0 0 auto; }
+.cmp-arm-toggle.on { color: var(--text); border-color: var(--accent); }

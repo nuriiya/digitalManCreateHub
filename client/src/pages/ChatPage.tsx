@@ -28,7 +28,11 @@ export default function ChatPage({ refreshKey }: Props) {
   const [provider, setProvider] = useState<Provider>('llm2')
   const [ollamaModel, setOllamaModel] = useState<string | null>(null)
   const [useOntology, setUseOntology] = useState(true)
+  const [useRag, setUseRag] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
+  // 对比模式左右臂各自独立的开关（本体约束 / RAG 资料）
+  const [armLeft, setArmLeft] = useState({ use_ontology: true, use_rag: false })
+  const [armRight, setArmRight] = useState({ use_ontology: false, use_rag: false })
   const [cmpLeft, setCmpLeft] = useState<CompareSide | null>(null)
   const [cmpRight, setCmpRight] = useState<CompareSide | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
@@ -111,6 +115,8 @@ export default function ChatPage({ refreshKey }: Props) {
         const r = await compareChat(selId, text, {
           provider,
           ollama_model: provider === 'ollama' ? ollamaModel : null,
+          left: armLeft,
+          right: armRight,
         })
         setCmpLeft(r.left)
         setCmpRight(r.right)
@@ -130,6 +136,7 @@ export default function ChatPage({ refreshKey }: Props) {
     try {
       const r = await sendChat(selId, text, {
         use_ontology: useOntology,
+        use_rag: useRag,
         provider,
         ollama_model: provider === 'ollama' ? ollamaModel : null,
       })
@@ -181,11 +188,11 @@ export default function ChatPage({ refreshKey }: Props) {
       <h3>
         数字人对话
         <span className="note" style={{ marginLeft: 8 }}>
-          可选 GLM 5.2 / DeepSeek / 本地 Ollama 7B · 本体约束可开关（幻觉 A/B 对比）
+          可选 GLM 5.2 / DeepSeek / 本地 Ollama 7B · 本体约束 / RAG 资料各自可开关（幻觉 A/B 对比）
         </span>
       </h3>
       <div className="desc">
-        对话时模型以所选数字人的身份、使命、锚点与已装配本体段为唯一知识边界回答；关闭「本体约束」开关后模型不再被本体圈定。开启「对比模式」则同一消息分屏跑两遍：左=用本体（并展示发送的全部内容），右=不用本体。
+        对话时模型以所选数字人的身份、使命、锚点与已装配本体段为知识边界回答；「本体约束」关掉后不再被本体圈定。「RAG 资料」开时会在回答中加入检索到的原文片段（可与本体叠加）。「对比模式」分屏跑两遍，左右两臂的「本体约束 / RAG 资料」各自独立开关。
       </div>
 
       {providerWarn && (
@@ -216,8 +223,10 @@ export default function ChatPage({ refreshKey }: Props) {
             <b>{sel ? `与「${sel.name}」对话` : '未选择数字人'}</b>
             <span className="note" style={{ flex: 1 }}>
               {compareMode
-                ? '对比模式：左=用本体约束，右=无本体约束（基线）'
-                : ctx ? `本次注入：本体 ${ctx.injected_ontology} · 关系 ${ctx.injected_relations}（共 ${ctx.counts.ontology} 本体 / ${ctx.counts.relations} 关系）` : ''}
+                ? '对比模式：左右臂的「本体约束 / RAG 资料」可分别开关'
+                : ctx
+                  ? `本次注入：本体 ${ctx.injected_ontology} · 关系 ${ctx.injected_relations}（共 ${ctx.counts.ontology} 本体 / ${ctx.counts.relations} 关系）${ctx.rag?.hits ? ` · 参考资料 ${ctx.rag.hits} 段` : ''}${ctx.rag?.used && ctx.rag.error ? ' · ⚠ RAG 资料不可用' : ''}`
+                  : ''}
             </span>
             <button className="btn ghost small" onClick={doClear} disabled={!selId || messages.length === 0}>
               清空对话
@@ -257,6 +266,13 @@ export default function ChatPage({ refreshKey }: Props) {
                 <span>本体约束</span>
               </label>
             )}
+            {!compareMode && (
+              <label className="chat-ctl chat-toggle chat-rag">
+                <input type="checkbox" checked={useRag}
+                  onChange={(e) => setUseRag(e.target.checked)} />
+                <span>RAG 资料</span>
+              </label>
+            )}
             {!compareMode && ctx && (
               <button className="btn ghost small" onClick={() => setCtxOpen((v) => !v)}>
                 {ctxOpen ? '收起本体' : `查看本体 (${ctx.counts.ontology})`}
@@ -269,8 +285,16 @@ export default function ChatPage({ refreshKey }: Props) {
               <div className="ctx-head">
                 <span className="note">
                   本次回答 · {ctx.model} · 本体约束 {ctx.use_ontology ? '开' : '关'}
+                  · RAG 资料 {ctx.use_rag ? (ctx.rag?.hits ? `开（命中 ${ctx.rag.hits} 段）` : '开（未命中）') : '关'}
                 </span>
               </div>
+              {ctx.rag?.used && (
+                <div className="ctx-retrieval">
+                  {ctx.rag.error
+                    ? <span className="ctx-tag warn">RAG 资料不可用：{ctx.rag.error}</span>
+                    : <span className="ctx-tag">RAG 资料命中 {ctx.rag.hits} 段</span>}
+                </div>
+              )}
               {ctx.use_ontology && ctx.retrieval && (
                 <div className="ctx-retrieval">
                   {ctx.retrieval.fallback
@@ -383,13 +407,27 @@ export default function ChatPage({ refreshKey }: Props) {
             <div className="cmp-grid">
               <div className="cmp-pane">
                 <div className="cmp-pane-head">
-                  <b>左 · 使用本体（实体约束）</b>
+                  <b>左 · {armLeft.use_ontology ? '使用本体' : '无本体'}{armLeft.use_rag ? ' + RAG 资料' : ''}</b>
                   {cmpLeft && (
                     <span className="note">
                       {cmpLeft.context.usage ? `${cmpLeft.context.usage.percent.toFixed(1)}% 窗口` : ''}
                       {cmpLeft.context.truncated ? ' · 本体已截断' : ''}
+                      {cmpLeft.context.rag?.used && !cmpLeft.context.rag.error
+                        ? ` · 资料 ${cmpLeft.context.rag.hits} 段` : ''}
                     </span>
                   )}
+                </div>
+                <div className="cmp-arms">
+                  <label className={`cmp-arm-toggle ${armLeft.use_ontology ? 'on' : ''}`}>
+                    <input type="checkbox" checked={armLeft.use_ontology}
+                      onChange={(e) => { setArmLeft({ ...armLeft, use_ontology: e.target.checked }); setCmpLeft(null) }} />
+                    本体约束
+                  </label>
+                  <label className={`cmp-arm-toggle ${armLeft.use_rag ? 'on' : ''}`}>
+                    <input type="checkbox" checked={armLeft.use_rag}
+                      onChange={(e) => { setArmLeft({ ...armLeft, use_rag: e.target.checked }); setCmpLeft(null) }} />
+                    RAG 资料
+                  </label>
                 </div>
                 {cmpLeft && <div className="cmp-reply">{cmpLeft.reply}</div>}
                 {cmpLeft && (
@@ -409,21 +447,37 @@ export default function ChatPage({ refreshKey }: Props) {
                   </div>
                 )}
                 {!cmpLeft && !sending && (
-                  <div className="chat-empty">发送后显示有本体约束的回答 + 完整发送内容</div>
+                  <div className="chat-empty">发送后显示左臂回答（按上方开关组合）+ 完整发送内容</div>
                 )}
                 {sending && <div className="chat-msg assistant chat-typing">正在思考…</div>}
               </div>
 
               <div className="cmp-pane">
                 <div className="cmp-pane-head">
-                  <b>右 · 不使用本体（无约束基线）</b>
-                  {cmpRight && cmpRight.context.usage && (
-                    <span className="note">{cmpRight.context.usage.percent.toFixed(1)}% 窗口</span>
+                  <b>右 · {armRight.use_ontology ? '使用本体' : '无本体'}{armRight.use_rag ? ' + RAG 资料' : ''}</b>
+                  {cmpRight && (
+                    <span className="note">
+                      {cmpRight.context.usage ? `${cmpRight.context.usage.percent.toFixed(1)}% 窗口` : ''}
+                      {cmpRight.context.rag?.used && !cmpRight.context.rag.error
+                        ? ` · 资料 ${cmpRight.context.rag.hits} 段` : ''}
+                    </span>
                   )}
+                </div>
+                <div className="cmp-arms">
+                  <label className={`cmp-arm-toggle ${armRight.use_ontology ? 'on' : ''}`}>
+                    <input type="checkbox" checked={armRight.use_ontology}
+                      onChange={(e) => { setArmRight({ ...armRight, use_ontology: e.target.checked }); setCmpRight(null) }} />
+                    本体约束
+                  </label>
+                  <label className={`cmp-arm-toggle ${armRight.use_rag ? 'on' : ''}`}>
+                    <input type="checkbox" checked={armRight.use_rag}
+                      onChange={(e) => { setArmRight({ ...armRight, use_rag: e.target.checked }); setCmpRight(null) }} />
+                    RAG 资料
+                  </label>
                 </div>
                 {cmpRight && <div className="cmp-reply">{cmpRight.reply}</div>}
                 {!cmpRight && !sending && (
-                  <div className="chat-empty">发送后显示无本体约束的回答（基线）</div>
+                  <div className="chat-empty">发送后显示右臂回答（按上方开关组合）</div>
                 )}
                 {sending && <div className="chat-msg assistant chat-typing">正在思考…</div>}
               </div>

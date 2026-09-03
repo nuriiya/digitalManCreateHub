@@ -18,6 +18,7 @@ const REFRESH_ON: string[] = [
   'job.cancelled', 'job.started', 'job.autopaused', 'rag.document_deleted',
   'rag.chunk_deleted', 'orchestration.rule_cleaned', 'orchestration.confirmed',
   'orchestration.discarded', 'assembly.confirmed', 'assembly.discarded',
+  'assembly.restored', 'benchmark.merged', 'benchmark.rolled_back',
 ]
 
 /** Render one event row: LLM calls get a readable prompt/reply preview. */

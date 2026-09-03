@@ -61,6 +61,13 @@ OLLAMA_NUM_CTX_DEFAULT = 2048
 # ontology, which would corrupt the hallucination A/B baseline).
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b-32k"
 
+# chat 可选的 RAG 参考资料注入（「是否使用 RAG」开关）：对用户消息检索
+# 已入库语料，把 top-K 原文片段以【参考资料】注入 system prompt。与本体约束
+# 相互独立、可叠加；检索 0 LLM（仅 embedding 余弦），失败时优雅降级为
+# 「资料不可用」（不注入、不中断对话）。
+RAG_TOP_K = 6
+RAG_SNIPPET_MAX = 500          # 单条片段截断字符数（保留证据语义）
+
 # literal-match tokenizers for the 0-LLM relevance scorer
 _RE_WORD = re.compile(r"[a-z0-9]+")                     # english tokens
 _RE_KW = re.compile(r"[\u4e00-\u9fff]{2,}|[a-z0-9]{3,}")  # CJK 2+ / ascii 3+
@@ -175,7 +182,13 @@ def _system_prompt(ctx: dict, use_ontology: bool = True) -> str:
                 lines.append(t)
     lines.append("")
     lines.append("回答规则（铁律）：")
-    if use_ontology and (anchors or ontology):
+    has_ont = use_ontology and bool(anchors or ontology)
+    if has_ont and rag:
+        lines.append("1. 优先依据【本体约束】回答，回答要具体、尽量可追溯到本体；"
+                     "本体未覆盖但【参考资料】有的，可依据资料补充并说明依据。")
+        lines.append("2. 本体与参考资料都没有相关内容时，明确说「我不知道」或"
+                     "「我的知识里没有这方面内容」，绝不编造。")
+    elif has_ont:
         lines.append("1. 只依据上述本体约束回答，回答要具体、尽量可追溯到你的本体。")
         lines.append("2. 如果问题超出你的本体知识，明确说「我不知道」或「我的本体里没有"
                      "这方面内容」，绝不编造。")
@@ -334,6 +347,34 @@ def _dispatch(provider: str, messages: list[dict], ollama_model: str | None,
     if provider == "llm":
         return llm.chat(messages, temperature=0.5, usage_out=usage_out)
     return llm.chat_persona(messages, usage_out=usage_out)  # llm2 (GLM 5.2)
+
+
+# ---------------- optional RAG reference injection (「使用 RAG」开关) ----------------
+
+def _rag_snippets(conn, message: str, top_k: int = RAG_TOP_K) -> dict:
+    """Retrieve top-K corpus chunks for the message (0 LLM, embedding cosine)
+    and cut them into injectable reference snippets.
+
+    Returns {"used", "hits", "error", "texts"}. Any failure (embedding backend
+    down / empty corpus / bad store) degrades gracefully: the persona answers
+    without references and the context reports why (iron law: chat never
+    silently fabricates a retrieval)."""
+    try:
+        from . import ingest
+        hits = ingest.search(conn, message, top_k=top_k)
+    except Exception as e:  # embedding unconfigured / corpus empty / store error
+        return {"used": True, "hits": 0, "error": str(e)[:160], "texts": []}
+    texts: list[str] = []
+    for h in hits:
+        base = ((h.get("text") or "").strip()
+                or (h.get("summary") or "").strip())
+        if not base:
+            continue
+        base = " ".join(base.split())
+        if len(base) > RAG_SNIPPET_MAX:
+            base = base[:RAG_SNIPPET_MAX].rstrip() + "…"
+        texts.append(base)
+    return {"used": True, "hits": len(hits), "error": None, "texts": texts}
 
 
 # ---------------- dynamic retrieval window (0 LLM) ----------------
@@ -632,12 +673,15 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 
 def _generate(conn, identity_id: int, message: str, use_ontology: bool,
               provider: str, ollama_model: str | None,
-              concept_fallback: bool = False) -> dict:
+              concept_fallback: bool = False, use_rag: bool = False) -> dict:
     """Core one-shot generation (validation + retrieval + assembly + dispatch),
     shared by `answer` (persist) and `compare` (A/B, no persist).
 
     concept_fallback=True (answer 路径) 时启用 #106 概念抽取兜底：字面 0 命中
     才调 V4-Flash 抽概念词；compare / benchmark 不启用，保持 0 LLM 可复现。
+
+    use_rag=True 时对消息检索语料 top-K 原文片段，以【参考资料】注入 system
+    prompt（与 use_ontology 相互独立，可叠加；检索失败优雅降级，不中断对话）。
 
     Raises llm.LLMError when the responder is configured but unreachable.
     Returns {"ok": False, "error": ...} for deterministic input errors."""
@@ -681,11 +725,21 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
             "budget_total": budget_tokens, "budget_used": 0, "truncated": False,
         }
 
+    # 「使用 RAG」开关：可选注入检索到的原文片段（独立于本体约束）
+    rag_info = {"used": False, "hits": 0, "error": None}
+    rag_texts: list[str] = []
+    if use_rag:
+        got = _rag_snippets(conn, message)
+        rag_texts = got["texts"]
+        rag_info = {"used": got["used"], "hits": got["hits"],
+                    "error": got["error"]}
+
     ctx = {
         "identity": ident,
         "anchors": anchors,
         "ontology": injected_ont,
         "relations": injected_rel,
+        "rag": rag_texts,
     }
     system = _system_prompt(ctx, use_ontology=use_ontology)
     messages = [{"role": "system", "content": system}] + history + [
@@ -709,6 +763,8 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
             "provider": provider,
             "model": model,
             "use_ontology": use_ontology,
+            "use_rag": use_rag,
+            "rag": rag_info,
             "anchors": [{"name": a["name"],
                          "definition": a.get("definition") or ""}
                         for a in anchors],
@@ -744,19 +800,22 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
 
 
 def answer(conn, identity_id: int, message: str, use_ontology: bool = True,
-           provider: str = "llm2", ollama_model: str | None = None) -> dict:
+           provider: str = "llm2", ollama_model: str | None = None,
+           use_rag: bool = False) -> dict:
     """Answer one user message as the persona, grounded by its ontology, and
     persist the turn to chat_messages.
 
     provider selects the responder (llm2=GLM 5.2 default / llm=DeepSeek
     V4-Flash / ollama=local 7B). use_ontology=False strips the ontology block
     from the system prompt (hallucination A/B: grounded vs ungrounded).
+    use_rag=True additionally injects top-K corpus snippets as 参考资料
+    (independent of the ontology block, may be combined).
 
     Raises llm.LLMError when the responder is configured but unreachable (the
     caller must surface it — iron law 2). Returns {"ok": False, "error": ...}
     for deterministic input errors (unknown identity / empty message)."""
     result = _generate(conn, identity_id, message, use_ontology, provider,
-                       ollama_model, concept_fallback=True)
+                       ollama_model, concept_fallback=True, use_rag=use_rag)
     if not result.get("ok"):
         return result
     _save(conn, identity_id, "user", message)
@@ -770,23 +829,34 @@ def answer(conn, identity_id: int, message: str, use_ontology: bool = True,
 
 
 def compare(conn, identity_id: int, message: str,
-            provider: str = "ollama", ollama_model: str | None = None) -> dict:
+            provider: str = "ollama", ollama_model: str | None = None,
+            left: dict | None = None, right: dict | None = None) -> dict:
     """A/B comparison: the same message answered twice — left with the persona's
     ontology constraint (use_ontology=True), right without (ungrounded baseline).
+
+    Each arm is independently configurable: left/right accept
+    {"use_ontology": bool, "use_rag": bool} so the user can toggle ontology and
+    RAG separately per pane (e.g. 本体 vs 本体+资料 vs 仅资料 vs 裸模型).
 
     Does NOT persist (both answers would pollute the conversation history).
     provider defaults to ollama (the local 7B is the hallucination baseline).
 
     Raises llm.LLMError if either side's responder fails. Returns
     {"ok": False, "error": ...} for deterministic input errors."""
-    left = _generate(conn, identity_id, message, True, provider, ollama_model)
-    if not left.get("ok"):
-        return left
-    right = _generate(conn, identity_id, message, False, provider, ollama_model)
-    if not right.get("ok"):
-        return right
+    l = left or {"use_ontology": True, "use_rag": False}
+    r = right or {"use_ontology": False, "use_rag": False}
+    left_res = _generate(conn, identity_id, message,
+                         bool(l.get("use_ontology", True)), provider,
+                         ollama_model, use_rag=bool(l.get("use_rag", False)))
+    if not left_res.get("ok"):
+        return left_res
+    right_res = _generate(conn, identity_id, message,
+                          bool(r.get("use_ontology", False)), provider,
+                          ollama_model, use_rag=bool(r.get("use_rag", False)))
+    if not right_res.get("ok"):
+        return right_res
     return {
         "ok": True,
-        "left": {"reply": left["reply"], "context": left["context"]},
-        "right": {"reply": right["reply"], "context": right["context"]},
+        "left": {"reply": left_res["reply"], "context": left_res["context"]},
+        "right": {"reply": right_res["reply"], "context": right_res["context"]},
     }

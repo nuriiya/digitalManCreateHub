@@ -680,3 +680,113 @@ def test_estimate_tokens():
     assert chat._estimate_tokens("你好世界") == 4       # 4 CJK chars
     assert chat._estimate_tokens("hello world") == 3    # 11 ascii chars -> 3
     assert chat._estimate_tokens("") == 0
+
+
+# ---------------- optional RAG reference injection (「使用 RAG」开关) ----------------
+
+def _fake_search_hits():
+    return [
+        {"chunk_id": 1, "doc_id": 1, "seq": 0, "summary": "报销需三步",
+         "tags": [], "text": ("员工提交报销单后进入审批流程，预算超支时需要财务专员复核。" * 20),
+         "score": 0.9},
+        {"chunk_id": 2, "doc_id": 1, "seq": 1, "summary": "复核",
+         "tags": [], "text": "预算超支时由财务专员复核。",
+         "score": 0.8},
+    ]
+
+
+def test_answer_rag_only_injects_references(env, fake_llm, monkeypatch):
+    from app import chat
+    import app.ingest as ingest_mod
+    conn = env
+    iid = _insert_identity(conn)  # no ontology/anchors -> rag-only arm
+    captured = {}
+
+    def persona(messages):
+        captured["sys"] = messages[0]["content"]
+        return "根据资料回答"
+
+    fake_llm["judge"] = persona
+    monkeypatch.setattr(ingest_mod, "search",
+                        lambda conn_, query, top_k=5, tag=None: _fake_search_hits())
+    r = chat.answer(conn, iid, "报销流程是？", use_ontology=False, use_rag=True)
+    assert r["ok"]
+    assert "【参考资料 · 原文片段】" in captured["sys"]
+    assert "只依据上述参考资料回答" in captured["sys"]   # rag-only iron law
+    assert "资料里没有" in captured["sys"]
+    assert "…" in captured["sys"]                       # over-long snippet truncated
+    assert r["context"]["use_rag"] is True
+    assert r["context"]["rag"]["used"] is True
+    assert r["context"]["rag"]["hits"] == 2
+    assert r["context"]["rag"]["error"] is None
+
+
+def test_answer_rag_combined_with_ontology(env, fake_llm, monkeypatch):
+    from app import chat
+    import app.ingest as ingest_mod
+    conn = env
+    iid = _insert_identity(conn, anchors=["报销流程"], ontology=["报销单"])
+    captured = {}
+
+    def persona(messages):
+        captured["sys"] = messages[0]["content"]
+        return "结合本体与资料回答"
+
+    fake_llm["judge"] = persona
+    monkeypatch.setattr(ingest_mod, "search",
+                        lambda conn_, query, top_k=5, tag=None: _fake_search_hits())
+    r = chat.answer(conn, iid, "报销流程是？", use_ontology=True, use_rag=True)
+    assert r["ok"]
+    # combined rule: ontology first, references may complement
+    assert "本体未覆盖但" in captured["sys"]
+    assert "【参考资料 · 原文片段】" in captured["sys"]
+
+
+def test_answer_rag_degrades_gracefully(env, fake_llm, monkeypatch):
+    from app import chat
+    import app.ingest as ingest_mod
+    conn = env
+    iid = _insert_identity(conn)
+    captured = {}
+
+    def persona(messages):
+        captured["sys"] = messages[0]["content"]
+        return "没有资料也能答"
+
+    fake_llm["judge"] = persona
+
+    def boom(conn_, query, top_k=5, tag=None):
+        raise RuntimeError("embedding 后端不可达")
+
+    monkeypatch.setattr(ingest_mod, "search", boom)
+    r = chat.answer(conn, iid, "你好", use_rag=True)
+    assert r["ok"] and r["reply"] == "没有资料也能答"
+    assert "【参考资料" not in captured["sys"]   # nothing fabricated in
+    assert r["context"]["rag"]["error"]          # ...but the reason is reported
+    assert r["context"]["rag"]["hits"] == 0
+
+
+def test_compare_arms_toggle_ontology_and_rag(env, fake_llm, monkeypatch):
+    from app import chat
+    import app.ingest as ingest_mod
+    conn = env
+    iid = _insert_identity(conn, anchors=["报销流程"], ontology=["报销单"])
+    sys_prompts: list[str] = []
+
+    def persona(messages):
+        sys_prompts.append(messages[0]["content"])
+        return "回答"
+
+    fake_llm["judge"] = persona
+    monkeypatch.setattr(ingest_mod, "search",
+                        lambda conn_, query, top_k=5, tag=None: _fake_search_hits())
+    r = chat.compare(
+        conn, iid, "报销流程是？", provider="llm2",
+        left={"use_ontology": True, "use_rag": True},      # 本体 + 资料
+        right={"use_ontology": False, "use_rag": False})   # 裸模型基线
+    assert r["ok"]
+    assert len(sys_prompts) == 2
+    assert "【参考资料 · 原文片段】" in sys_prompts[0]       # left injected RAG
+    assert "参考资料" not in sys_prompts[1]                 # right is plain baseline
+    assert r["left"]["context"]["rag"]["hits"] == 2
+    assert r["right"]["context"]["rag"]["hits"] == 0

@@ -557,6 +557,10 @@ def merge_changes(conn, identity_id: int) -> dict:
         conn.execute("UPDATE persona_ontology_changes SET status='merged',"
                      " version_id=? WHERE id=?", (version_id, c["id"]))
     conn.commit()
+    # 事件驱动实时刷新：任何打开的视图（数字人卡片/本体图谱）收到即刷新
+    jobs.emit(conn, None, "benchmark.merged",
+              {"identity_id": identity_id, "version": version,
+               "applied": applied})
     return {"ok": True, "version": version,
             "applied": applied, "snapshot_rows": len(snapshot)}
 
@@ -597,5 +601,8 @@ def rollback_version(conn, identity_id: int, version_id: int) -> dict:
              r.get("status") or "active", r.get("note"),
              r.get("created_at") or time.time()))
     conn.commit()
+    jobs.emit(conn, None, "benchmark.rolled_back",
+              {"identity_id": identity_id, "version": version,
+               "to": row["version"]})
     return {"ok": True, "version": version, "restored": row["version"],
             "rows": len(snapshot)}

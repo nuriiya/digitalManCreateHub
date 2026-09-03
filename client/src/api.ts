@@ -172,6 +172,8 @@ export interface ChatContext {
   provider: string
   model: string
   use_ontology: boolean
+  use_rag: boolean
+  rag: { used: boolean; hits: number; error: string | null }
   anchors: { name: string; definition: string }[]
   ontology: { name: string; definition: string }[]
   relations: { source: string; type: string; target: string }[]
@@ -220,7 +222,7 @@ export interface ChatModels {
 export const getChatModels = () => api<ChatModels>('/api/chat/models')
 export const sendChat = (
   identityId: number, message: string,
-  opts: { use_ontology?: boolean; provider?: string; ollama_model?: string | null } = {},
+  opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null } = {},
 ) =>
   api<ChatReply>('/api/chat', {
     method: 'POST',
@@ -236,10 +238,14 @@ export interface CompareResult {
   left: CompareSide
   right: CompareSide
 }
-/** 幻觉 A/B 对比：同一消息跑两遍——左=用本体约束，右=无本体约束。不写入历史。 */
+export interface CompareArmOpts {
+  use_ontology: boolean
+  use_rag: boolean
+}
+/** 幻觉 A/B 对比：同一消息跑两遍，左右两臂的「本体约束 / RAG 资料」各自可独立开关。不写入历史。 */
 export const compareChat = (
   identityId: number, message: string,
-  opts: { provider?: string; ollama_model?: string | null } = {},
+  opts: { provider?: string; ollama_model?: string | null; left?: CompareArmOpts; right?: CompareArmOpts } = {},
 ) =>
   api<CompareResult>('/api/chat/compare', {
     method: 'POST',

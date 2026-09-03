@@ -676,8 +676,14 @@ class ChatBody(BaseModel):
     identity_id: int
     message: str
     use_ontology: bool = True          # toggle the ontology constraint
+    use_rag: bool = False              # toggle optional corpus-reference injection
     provider: str = "llm2"             # llm2 | llm | ollama
     ollama_model: str | None = None    # required when provider == "ollama"
+
+
+class CompareArm(BaseModel):
+    use_ontology: bool = True
+    use_rag: bool = False
 
 
 class CompareBody(BaseModel):
@@ -685,6 +691,8 @@ class CompareBody(BaseModel):
     message: str
     provider: str = "ollama"           # A/B baseline responder (local 7B)
     ollama_model: str | None = None
+    left: CompareArm | None = None     # per-pane toggles (ontology / RAG)
+    right: CompareArm | None = None
 
 
 @app.get("/api/chat/models")
@@ -718,7 +726,8 @@ def persona_chat(body: ChatBody):
         result = chat.answer(db.get_conn(), body.identity_id, body.message,
                              use_ontology=body.use_ontology,
                              provider=body.provider,
-                             ollama_model=body.ollama_model)
+                             ollama_model=body.ollama_model,
+                             use_rag=body.use_rag)
     except llm.LLMError as e:
         return JSONResponse({"error": f"模型调用失败：{e}"}, status_code=502)
     if not result.get("ok"):
@@ -735,7 +744,9 @@ def persona_chat_compare(body: CompareBody):
     try:
         result = chat.compare(db.get_conn(), body.identity_id, body.message,
                               provider=body.provider,
-                              ollama_model=body.ollama_model)
+                              ollama_model=body.ollama_model,
+                              left=body.left.model_dump() if body.left else None,
+                              right=body.right.model_dump() if body.right else None)
     except llm.LLMError as e:
         return JSONResponse({"error": f"模型调用失败：{e}"}, status_code=502)
     if not result.get("ok"):

@@ -312,3 +312,49 @@ def test_system_prompt_rag_block():
     assert "【参考资料" not in chat._system_prompt(
         {"identity": ctx["identity"], "anchors": [], "ontology": [],
          "relations": []}, use_ontology=False)
+
+
+def test_merge_and_rollback_emit_realtime_events(env):
+    """benchmark merge / rollback must emit global events so every open view
+    (persona cards / ontology graph) refreshes in real time (#121/#122)."""
+    import json as _json
+    from app import benchmark
+    conn = env
+    cur = conn.execute(
+        "INSERT INTO identities(name, mission, description, keywords, status,"
+        " created_at) VALUES('X', 'm', '', '[]', 'approved', 0)")
+    iid = cur.lastrowid
+    conn.execute(
+        "INSERT INTO persona_ontology(identity_id, kind, name, definition,"
+        " source_candidate_id, status, created_at)"
+        " VALUES(?, 'entity', '报销单', '定义', NULL, 'active', 0)", (iid,))
+    bcur = conn.execute(
+        "INSERT INTO persona_benchmarks(identity_id, model, judge, total,"
+        " status, created_at) VALUES(?, 'qwen2.5:7b', 'llm2/GLM', 1,"
+        " 'done', 0)", (iid,))
+    bid = bcur.lastrowid
+    conn.execute(
+        "INSERT INTO persona_ontology_changes(identity_id, benchmark_id,"
+        " ontology_id, name, action, suggested_definition, note, reason,"
+        " evidence, status, created_at)"
+        " VALUES(?, ?, NULL, '混杂偏差', 'add', '选择偏差的一种', NULL,"
+        " '缺少该概念', '[]', 'pending', 0)", (iid, bid))
+    conn.commit()
+
+    r = benchmark.merge_changes(conn, iid)
+    assert r["ok"] and r["applied"]["add"] == 1
+    ev = conn.execute(
+        "SELECT payload FROM events WHERE type='benchmark.merged'"
+        " ORDER BY seq DESC LIMIT 1").fetchone()
+    assert ev and _json.loads(ev["payload"])["identity_id"] == iid
+    assert _json.loads(ev["payload"])["version"] == r["version"]
+
+    vid = conn.execute(
+        "SELECT id FROM persona_ontology_versions"
+        " WHERE identity_id=? AND version=1", (iid,)).fetchone()["id"]
+    rb = benchmark.rollback_version(conn, iid, vid)
+    assert rb["ok"]
+    ev2 = conn.execute(
+        "SELECT payload FROM events WHERE type='benchmark.rolled_back'"
+        " ORDER BY seq DESC LIMIT 1").fetchone()
+    assert ev2 and _json.loads(ev2["payload"])["identity_id"] == iid

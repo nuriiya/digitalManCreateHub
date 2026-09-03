@@ -113,10 +113,22 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   }
 
   const doCreate = async () => {
-    if (!createDraft.name.trim()) { toast('请填写数字人名称', 'err'); return }
+    const name = createDraft.name.trim()
+    const defn = createDraft.mission.trim()
+    if (!name && !defn) {
+      // 两栏都留空 → 自主创建：LLM 身份提名 job，完成后在「备选数字人」审批
+      try {
+        const r = await nominateIdentities()
+        toast(`已启动自主创建：身份提名任务 #${r.job_id}（高频词统计 → LLM 提名）。完成后在「备选数字人」中审批。`, 'ok')
+      } catch (e: any) { toast(e.message, 'err') }
+      setCreating(false)
+      setCreateDraft({ name: '', mission: '' })
+      return
+    }
+    if (!name) { toast('请填写数字人名称（或两栏都留空走「自主创建」）', 'err'); return }
     try {
-      const r = await createIdentity(createDraft.name.trim(), createDraft.mission.trim(), [])
-      toast(`数字人「${createDraft.name}」已创建`, 'ok')
+      const r = await createIdentity(name, defn, [])
+      toast(`数字人「${name}」已创建`, 'ok')
       setCreateDraft({ name: '', mission: '' })
       setCreating(false)
       reload()
@@ -556,17 +568,40 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       {/* 块3：创造·删除·修改 */}
       <div className="id-block">
         <div className="id-block-title">创造 · 删除 · 修改数字人</div>
-        {!creating ? (
-          <div className="btnrow">
-            <button className="btn green small" onClick={() => setCreating(true)}>手动创建（无种子）</button>
-            <span className="note">从本体图谱点选种子创建 → 用下方图谱工具栏「从图谱创建数字人」</span>
-          </div>
-        ) : (
-          <div className="id-anchor-edit" style={{ marginTop: 8 }}>
-            <input placeholder="数字人名称（必填）" value={createDraft.name} onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })} />
-            <input placeholder="使命（一句话，可选）" value={createDraft.mission} onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
-            <button className="btn green small" onClick={doCreate}>创建</button>
-            <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
+        <div className="btnrow">
+          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '' }); setCreating(true) }}>
+            创建数字人（可预输入 · 留空=自主创建）
+          </button>
+          <span className="note">从本体图谱点选种子创建 → 用下方图谱工具栏「从图谱创建数字人」</span>
+        </div>
+
+        {creating && (
+          <div className="dlg-overlay" onClick={() => setCreating(false)}>
+            <div className="dlg" onClick={(e) => e.stopPropagation()}>
+              <div className="dlg-head">创建数字人</div>
+              <div className="dlg-tip">
+                可预输入「人名」与「初始定义」（初始定义将成为该数字人的使命）；
+                两栏都留空 → 自主创建（高频词统计 → LLM 提名身份与锚点，完成后在
+                「备选数字人」中审批）。
+              </div>
+              <label className="dlg-field">
+                <span>人名</span>
+                <input autoFocus placeholder="如：财务制度顾问" value={createDraft.name}
+                  onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })} />
+              </label>
+              <label className="dlg-field">
+                <span>初始定义（使命）</span>
+                <input placeholder="一句话定义这个数字人负责什么（可留空）" value={createDraft.mission}
+                  onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
+              </label>
+              <div className="dlg-actions">
+                <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
+                <button className="btn green small" onClick={doCreate}>
+                  {!createDraft.name.trim() && !createDraft.mission.trim()
+                    ? '自主创建（LLM 提名）' : '创建数字人'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
