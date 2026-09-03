@@ -683,6 +683,14 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
       {seedMode && (
         <div className="seed-bar">
           <span className="note">点选画布节点或左列表勾选作为种子（已选 <b>{seedSel.size}</b> 个）→ 创建后 AI 从本体库提取适配本体</span>
+          <span className="note seed-scope">
+            种子只能从已加载范围中选（{loadedVisible.length}/{visible.length}）
+            {loadLimit < Infinity && (
+              <button className="btn ghost small" onClick={() => expandTo(Infinity)}>
+                为选种加载全部
+              </button>
+            )}
+          </span>
           <input placeholder="数字人名称（必填）" value={seedName}
             onChange={(e) => setSeedName(e.target.value)} />
           <input placeholder="使命（一句话，可选）" value={seedMission}

@@ -749,3 +749,4 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
   background: rgba(79, 131, 204, .18);
 }
 .og-load-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.seed-scope { display: inline-flex; align-items: center; gap: 6px; }
