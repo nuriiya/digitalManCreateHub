@@ -79,6 +79,7 @@ def env(tmp_path, monkeypatch):
                     "沙箱/CI 无 Docker/PG 属预期跳过）")
 
     import psycopg
+    from psycopg.rows import dict_row
 
     # isolate settings (still JSON, untouched by the DB migration)
     monkeypatch.setattr(settings_store, "DATA_DIR", tmp_path)
@@ -86,10 +87,13 @@ def env(tmp_path, monkeypatch):
 
     dsn = _resolve_pg_dsn()
     schema = "test_" + uuid.uuid4().hex[:12]
-    pg = psycopg.connect(dsn, autocommit=False)
+    pg = psycopg.connect(dsn, autocommit=False, row_factory=dict_row)
     with pg.cursor() as cur:
         cur.execute(f'CREATE SCHEMA "{schema}"')
-        cur.execute(f'SET search_path TO "{schema}"')
+        # keep public in the path so the pgvector `vector` type (installed in
+        # public once per database) resolves; tables still land in `schema`
+        # (first entry) so per-test isolation is preserved.
+        cur.execute(f'SET search_path TO "{schema}", public')
         # Run the app DDL with the schema pinned. _SCHEMA_SQL is CREATE
         # EXTENSION + CREATE TABLE IF NOT EXISTS — both safe in a fresh
         # schema. CREATE EXTENSION in particular is a superuser-level grant;

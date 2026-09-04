@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   getSettings, saveSettings, testLlm, testLlm2, testEmbedding, getStats, getCandidate,
+  changePassword,
 } from '../api'
 import { useToast } from '../Toast'
 
@@ -13,6 +14,9 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
   const [llm2Test, setLlm2Test] = useState<null | { ok: boolean; reply?: string; error?: string }>(null)
   const [embTest, setEmbTest] = useState<any>(null)
   const [busy, setBusy] = useState(false)
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -48,6 +52,18 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
   const doTestEmb = async () => {
     setEmbTest(null)
     try { setEmbTest(await testEmbedding()) } catch (e: any) { setEmbTest({ ok: false, error: e.message }) }
+  }
+
+  const doChangePw = async () => {
+    if (!oldPw || !newPw) { toast('请填写原密码和新密码', 'err'); return }
+    if (newPw.length < 6) { toast('新密码至少 6 位', 'err'); return }
+    setPwBusy(true)
+    try {
+      await changePassword(oldPw, newPw)
+      toast('密码已修改', 'ok')
+      setOldPw(''); setNewPw('')
+    } catch (e: any) { toast(e.message, 'err') }
+    setPwBusy(false)
   }
 
   return (
@@ -153,6 +169,20 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
           </label>
           <div className="btnrow">
             <button className="btn" onClick={persist} disabled={busy}>保存</button>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>账号安全</h3>
+          <div className="desc">修改当前账号（admin）的登录密码。默认密码 Xyf.748159，建议首次登录后修改。</div>
+          <label className="field"><span>原密码</span>
+            <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
+          </label>
+          <label className="field"><span>新密码</span>
+            <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} placeholder="至少 6 位" />
+          </label>
+          <div className="btnrow">
+            <button className="btn" onClick={doChangePw} disabled={pwBusy}>修改密码</button>
           </div>
         </div>
       </div>

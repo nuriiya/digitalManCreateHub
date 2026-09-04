@@ -825,3 +825,41 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .dlg-foot {
   margin-top: 6px; display: flex; justify-content: space-between; align-items: center;
 }
+
+/* ---------- login / auth ---------- */
+.login-wrap {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+}
+.login-card {
+  width: 340px; padding: 32px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--panel); display: flex; flex-direction: column; gap: 16px;
+}
+.login-card h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.login-sub { color: var(--muted); font-size: 13px; margin-top: -8px; }
+.login-err { color: #e57373; font-size: 13px; }
+.login-btn { width: 100%; }
+.logout { margin-left: 8px; }
+
+/* ---------- domain tags ---------- */
+.og-tags { display: inline-flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.og-tag {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  background: rgba(93, 202, 165, 0.14); color: #9fe1cb;
+  border: 1px solid rgba(93, 202, 165, 0.32);
+}
+
+/* ---------- mcp sandbox page ---------- */
+.field-row { display: flex; gap: 12px; }
+.field-row .field { flex: 1; }
+.mcp-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.mcp-row:last-child { border-bottom: none; }
+.mcp-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mcp-info b { font-size: 13px; }
+.status-pill.running { background: rgba(99, 153, 34, 0.18); color: #97c459; }
+.status-pill.stopped { background: var(--panel2); color: var(--muted); }
+.status-pill.error { background: rgba(226, 75, 74, 0.18); color: #f09595; }
+

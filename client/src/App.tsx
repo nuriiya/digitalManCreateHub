@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   triggerOntology, triggerRepair, getJobs, getStats,
   pauseJob, resumeJob, deleteJob, getJobEvents,
+  getToken, setToken,
 } from './api'
 import { useEvents } from './useEvents'
 import { ToastProvider, useToast } from './Toast'
@@ -9,10 +10,12 @@ import SettingsPage from './pages/SettingsPage'
 import RagPage from './pages/RagPage'
 import OntologyPage from './pages/OntologyPage'
 import ChatPage from './pages/ChatPage'
+import LoginPage from './pages/LoginPage'
+import McpPage from './pages/McpPage'
 import IngestDialog from './components/IngestDialog'
 import type { EventItem } from './api'
 
-type Tab = 'ingest' | 'rag' | 'ontology' | 'chat' | 'settings'
+type Tab = 'ingest' | 'rag' | 'ontology' | 'chat' | 'settings' | 'mcp'
 
 const REFRESH_ON: string[] = [
   'job.finished', 'job.failed', 'job.paused', 'job.resumed', 'job.deleted',
@@ -178,7 +181,7 @@ function RunBlockView({ block, showLlm }: { block: RunBlock; showLlm: boolean })
   )
 }
 
-function Console() {
+function Console({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('ingest')
   const [refreshKey, setRefreshKey] = useState(0)
   const [jobs, setJobs] = useState<any[]>([])
@@ -208,7 +211,7 @@ function Console() {
         prev.some((x) => x.seq === e.seq) ? prev : [e, ...prev])
     }
   }
-  const { events, connected } = useEvents(onEvent)
+  const { events, connected } = useEvents(onEvent, getToken())
   const grouped = useMemo(() => groupRuns(events), [events])
 
   const refreshJobs = () => {
@@ -270,6 +273,7 @@ const doRepair = async () => {
     { id: 'rag', label: 'RAG 预览' },
     { id: 'ontology', label: '本体图谱' },
     { id: 'chat', label: '对话' },
+    { id: 'mcp', label: 'MCP 沙盒' },
     { id: 'settings', label: '设置' },
   ]
 
@@ -284,6 +288,7 @@ const doRepair = async () => {
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>{t.label}</button>
           ))}
         </nav>
+        <button className="btn ghost small logout" onClick={onLogout} title="退出登录">退出</button>
       </div>
 
       <div className="content">
@@ -390,6 +395,7 @@ const doRepair = async () => {
         {tab === 'rag' && <RagPage refreshKey={refreshKey} events={events} onOpenChunk={(id) => { setFocusChunk(id); setTab('ontology') }} />}
         {tab === 'ontology' && <OntologyPage refreshKey={refreshKey} events={events} focusChunkId={focusChunk} chunks={stats.chunks ?? 0} />}
         {tab === 'chat' && <ChatPage refreshKey={refreshKey} />}
+        {tab === 'mcp' && <McpPage />}
         {tab === 'settings' && <SettingsPage onChanged={bump} />}
       </div>
     </div>
@@ -397,9 +403,21 @@ const doRepair = async () => {
 }
 
 export default function App() {
+  const [authed, setAuthed] = useState(!!getToken())
+
+  useEffect(() => {
+    const onLogout = () => setAuthed(false)
+    window.addEventListener('auth:logout', onLogout)
+    return () => window.removeEventListener('auth:logout', onLogout)
+  }, [])
+
+  const doLogout = () => { setToken(''); setAuthed(false) }
+
   return (
     <ToastProvider>
-      <Console />
+      {authed
+        ? <Console onLogout={doLogout} />
+        : <LoginPage onLogin={() => setAuthed(true)} />}
     </ToastProvider>
   )
 }

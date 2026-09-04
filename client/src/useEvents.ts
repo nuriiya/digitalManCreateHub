@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EventItem } from './api'
 
-/** Reconnect-safe event stream: on reconnect send last seq for incremental catch-up. */
-export function useEvents(onEvent?: (e: EventItem) => void) {
+/** Reconnect-safe event stream: on reconnect send last seq for incremental catch-up.
+ *  Reconnects whenever `token` changes (login / logout). */
+export function useEvents(onEvent?: (e: EventItem) => void, token = '') {
   const [events, setEvents] = useState<EventItem[]>([])
   const [connected, setConnected] = useState(false)
   const lastSeq = useRef(0)
@@ -16,7 +17,7 @@ export function useEvents(onEvent?: (e: EventItem) => void) {
 
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      ws = new WebSocket(`${proto}://${location.host}/ws/events?since=${lastSeq.current}`)
+      ws = new WebSocket(`${proto}://${location.host}/ws/events?since=${lastSeq.current}&token=${encodeURIComponent(token)}`)
       ws.onopen = () => { setConnected(true); retry = 0 }
       ws.onmessage = (msg) => {
         try {
@@ -39,7 +40,7 @@ export function useEvents(onEvent?: (e: EventItem) => void) {
     }
     connect()
     return () => { closed = true; ws?.close() }
-  }, [])
+  }, [token])
 
   return { events, connected }
 }

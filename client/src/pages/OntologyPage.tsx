@@ -25,6 +25,7 @@ interface Props {
 interface Cand {
   id: number; kind: string; name: string; definition: string
   status: string; merged_into: number | null; mentions: number
+  tags: string[]
   exam?: { pass: number; fail: number; missing: number } | null
 }
 interface Rel {
@@ -779,6 +780,12 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
                   onChange={() => { if (seedMode) toggleSeed(c.id); else toggleCheck(c.id) }} />
                 <span className="k">{c.kind}</span>
                 <span className="nm">{hl(c.name)}</span>
+                {c.tags && c.tags.length > 0 && (
+                  <span className="og-tags">
+                    {c.tags.slice(0, 2).map((t) => <span key={t} className="og-tag">{t}</span>)}
+                    {c.tags.length > 2 && <span className="og-tag">…</span>}
+                  </span>
+                )}
                 {examBadge(c)}
                 <span className="mn">×{c.mentions}</span>
               </div>
@@ -887,6 +894,11 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
             </h4>
             <div className="def">{detail.candidate.definition || '（无定义）'}</div>
             <div className="note">类型 {detail.candidate.kind} · 证据 {detail.mentions.length} 处</div>
+            {detail.candidate.tags && detail.candidate.tags.length > 0 && (
+              <div className="og-tags">
+                {detail.candidate.tags.map((t: string) => <span key={t} className="og-tag">{t}</span>)}
+              </div>
+            )}
             {detail.mentions.map((m: any) => {
               const text = texts[m.chunk_id] || ''
               const before = text.slice(Math.max(0, m.span_start - 30), m.span_start)

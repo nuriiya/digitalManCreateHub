@@ -17,11 +17,37 @@ import re
 from . import db, jobs, llm
 
 ENTITY_TYPES = {"概念", "角色", "系统", "流程", "规则", "对象", "其他"}
+# Domain tags: an orthogonal dimension to `kind`. Preset closed set seeds the
+# UI, but custom tags are allowed (LLM nominates, code gates length/count).
+TAG_PRESET = {"规则", "法律", "专业知识", "术语概念", "数据指标", "案例示例"}
+MAX_TAGS_PER_ENTITY = 5
+MAX_TAG_LEN = 16
 MAX_NAME_LEN = 32
 MAX_DEFINITION_LEN = 300
 
 
 # ---------------- gate 1: structure ----------------
+
+def _normalize_tags(tags) -> list[str]:
+    """Deterministic cleanup: strip, drop blanks, dedupe, cap count. Custom
+    tags (outside TAG_PRESET) are kept — the LLM may propose, code only gates
+    format (the preset is a convenience seed, not a closed set)."""
+    if not isinstance(tags, list):
+        return []
+    out: list[str] = []
+    seen = set()
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t or t in seen or len(t) > MAX_TAG_LEN:
+            continue
+        seen.add(t)
+        out.append(t)
+        if len(out) >= MAX_TAGS_PER_ENTITY:
+            break
+    return out
+
 
 def validate_structure(cand: dict) -> tuple[bool, str]:
     """Closed-set enums + type/length checks for one nominated candidate."""
@@ -48,6 +74,22 @@ def validate_structure(cand: dict) -> tuple[bool, str]:
         for m in mentions:
             if not isinstance(m, str) or not m.strip():
                 return False, "mention must be non-empty string"
+    tags = cand.get("tags")
+    if tags is not None:
+        if not isinstance(tags, list):
+            return False, "tags must be a list"
+        if len(tags) > MAX_TAGS_PER_ENTITY:
+            return False, f"too many tags (max {MAX_TAGS_PER_ENTITY})"
+        seen = set()
+        for t in tags:
+            if not isinstance(t, str) or not t.strip():
+                return False, "tag must be a non-empty string"
+            t = t.strip()
+            if len(t) > MAX_TAG_LEN:
+                return False, f"tag too long: {t}"
+            if t in seen:
+                return False, f"duplicate tag: {t}"
+            seen.add(t)
     return True, ""
 
 
@@ -100,11 +142,15 @@ def _extract_prompt(chunk_text: str, anchors: str = "") -> str:
         "合并重复与近义项，去芜存菁；实体与关系各不超过 20 个。"
         "mentions 必须是文本中**逐字出现**的原文片段（这是硬性要求，"
         "不允许改写、翻译或概括）。\n"
+        "每个实体标注 1~5 个「领域标签」：优先从预设集选择"
+        f"（{' / '.join(sorted(TAG_PRESET))}），"
+        "预设不贴合时可自拟简短标签（≤16 字）。标签描述实体所属的知识域，"
+        "与 type（实体类型）是正交的两个维度。\n"
         "同时请针对该文本内容出 2~3 道考题（用于之后检验提取出的本体是否够用），"
         "考题的 evidence 必须是文本中**逐字出现**的原文片段。\n"
         "严格按 JSON 输出：\n"
         '{"entities": [{"name": "...", "type": "概念|角色|系统|流程|规则|对象|其他",'
-        ' "definition": "...", "mentions": ["原文片段", ...]}],\n'
+        ' "definition": "...", "mentions": ["原文片段", ...], "tags": ["规则", "法律"]}],\n'
         ' "relations": [{"source": "实体名", "target": "实体名", "type": "..."}],\n'
         ' "quiz": [{"q": "检验问题", "a": "预期答案", "evidence": "原文片段"}]}\n'
         "若文本中没有可抽取内容，输出 {\"entities\": [], \"relations\": [], \"quiz\": []}。\n\n"
@@ -274,9 +320,10 @@ def run_extraction(conn, job_id: int) -> None:
                 dupes += 1
                 continue
             cur = conn.execute(
-                "INSERT INTO candidates(kind, name, definition, status, created_at)"
-                " VALUES('entity', ?, ?, 'pending', ?)",
-                (ent["name"].strip(), (ent.get("definition") or "").strip(), db.now()))
+                "INSERT INTO candidates(kind, name, definition, status, tags, created_at)"
+                " VALUES('entity', ?, ?, 'pending', ?, ?)",
+                (ent["name"].strip(), (ent.get("definition") or "").strip(),
+                 _normalize_tags(ent.get("tags")), db.now()))
             conn.commit()
             cand_id = cur.lastrowid
             for s, e, t in spans:
@@ -909,7 +956,7 @@ def graph(conn, include_status: list[str] | None = None) -> dict:
     statuses = include_status or ["approved", "pending"]
     marks = ",".join("?" for _ in statuses)
     rows = conn.execute(
-        f"SELECT id, kind, name, definition, status, merged_into FROM candidates"
+        f"SELECT id, kind, name, definition, status, merged_into, tags FROM candidates"
         f" WHERE status IN ({marks}) ORDER BY id", statuses).fetchall()
     exam = _exam_by_candidate(conn)
 
@@ -922,6 +969,7 @@ def graph(conn, include_status: list[str] | None = None) -> dict:
     nodes = [{"id": r["id"], "kind": r["kind"], "name": r["name"],
               "definition": r["definition"], "status": r["status"],
               "merged_into": r["merged_into"],
+              "tags": (r["tags"] or []),
               "mentions": mentions.get(r["id"], 0),
               "exam": exam.get(r["id"])} for r in rows]
 

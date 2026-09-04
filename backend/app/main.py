@@ -7,12 +7,12 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp
 
 
 def _sha256(text: str) -> str:
@@ -28,6 +28,7 @@ _MUTEX_KINDS = {"ingest", "repair", "ontology"}
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     conn = db.get_conn()
+    auth.ensure_admin(conn)
     recovered = jobs.recover_stale_jobs(conn, db.now())
     if recovered:
         jobs.emit(conn, None, "system.recovered", {"jobs": recovered})
@@ -37,6 +38,110 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="rag-mvp", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
+
+
+# ---------------- auth ----------------
+# Every /api/* route requires a valid bearer token except the login endpoint.
+# Static frontend files (non-/api) stay open so the login page can load.
+_PUBLIC_API_PATHS = {"/api/auth/login"}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in _PUBLIC_API_PATHS:
+        header = request.headers.get("authorization", "")
+        token = header[7:] if header.startswith("Bearer ") else ""
+        user = auth.verify_token(token)
+        if not user:
+            return JSONResponse({"detail": "未认证或登录已过期"}, status_code=401)
+        request.state.username, request.state.role = user
+    return await call_next(request)
+
+
+# ---------------- auth routes ----------------
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordBody(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginBody):
+    conn = db.get_conn()
+    user = auth.authenticate(conn, body.username, body.password)
+    if not user:
+        return JSONResponse({"detail": "用户名或密码错误"}, status_code=401)
+    token = auth.issue_token(user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.post("/api/auth/password")
+def auth_change_password(body: PasswordBody, request: Request):
+    if len(body.new_password) < 6:
+        return JSONResponse({"detail": "新密码至少 6 位"}, status_code=400)
+    conn = db.get_conn()
+    ok = auth.change_password(conn, request.state.username,
+                              body.old_password, body.new_password)
+    if not ok:
+        return JSONResponse({"detail": "原密码错误"}, status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    # Stateless tokens: logout is a client-side drop. Endpoint kept for symmetry.
+    return {"ok": True}
+
+
+# ---------------- mcp sandbox ----------------
+
+class McpCreate(BaseModel):
+    name: str
+    description: str = ""
+    transport: str = "http"
+    image: str = ""
+    command: str = ""
+    port: int = 0
+
+
+@app.get("/api/mcp/servers")
+def mcp_list():
+    return {"servers": mcp.list_servers(db.get_conn())}
+
+
+@app.post("/api/mcp/servers")
+def mcp_create(body: McpCreate):
+    ok, msg = mcp.create_server(db.get_conn(), body.name, body.description,
+                                body.transport, body.image, body.command, body.port)
+    if not ok:
+        return JSONResponse({"detail": msg}, status_code=400)
+    return {"ok": True, "id": int(msg)}
+
+
+@app.delete("/api/mcp/servers/{server_id}")
+def mcp_delete(server_id: int):
+    mcp.delete_server(db.get_conn(), server_id)
+    return {"ok": True}
+
+
+@app.post("/api/mcp/servers/{server_id}/start")
+def mcp_start(server_id: int):
+    ok, msg = mcp.start_server(db.get_conn(), server_id)
+    if not ok:
+        return JSONResponse({"detail": msg}, status_code=400)
+    return {"ok": True, "container": msg}
+
+
+@app.post("/api/mcp/servers/{server_id}/stop")
+def mcp_stop(server_id: int):
+    mcp.stop_server(db.get_conn(), server_id)
+    return {"ok": True}
 
 
 # ---------------- settings ----------------
@@ -394,8 +499,11 @@ def get_events(since: int = 0, job_id: int | None = None):
 
 
 @app.websocket("/ws/events")
-async def ws_events(ws: WebSocket, since: int = 0):
+async def ws_events(ws: WebSocket, since: int = 0, token: str = ""):
     """Reconnect-safe event stream: client sends last seq, we push increments."""
+    if not auth.verify_token(token):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     last = since
     try:
@@ -488,6 +596,16 @@ def rag_search(q: SearchQuery):
 @app.get("/api/ontology/graph")
 def ontology_graph():
     return ontology.graph(db.get_conn())
+
+
+@app.get("/api/ontology/tags")
+def ontology_tags():
+    conn = db.get_conn()
+    rows = conn.execute(
+        "SELECT t, COUNT(*) c FROM (SELECT unnest(tags) t FROM candidates)"
+        " x GROUP BY t ORDER BY c DESC, t").fetchall()
+    used = [{"tag": r["t"], "count": r["c"]} for r in rows]
+    return {"preset": sorted(ontology.TAG_PRESET), "used": used}
 
 
 @app.get("/api/ontology/candidates/{candidate_id}")

@@ -42,7 +42,7 @@ _conn = None  # singleton _PGConn wrapper
 
 # ---------------- DSN resolution ----------------
 
-DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/rag"
+DEFAULT_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/rag"
 
 
 def _resolve_dsn() -> str:
@@ -139,7 +139,7 @@ class _Conn:
             cur = self._c.execute(sql, params or ())
             row = cur.fetchone()
             if row is not None:
-                lastrowid = row[0]
+                lastrowid = row["id"]
             return _Cursor(cur, lastrowid)
         cur = self._c.execute(sql, params or ())
         return _Cursor(cur, None)
@@ -166,9 +166,15 @@ class _Conn:
 
 def _connect():
     import psycopg
+    from psycopg.rows import dict_row
     from pgvector.psycopg import register_vector
     dsn = _resolve_dsn()
-    pg = psycopg.connect(dsn, autocommit=False, connect_timeout=8)
+    # dict_row keeps the sqlite3.Row-style `row["col"]` access the whole
+    # codebase relies on (the SQLite era set row_factory=Row; the PG migration
+    # initially dropped it, breaking every dict-style row read on non-empty
+    # tables).
+    pg = psycopg.connect(dsn, autocommit=False, connect_timeout=8,
+                         row_factory=dict_row)
     register_vector(pg)  # enables list[float] <-> vector and Python list <-> TEXT[]
     pg.execute("SET application_name = 'rag_mvp'")
     pg.execute("SET statement_timeout = 0")  # long LLM/blocking jobs OK
@@ -278,6 +284,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     definition TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     merged_into BIGINT,
+    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
     created_at DOUBLE PRECISION NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_kind_name
@@ -303,6 +310,26 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    transport TEXT NOT NULL DEFAULT 'http',
+    image TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    port INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'stopped',
+    created_at DOUBLE PRECISION NOT NULL
 );
 
 -- identity pre-screening (anchors guide extraction; prompt is the persona's
@@ -500,6 +527,9 @@ CREATE TABLE IF NOT EXISTS persona_ontology_versions (
 def _init_schema(conn: _Conn) -> None:
     with conn.raw.cursor() as cur:
         cur.execute(_SCHEMA_SQL)
+        # Migrations for databases created before a column existed.
+        cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS"
+                    " tags TEXT[] NOT NULL DEFAULT '{}'::text[]")
     conn.commit()
 
 

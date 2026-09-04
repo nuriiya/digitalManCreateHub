@@ -1,0 +1,18 @@
+# Example MCP server image (stdio transport).
+# Build:  docker build -t my-mcp:latest .
+# Register: image=my-mcp:latest, transport=stdio, command="python -m my_mcp"
+# The server reads JSON-RPC on stdin and writes to stdout (standard MCP stdio).
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install your MCP server's deps (mcp SDK is optional — any stdio JSON-RPC works).
+RUN pip install --no-cache-dir mcp
+
+COPY . /app
+
+# stdio MCP servers have no listening port; the container runs headless and
+# the client drives it over stdin/stdout. For an HTTP/SSE server, override CMD
+# and expose a port instead (then set transport=http + port).
+CMD ["python", "-m", "your_mcp_server"]

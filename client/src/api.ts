@@ -1,17 +1,56 @@
 const BASE = ''
+const TOKEN_KEY = 'rag_token'
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || ''
+export const setToken = (t: string) => {
+  if (t) localStorage.setItem(TOKEN_KEY, t)
+  else localStorage.removeItem(TOKEN_KEY)
+}
 
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+  const headers: Record<string, string> = { ...(options.headers as Record<string, string> | undefined) }
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json'
+  const res = await fetch(BASE + path, { ...options, headers })
+  if (res.status === 401) {
+    setToken('')
+    window.dispatchEvent(new CustomEvent('auth:logout'))
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
-    try { msg = (await res.json()).error || msg } catch { /* ignore */ }
+    try { msg = (await res.json()).detail || msg } catch { /* ignore */ }
     throw new Error(msg)
   }
   return res.json()
 }
+
+// ---------------- auth ----------------
+
+export const login = (username: string, password: string) =>
+  api<{ token: string; username: string; role: string }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+export const changePassword = (old_password: string, new_password: string) =>
+  api<{ ok: boolean }>('/api/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ old_password, new_password }),
+  })
+export const logout = () => api<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
+
+// ---------------- mcp sandbox ----------------
+
+export interface McpServer {
+  id: number; name: string; description: string; transport: string
+  image: string; command: string; port: number; status: string; created_at: number
+}
+export const getMcpServers = () => api<{ servers: McpServer[] }>('/api/mcp/servers')
+export const createMcpServer = (body: object) =>
+  api<{ ok: boolean; id: number }>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(body) })
+export const deleteMcpServer = (id: number) => api(`/api/mcp/servers/${id}`, { method: 'DELETE' })
+export const startMcpServer = (id: number) => api<{ ok: boolean }>(`/api/mcp/servers/${id}/start`, { method: 'POST' })
+export const stopMcpServer = (id: number) => api<{ ok: boolean }>(`/api/mcp/servers/${id}/stop`, { method: 'POST' })
 
 export const getSettings = () => api('/api/settings')
 export const saveSettings = (patch: object) =>
