@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -37,16 +38,47 @@ def _resolve_pg_dsn() -> str:
         return db.DEFAULT_DSN
 
 
+@lru_cache(maxsize=1)
+def _pg_reachable() -> bool:
+    """True if the test PG DSN actually answers (cached for the whole run).
+
+    Every test that needs the `env` fixture is skipped when PostgreSQL is not
+    reachable — the sandbox/CI has no Docker/PG, so a connection refusal here
+    is an environment gap, NOT a code bug. `pytest -rs` shows the reason.
+    """
+    try:
+        import psycopg
+        pg = psycopg.connect(_resolve_pg_dsn(), connect_timeout=3, autocommit=True)
+    except Exception:
+        return False
+    try:
+        with pg.cursor() as cur:
+            cur.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            pg.close()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """Per-test isolated PG connection. Sets search_path to a unique schema,
     runs the app's DDL there, and drops the schema on teardown. Returns a
     fresh shim _Conn against a dedicated psycopg3 connection (not the shared
     singleton) so it can be closed without disturbing the global state."""
-    import psycopg
     from app import settings_store, db
     from app.db import DSN_FILE
     import json as _json
+
+    if not _pg_reachable():
+        pytest.skip("PostgreSQL 不可达（本机请先 start.ps1 拉起 pgvector；"
+                    "沙箱/CI 无 Docker/PG 属预期跳过）")
+
+    import psycopg
 
     # isolate settings (still JSON, untouched by the DB migration)
     monkeypatch.setattr(settings_store, "DATA_DIR", tmp_path)
