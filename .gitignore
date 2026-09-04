@@ -20,3 +20,6 @@ wsl_cred
 .vscode/
 Thumbs.db
 .DS_Store
+
+# Project-local memory (per working memory: do not commit)
+.workbuddy/

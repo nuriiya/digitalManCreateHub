@@ -1,0 +1,72 @@
+<svg viewBox="0 0 680 636" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>编排示例：调研某领域并写一个 demo 页面</title>
+<desc>任务进来后由流程设计师用本体设计编排图，依次执行搜索领域综述、建立专业领域数字人、由专业数字人与写代码数字人共同产出页面、代码复核人复核功能、专业数字人查幻觉五个步骤，最后交付用户并沉淀为模板。右侧是工具自生长泳道：任何一步发现缺少工具，都由写代码数字人生成工具，经沙箱测试与用户审批后固化入工具库。</desc>
+<defs>
+<marker id="arrowEx" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<text x="340" y="24" text-anchor="middle" font-size="14" font-weight="500" fill="#F1EFE8">编排示例：调研 X 领域并写一个 demo 页面</text>
+
+<rect x="40" y="44" width="370" height="44" rx="8" fill="#444441" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="225" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#F1EFE8">任务：调研 X 领域并写一个 demo 页面</text>
+<path d="M225 88 V114" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="116" width="370" height="52" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="56" y="136" font-size="13" font-weight="500" fill="#E6F1FB" dominant-baseline="central">流程设计师（基础数字人）</text>
+<text x="56" y="154" font-size="11" fill="#B5D4F4" dominant-baseline="central">查通路库未命中 → 用本体设计编排图 → 用户确认</text>
+<path d="M225 168 V186" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="188" width="370" height="52" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="56" y="208" font-size="13" font-weight="500" fill="#E6F1FB" dominant-baseline="central">① 搜索相关领域综述</text>
+<text x="56" y="226" font-size="11" fill="#B5D4F4" dominant-baseline="central">产出原料：领域文献 → 交给建数字人工具</text>
+<path d="M225 240 V258" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="260" width="370" height="52" rx="8" fill="#085041" stroke="#9FE1CB" stroke-width="0.5"/>
+<text x="56" y="280" font-size="13" font-weight="500" fill="#E1F5EE" dominant-baseline="central">② 建立专业领域数字人</text>
+<text x="56" y="298" font-size="11" fill="#9FE1CB" dominant-baseline="central">调建数字人工具：RAG + 本体分解 → 知识包 → 审批</text>
+<path d="M225 312 V330" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="332" width="370" height="52" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="56" y="352" font-size="13" font-weight="500" fill="#E6F1FB" dominant-baseline="central">③ 专业数字人 + 写代码数字人</text>
+<text x="56" y="370" font-size="11" fill="#B5D4F4" dominant-baseline="central">领域知识供给 + 页面实现 → demo 页面</text>
+<path d="M225 384 V402" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="404" width="370" height="52" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="56" y="424" font-size="13" font-weight="500" fill="#E6F1FB" dominant-baseline="central">④ 代码复核人（基础数字人）</text>
+<text x="56" y="442" font-size="11" fill="#B5D4F4" dominant-baseline="central">复核功能正确性 · 不通过 → 回写代码数字人</text>
+<path d="M225 456 V474" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="476" width="370" height="52" rx="8" fill="#085041" stroke="#9FE1CB" stroke-width="0.5"/>
+<text x="56" y="496" font-size="13" font-weight="500" fill="#E1F5EE" dominant-baseline="central">⑤ 专业数字人查幻觉</text>
+<text x="56" y="514" font-size="11" fill="#9FE1CB" dominant-baseline="central">页面陈述 vs 证据 span 逐字比对 · 有幻觉 → 回③</text>
+<path d="M225 528 V546" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+
+<rect x="40" y="548" width="370" height="44" rx="8" fill="#444441" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="225" y="570" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#F1EFE8">交付用户 + 通路沉淀为可复用模板</text>
+
+<path d="M410 142 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+<path d="M410 214 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+<path d="M410 286 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+<path d="M410 358 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+<path d="M410 430 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+<path d="M410 502 H428" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3"/>
+
+<rect x="430" y="116" width="210" height="412" rx="20" fill="#412402" stroke="#FAC775" stroke-width="0.5"/>
+<text x="450" y="140" font-size="13" font-weight="500" fill="#FAC775">工具自生长泳道</text>
+<rect x="450" y="156" width="170" height="64" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="535" y="178" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">缺工具检测</text>
+<text x="535" y="198" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">确定性代码判定 · 0 LLM</text>
+<path d="M535 220 V234" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+<rect x="450" y="236" width="170" height="64" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="535" y="258" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">写代码数字人生成工具</text>
+<text x="535" y="278" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">产出只是提名，不是成品</text>
+<path d="M535 300 V314" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrowEx)"/>
+<rect x="450" y="316" width="170" height="64" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="535" y="338" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">沙箱测试 + 用户审批</text>
+<text x="535" y="358" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">通过后版本化固化入工具库</text>
+<text x="450" y="404" font-size="11" fill="#FAC775">任何一步缺工具都走这条泳道</text>
+<text x="450" y="424" font-size="11" fill="#FAC775">运行时只调用已固化的版本</text>
+<text x="450" y="444" font-size="11" fill="#FAC775">不使用 LLM 的即时输出</text>
+<text x="340" y="614" text-anchor="middle" font-size="12" fill="#888780">蓝色 = 基础数字人 · 绿色 = 专业数字人（任务中动态创建）· 橙色 = 工具自生长</text>
+</svg>

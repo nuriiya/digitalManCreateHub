@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数字人知识包构建工具 · 项目现状报告</title>
+<style>
+  :root{
+    --bg:#191917; --panel:#232220; --panel2:#2b2a27; --line:#3a3934;
+    --txt:#F1EFE8; --sub:#D3D1C7; --dim:#888780;
+    --blue:#85B7EB; --blue-bg:#0C447C; --blue-tx:#E6F1FB;
+    --green:#5DCAA5; --green-bg:#0F6E56; --green-tx:#E1F5EE;
+    --amber:#FAC775; --amber-bg:#854F0B; --amber-tx:#FAEEDA;
+    --red:#F0967A; --red-bg:#7A3B22;
+    --mono:'Cascadia Code',Consolas,'Courier New',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font:15px/1.75 "Segoe UI","Microsoft YaHei",sans-serif;padding:0 0 80px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+
+  header{border-bottom:1px solid var(--line);padding:44px 0 30px;margin-bottom:34px;
+    background:linear-gradient(180deg,#20201d 0%,var(--bg) 100%)}
+  h1{font-size:26px;font-weight:600;letter-spacing:.5px}
+  header .meta{color:var(--dim);font-size:13px;margin-top:10px}
+  header .meta b{color:var(--sub);font-weight:500}
+  .tagrow{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+  .tag{font-size:12px;padding:3px 12px;border-radius:999px;border:1px solid var(--line);color:var(--sub)}
+  .tag.b{border-color:var(--blue);color:var(--blue)}
+  .tag.g{border-color:var(--green);color:var(--green)}
+  .tag.a{border-color:var(--amber);color:var(--amber)}
+
+  h2{font-size:19px;font-weight:600;margin:46px 0 6px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:var(--dim);border:1px solid var(--line);
+    border-radius:6px;padding:1px 8px}
+  .h2sub{color:var(--dim);font-size:13px;margin-bottom:18px}
+
+  /* ---- 里程碑进度条 ---- */
+  .miles{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:6px 0 4px}
+  .mile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 12px 10px;position:relative}
+  .mile .st{position:absolute;top:10px;right:10px;font-size:11px;color:var(--green)}
+  .mile .mv{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .mile .nm{font-size:13px;font-weight:600;margin-top:2px}
+  .mile .dt{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.5}
+  .mile.todo{border-style:dashed}
+  .mile.todo .st{color:var(--amber)}
+
+  /* ---- 卡片 ---- */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .card h3{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .card p{font-size:13px;color:var(--sub);line-height:1.7}
+  .card .files{margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--dim);line-height:1.8}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+  .dot.g{background:var(--green)} .dot.a{background:var(--amber)} .dot.b{background:var(--blue)} .dot.r{background:var(--red)}
+
+  .pill{display:inline-block;font-size:11px;padding:1px 10px;border-radius:999px;vertical-align:1px;font-weight:400}
+  .pill.done{background:var(--green-bg);color:var(--green-tx)}
+  .pill.part{background:var(--amber-bg);color:var(--amber-tx)}
+  .pill.todo{background:#5F5E5A;color:#F1EFE8}
+  .pill.no{background:var(--red-bg);color:#F6DED5}
+
+  /* ---- 管线 SVG 区 ---- */
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 10px 6px;margin-bottom:14px}
+  .flow .cap{font-size:12px;color:var(--dim);text-align:center;margin:2px 0 8px}
+
+  /* ---- 表格 ---- */
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th{background:var(--panel2);color:var(--sub);font-weight:600;text-align:left;padding:10px 14px;font-size:12px;
+    border-bottom:1px solid var(--line)}
+  td{padding:10px 14px;border-bottom:1px solid #2e2d29;color:var(--sub);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td b{color:var(--txt);font-weight:600}
+  code{font-family:var(--mono);font-size:11.5px;background:#2e2d29;border:1px solid var(--line);
+    border-radius:4px;padding:0 5px;color:#B5D4F4}
+
+  .note{background:var(--panel);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;
+    padding:14px 18px;font-size:13px;color:var(--sub);margin:18px 0}
+  .note b{color:var(--amber)}
+
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:8px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .v{font-size:24px;font-weight:600;font-family:var(--mono)}
+  .stat .v.g{color:var(--green)} .stat .v.b{color:var(--blue)} .stat .v.a{color:var(--amber)}
+  .stat .k{font-size:12px;color:var(--dim);margin-top:2px}
+
+  footer{margin-top:60px;color:var(--dim);font-size:12px;text-align:center;border-top:1px solid var(--line);padding-top:22px}
+  @media(max-width:860px){.grid,.grid3,.stats{grid-template-columns:1fr}.miles{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>数字人知识包构建工具 · 项目现状报告</h1>
+    <div class="meta">
+      工作区 <b>D:\workspace\调研\rag_prototype</b> ·
+      生成于 <b>2026-09-03</b> ·
+      依据：代码扫描（backend 16 模块 / 162 个 UT / 60+ API）+ doc·design 设计文档对照
+    </div>
+    <div class="tagrow">
+      <span class="tag b">Windows 前后端（FastAPI :8000 + React/Vite）</span>
+      <span class="tag g">WSL2 · Ollama bge-m3</span>
+      <span class="tag a">V4-Flash（提取/提名） + GLM 5.2（对话/判卷）</span>
+      <span class="tag">SQLite 数据态（DM7 过渡）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 0. 一句话结论 ============ -->
+  <div class="note">
+    <b>一句话结论：</b>从 8 月底的「RAG 提取雏形」出发，项目已完整跑通
+    <b>「文档入库 → 本体提取（三关校验）→ 身份预筛 → 二次编排 → 本体装配 → 数字人对话 → 四组对照 Benchmark → 版本管理」</b>
+    全链路 MVP，且 DESIGN_MVP v1.1 增补（身份预筛+考题）与两份 design/ 定稿（检索升级 #106/#107、Benchmark+版本管理）均已落地。
+    当前主要缺口在<b>数据态仍是 SQLite（PG/pgvector 未换装）</b>、<b>六元组仅落地 identity + ontology 两段</b>（actions / guardians / interface / reflection 未封装），以及<b>反思层、通路库、多数字人协同</b>等 P1+ 蓝图项。
+  </div>
+
+  <!-- ============ 1. 里程碑 ============ -->
+  <h2><span class="num">01</span>里程碑进度</h2>
+  <div class="h2sub">对照 DESIGN_MVP.md §7 三个里程碑 + v1.1 增补 + design/ 两份定稿</div>
+  <div class="miles">
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">原型</div><div class="nm">RAG 雏形</div><div class="dt">CLI 双模式（内存/PG）三层存储链路</div></div>
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">MS1</div><div class="nm">部署+配置闭环</div><div class="dt">start.ps1 全自动 · WSL2 自检 · DPAPI 密码缓存</div></div>
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">MS2</div><div class="nm">RAG 闭环</div><div class="dt">ingest job + RAG 预览页 + 近邻检索测试</div></div>
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">MS3</div><div class="nm">本体闭环</div><div class="dt">EDC-lite + 三关校验 + 图谱审批（SVG 自绘）</div></div>
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">v1.1</div><div class="nm">身份预筛+考题</div><div class="dt">高频词→身份/锚点提名→审批；quiz+exam 判分</div></div>
+    <div class="mile"><span class="st">✓ 完成</span><div class="mv">增补</div><div class="nm">对话+评测+版本</div><div class="dt">检索升级 #106/#107 · 四组 Benchmark · 归因→merge/回滚</div></div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v b">16</div><div class="k">后端模块（backend/app）</div></div>
+    <div class="stat"><div class="v b">60+</div><div class="k">REST/WS 端点</div></div>
+    <div class="stat"><div class="v g">162</div><div class="k">单元测试（零网络依赖）</div></div>
+    <div class="stat"><div class="v b">5</div><div class="k">前端页面（React/Vite）</div></div>
+    <div class="stat"><div class="v a">7</div><div class="k">设计文档（doc+design）</div></div>
+  </div>
+
+  <!-- ============ 2. 全链路总览 ============ -->
+  <h2><span class="num">02</span>已落地的全链路</h2>
+  <div class="h2sub">配色语义沿用 pipeline.md v5：蓝=前端/Windows · 绿=已落地链路 · 橙=LLM 环节（只提名）· 灰=数据态</div>
+  <div class="flow">
+    <svg viewBox="0 0 1040 300" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <!-- row 1 -->
+      <rect x="20" y="30" width="150" height="58" rx="9" fill="#185FA5" stroke="#85B7EB" stroke-width=".5"/>
+      <text x="95" y="53" text-anchor="middle" font-size="13" font-weight="500" fill="#E6F1FB">文档入库 ingest</text>
+      <text x="95" y="72" text-anchor="middle" font-size="11" fill="#B5D4F4">md/txt/pdf · hash 去重</text>
+      <line x1="170" y1="59" x2="208" y2="59" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="210" y="30" width="150" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="285" y="53" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">分段+摘要+标签</text>
+      <text x="285" y="72" text-anchor="middle" font-size="11" fill="#9FE1CB">V4-Flash · 规则降级</text>
+      <line x1="360" y1="59" x2="398" y2="59" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="400" y="30" width="150" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="475" y="53" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">嵌入 bge-m3</text>
+      <text x="475" y="72" text-anchor="middle" font-size="11" fill="#9FE1CB">模型锁定 · hash 降级</text>
+      <line x1="550" y1="59" x2="588" y2="59" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="590" y="30" width="170" height="58" rx="9" fill="#5F5E5A" stroke="#B4B2A9" stroke-width=".5"/>
+      <text x="675" y="53" text-anchor="middle" font-size="13" font-weight="500" fill="#F1EFE8">SQLite 三层存储</text>
+      <text x="675" y="72" text-anchor="middle" font-size="11" fill="#D3D1C7">docs / chunks / summaries</text>
+      <line x1="760" y1="59" x2="798" y2="59" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="800" y="30" width="150" height="58" rx="9" fill="#185FA5" stroke="#85B7EB" stroke-width=".5"/>
+      <text x="875" y="53" text-anchor="middle" font-size="13" font-weight="500" fill="#E6F1FB">RAG 预览页</text>
+      <text x="875" y="72" text-anchor="middle" font-size="11" fill="#B5D4F4">统计 · 明细 · 近邻测试</text>
+      <!-- row 2 -->
+      <line x1="475" y1="88" x2="475" y2="126" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="30" y="128" width="200" height="58" rx="9" fill="#854F0B" stroke="#FAC775" stroke-width=".5"/>
+      <text x="130" y="151" text-anchor="middle" font-size="13" font-weight="500" fill="#FAEEDA">身份预筛（v1.1）</text>
+      <text x="130" y="170" text-anchor="middle" font-size="11" fill="#FAC775">高频词→LLM 提名身份+锚点</text>
+      <line x1="230" y1="157" x2="268" y2="157" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="270" y="128" width="200" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="370" y="151" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">本体提取（锚点注入）</text>
+      <text x="370" y="170" text-anchor="middle" font-size="11" fill="#9FE1CB">EDC-lite + quiz 出题</text>
+      <line x1="470" y1="157" x2="508" y2="157" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="510" y="128" width="200" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="610" y="151" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">三关校验（0 LLM）</text>
+      <text x="610" y="170" text-anchor="middle" font-size="11" fill="#9FE1CB">结构·语义·证据 span 逐字</text>
+      <line x1="710" y1="157" x2="748" y2="157" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="750" y="128" width="200" height="58" rx="9" fill="#185FA5" stroke="#85B7EB" stroke-width=".5"/>
+      <text x="850" y="151" text-anchor="middle" font-size="13" font-weight="500" fill="#E6F1FB">图谱审批页</text>
+      <text x="850" y="170" text-anchor="middle" font-size="11" fill="#B5D4F4">批准/拒绝/合并/暂缓 + 考核徽标</text>
+      <!-- row 3 -->
+      <line x1="850" y1="186" x2="850" y2="222" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="30" y="224" width="180" height="58" rx="9" fill="#854F0B" stroke="#FAC775" stroke-width=".5"/>
+      <text x="120" y="247" text-anchor="middle" font-size="13" font-weight="500" fill="#FAEEDA">二次编排 orchestration</text>
+      <text x="120" y="266" text-anchor="middle" font-size="11" fill="#FAC775">规则清洗 + GLM 分诊</text>
+      <line x1="210" y1="253" x2="248" y2="253" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="250" y="224" width="180" height="58" rx="9" fill="#854F0B" stroke="#FAC775" stroke-width=".5"/>
+      <text x="340" y="247" text-anchor="middle" font-size="13" font-weight="500" fill="#FAEEDA">本体装配 assembly</text>
+      <text x="340" y="266" text-anchor="middle" font-size="11" fill="#FAC775">锚点召回+规则排除+GLM 三层筛</text>
+      <line x1="430" y1="253" x2="468" y2="253" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="470" y="224" width="170" height="58" rx="9" fill="#5F5E5A" stroke="#B4B2A9" stroke-width=".5"/>
+      <text x="555" y="247" text-anchor="middle" font-size="13" font-weight="500" fill="#F1EFE8">persona_ontology 段</text>
+      <text x="555" y="266" text-anchor="middle" font-size="11" fill="#D3D1C7">数字人 ontology 六元之一</text>
+      <line x1="640" y1="253" x2="678" y2="253" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="680" y="224" width="160" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="760" y="247" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">数字人对话 chat</text>
+      <text x="760" y="266" text-anchor="middle" font-size="11" fill="#9FE1CB">GLM·动态检索窗口</text>
+      <line x1="840" y1="253" x2="878" y2="253" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <rect x="880" y="224" width="140" height="58" rx="9" fill="#0F6E56" stroke="#5DCAA5" stroke-width=".5"/>
+      <text x="950" y="247" text-anchor="middle" font-size="13" font-weight="500" fill="#E1F5EE">Benchmark</text>
+      <text x="950" y="266" text-anchor="middle" font-size="11" fill="#9FE1CB">四组对照+归因+版本</text>
+    </svg>
+    <div class="cap">已实现全链路：每一次 LLM 参与都是「提名」，三关校验与终审均为确定性代码 + 用户</div>
+  </div>
+
+  <!-- ============ 3. 已实现明细 ============ -->
+  <h2><span class="num">03</span>已实现明细（代码 ↔ 设计对照）</h2>
+  <div class="h2sub">16 个后端模块、5 个前端页面、162 个 UT；每张卡片标注对应设计出处</div>
+
+  <div class="grid">
+    <div class="card">
+      <h3><span class="dot g"></span>RAG 入库管线 <span class="pill done">完成</span></h3>
+      <p>md/txt/pdf 加载（扫描件标记跳过）→ 句子边界分段（无标点硬切+位置回映射）→ V4-Flash 摘要+标签（规则降级）→ bge-m3 嵌入（hash 降级，<b>模型锁定铁则</b>）→ SQLite 三层存储。内容 hash 去重、文件级容错、rule-fallback 摘要修复 job。</p>
+      <div class="files">ingest.py · chunking.py · embedding.py · loaders.py · rag/（雏形原样保留）</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>任务系统 <span class="pill done">完成</span></h3>
+      <p>job 运行器 + 事件(seq) 流 + 进度原子提交 + chunk 级 checkpoint 断电恢复 + 暂停/恢复/删除；WS 断线指数退避重连、按 seq 增量补齐（REST 兜底）。job 类型：ingest / repair / ontology / identity / exam / orchestrate / benchmark。</p>
+      <div class="files">jobs.py · main.py(/ws/events) · client/src/useEvents.ts</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>本体提取 + 三关校验 <span class="pill done">完成</span></h3>
+      <p>EDC-lite 开放抽取（宁多勿漏）→ 定义生成 → 规范化 → <b>结构关（闭集/长度）· 语义关 · 证据关（span 逐字命中原文，幻觉当场丢弃）</b>→ pending 候选入库。审批：批准/拒绝/暂缓/合并（mentions 归并）。</p>
+      <div class="files">ontology.py · DESIGN_MVP §4.5/§6</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>身份预筛 + 考题考核 <span class="pill done">完成</span></h3>
+      <p>高频词统计（0 LLM）→ LLM 提名 3~5 身份 × 5~12 锚点 → 用户逐个审批（可编辑/增删）→ 锚点注入提取 prompt（引导非白名单）。提取同次调用产出 quiz（evidence 逐字校验）→ 考核 job：LLM 作答 + quote/used 闭集判分 → pass/fail/missing 徽标（只是建议，不自动剔除）。</p>
+      <div class="files">identity.py · ontology.py(run_exam) · DESIGN_MVP §9</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>二次编排 + 本体装配 <span class="pill done">完成</span></h3>
+      <p>编排：确定性规则清洗（纯数字/单字/引文/大小写去重，0 LLM）+ GLM 相关性分诊（core/marginal/irrelevant）→ 用户一键确认删除/合并。装配：锚点召回 → 规则排除 → GLM 分诊三层筛 → 确认后<b>拷贝</b>进 persona_ontology 段（带回溯指针，本体单一事实源不被改写）。</p>
+      <div class="files">orchestration.py · assembly.py</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>数字人对话 <span class="pill done">完成</span></h3>
+      <p>GLM 5.2 responder + 本体约束（身份/锚点/persona_ontology 段/关系）。<b>动态检索窗口</b>：字面匹配种子 → 关系 1 跳扩展 → token 预算内按优先级填充；#106 概念抽取兜底（仅 0 命中触发，LLM 只出概念词、代码裁决种子）+ #107 自适应扩展深度（MAX_DEPTH=2，注入 ≤400 护栏）。本体外问题答「不知道」，GLM 不可达直接报错不降级。</p>
+      <div class="files">chat.py · design/retrieval-upgrade.md</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>四组对照 Benchmark + 版本管理 <span class="pill done">完成</span></h3>
+      <p>选题（0 LLM 闭集 join）→ G0 裸模型 / G1 仅本体 / G2 仅 RAG / G3 叠加（本地 Ollama 模型答题）→ GLM 判卷提名 verdict → 确定性终审（闭集+拒答词检测）→ 代码模板出结论（准确率/幻觉率/拒答率/边际）。错误归因提名 annotate/update/delete/add → 闭集校验 → 用户终审 merge（先快照→应用→版本 v+1）/ 任意版本回滚（回滚前自动再快照）。</p>
+      <div class="files">benchmark.py · design/benchmark-version-mgmt.md</div>
+    </div>
+    <div class="card">
+      <h3><span class="dot g"></span>前端五页 + 一键启动 <span class="pill done">完成</span></h3>
+      <p>SettingsPage（双 LLM + embedding 配置/连通测试）、RagPage（统计卡/chunk 明细/原文弹层/近邻检索）、OntologyPage（<b>自绘 SVG 图谱</b>：候选虚线橙/已批准实线蓝、审批卡证据 span 逐字高亮、编排/装配/benchmark 卡片）、ChatPage、IdentityPanel。start.ps1：WSL2 自检→UID≥1000 识别→sudo DPAPI 加密缓存→幂等装 Ollama→拉 bge-m3→uvicorn :8000 托管 dist；不可用优雅降级不阻塞。</p>
+      <div class="files">client/src/pages/*.tsx · start.ps1 / stop.ps1</div>
+    </div>
+  </div>
+
+  <!-- ============ 4. 缺口 ============ -->
+  <h2><span class="num">04</span>还缺什么（按优先级）</h2>
+  <div class="h2sub">对照 DESIGN.md 完整版 · pipeline.md v5 蓝图 · 路线存档 P0-P1</div>
+
+  <table>
+    <tr><th style="width:26%">缺口</th><th style="width:12%">状态</th><th>说明与出处</th></tr>
+    <tr>
+      <td><b>PG/pgvector 正式存储换装</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>DM7 决策的过渡态：数据态（documents/chunks/summaries/候选/证据）目前全部在 SQLite <code>data/app.db</code>。Store 接口已预留，但 PGStore 仅雏形 rag/ 里有，后端未接。影响：规模上限、向量索引性能、任务态/数据态分离未落地。</td>
+    </tr>
+    <tr>
+      <td><b>六元组的其余四段</b></td>
+      <td><span class="pill part">部分</span></td>
+      <td>目前只落地 <b>identity</b>（identities 表+审批）与 <b>ontology</b>（persona_ontology 段+版本管理）。<b>actions / guardians / interface</b> 三段无任何表结构与封装——即「领域专家模板写死三段、部门填三段」的模板机制未开始（pipeline.md §3/§7）。</td>
+    </tr>
+    <tr>
+      <td><b>反思层（第六原语）</b></td>
+      <td><span class="pill part">雏形</span></td>
+      <td>Benchmark 归因→merge→版本化是「数据驱动的定向反思」，但通用 Reflection（Trace 采集 → R1-R6 六类改进提名 → 确定性回归重放 → 分级固化 → 回流重编译）未实现，且 pipeline.md §9.3 明确「反思触发条件待定义」。对话结束异步复盘、Insight 对象、守护规则不可自我修改等约束均未编码。</td>
+    </tr>
+    <tr>
+      <td><b>需求编写人（P0 数字人）的动作面</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>本仓库是「知识包构建工具」，产出数字人的先验知识；而 requirement writer 的提名-裁决管线（需求条目/澄清请求/提名轨迹、6 动作、状态机、文档组装导出）在路线存档中属于 myClaudeCode 工程，本仓库没有承接。两边尚未打通：本体段如何打包交付给数字人运行时没有接口。</td>
+    </tr>
+    <tr>
+      <td><b>通路库 + 事件模板化</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>pipeline.md §1 核心模型——「任务进来→查通路库→命中套用/未命中创建」、标签优先 0 次 LLM 的事件识别、模板沉淀回流，完全没有实现（这是数字人编排层的入口）。</td>
+    </tr>
+    <tr>
+      <td><b>多数字人协同编排</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>「找数字人→编关系→编协作流程+约束」四步、数字人↔数字人 Link、平台级/部门级两层体系、部门本体引用平台本体（禁止改写）的分级管理，均为设计态。</td>
+    </tr>
+    <tr>
+      <td><b>定时任务 / 分时用模 R9</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>DESIGN.md §5.5/§6.5 规划的调度器与分时路由，MVP 明示搁置；当前所有 job 均手动触发。</td>
+    </tr>
+    <tr>
+      <td><b>本体分解器完整版</b></td>
+      <td><span class="pill part">简化</span></td>
+      <td>现用 EDC-lite；pipeline.md §9.2 规划的「无模式 EDC + 基于模式 GraphRAG → 规范化 → ontology.yaml 产物」未收敛（文档标注「方案待确认」）；GLM 5.2 归纳核验只以分诊/判卷形态局部使用。</td>
+    </tr>
+    <tr>
+      <td><b>扫描件 OCR</b></td>
+      <td><span class="pill no">未做</span></td>
+      <td>PDF 仅文本层，扫描件标记跳过并提示（MVP 范围外）。</td>
+    </tr>
+    <tr>
+      <td><b>首启向导 /setup</b></td>
+      <td><span class="pill part">简化</span></td>
+      <td>DESIGN_MVP §5.1 的三步向导未做独立路由，以 SettingsPage + 首页引导替代；图谱渲染用自绘 SVG 而非 Cytoscape.js（功能等价，大规模图谱布局能力弱）。</td>
+    </tr>
+  </table>
+
+  <div class="note">
+    <b>优先级建议（供参考）：</b>① PG/pgvector 换装（Store 接口已在，越晚迁移数据包袱越大）；② 六元组 actions/guardians/interface 模板化（这是「数字人工厂」复用机制的地基）；③ 反思触发条件定义 + Benchmark 回路泛化（pipeline.md §9.3 是唯一标「待定义」的设计空洞）；④ 与 myClaudeCode 需求编写人打通交付接口（ontology 段导出/导入格式）。
+  </div>
+
+  <!-- ============ 5. 铁律落地 ============ -->
+  <h2><span class="num">05</span>三条铁律的代码级落地情况</h2>
+  <table>
+    <tr><th style="width:22%">铁律</th><th>落地证据</th></tr>
+    <tr>
+      <td><b>① 绝对准确（证据可引）</b></td>
+      <td>证据关：mention/quiz/quote 必须<b>逐字命中</b> chunk 原文（span 落库）；benchmark 判卷含拒答词检测；结论由代码模板生成，无 LLM 参与。</td>
+    </tr>
+    <tr>
+      <td><b>② 不知道就说不知道</b></td>
+      <td>数字人对话只答封闭本体约束集，本体外问题答「不知道」；chat 通道 GLM 不可达直接 LLMError，不做规则降级。</td>
+    </tr>
+    <tr>
+      <td><b>③ LLM 无终审权</b></td>
+      <td>所有 LLM 输出（身份/锚点/本体候选/quiz 答案/编排分诊/装配分诊/判卷/归因）一律 pending 提名 → 确定性闭集校验 → <b>用户是唯一终审点</b>；embedding 模型锁定（<code>assert_model_lock</code>）。</td>
+    </tr>
+  </table>
+
+  <footer>
+    依据代码与文档静态扫描生成 · backend/app 16 模块 / 162 UT / client 5 页面 · doc/ 5 设计文档 + pipeline.md v5 · design/ 2 定稿均以实现
+  </footer>
+</div>
+</body>
+</html>

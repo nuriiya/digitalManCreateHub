@@ -1,0 +1,46 @@
+<svg viewBox="0 0 680 296" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>基础数字人创建流水线：Spec 编译五步</title>
+<desc>基础数字人由平台方编写 Spec 基因文件开始，经元本体校验、本体合并、编译产出五类产物、冒烟测试、版本化注册五步生成；其 ontology 段由平台通用本体库供给，该库支持手工定义、版本快照回滚，且只能被专业数字人引用不能改写。</desc>
+<defs>
+<marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<text x="340" y="24" text-anchor="middle" font-size="14" font-weight="500" fill="#F1EFE8">基础数字人创建：Spec 编译五步（零 RAG）</text>
+
+<rect x="40" y="44" width="108" height="64" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="94" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">① Spec 编写</text>
+<text x="94" y="88" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#B5D4F4">六元语 YAML</text>
+<path d="M148 76 H161" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow2)"/>
+<rect x="163" y="44" width="108" height="64" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="217" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">② 元本体校验</text>
+<text x="217" y="88" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#B5D4F4">0 LLM · 拒绝非法</text>
+<path d="M271 76 H284" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow2)"/>
+<rect x="286" y="44" width="108" height="64" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="340" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">③ 编译产物</text>
+<text x="340" y="88" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#B5D4F4">prompt·tools·SHACL</text>
+<path d="M394 76 H407" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow2)"/>
+<rect x="409" y="44" width="108" height="64" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="463" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">④ 冒烟测试</text>
+<text x="463" y="88" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#B5D4F4">上岗测试样例</text>
+<path d="M517 76 H530" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow2)"/>
+<rect x="532" y="44" width="108" height="64" rx="8" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="586" y="66" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">⑤ 版本注册</text>
+<text x="586" y="88" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#B5D4F4">vN + 挂载反思层</text>
+
+<path d="M340 140 V112" fill="none" stroke="#FAC775" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow2)"/>
+
+<rect x="40" y="140" width="600" height="112" rx="20" fill="#412402" stroke="#FAC775" stroke-width="0.5"/>
+<text x="60" y="164" font-size="14" font-weight="500" fill="#FAC775">平台通用本体库 · 基础数字人的 ontology 给养（当前代码缺失）</text>
+<rect x="60" y="180" width="180" height="52" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="150" y="198" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">手工定义入口</text>
+<text x="150" y="218" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">研究员写 · 权威生效</text>
+<rect x="250" y="180" width="180" height="52" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="340" y="198" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">版本化 + 快照回滚</text>
+<text x="340" y="218" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">复用现有版本机制</text>
+<rect x="440" y="180" width="180" height="52" rx="8" fill="#854F0B" stroke="#FAC775" stroke-width="0.5"/>
+<text x="530" y="198" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">被引用 · 禁改写</text>
+<text x="530" y="218" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#FAC775">专业数字人只读</text>
+
+<text x="340" y="276" text-anchor="middle" font-size="12" fill="#888780">与专业数字人的唯一接口：本体引用（只读），引用悬空即拒绝创建</text>
+</svg>
