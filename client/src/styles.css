@@ -258,6 +258,19 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .id-head b { font-size: 14px; }
 .id-head .status-pill { margin-left: auto; }
 .id-mission { font-size: 12px; color: var(--text); opacity: 0.85; }
+.id-prompt {
+  display: flex; gap: 6px; font-size: 12px; line-height: 1.55;
+  border-left: 2px solid rgba(79,131,204,.45); padding: 2px 0 2px 8px;
+  background: rgba(255,255,255,0.02); border-radius: 0 6px 6px 0;
+}
+.id-prompt-lbl {
+  flex: 0 0 auto; color: var(--accent); font-size: 11px; font-weight: 600;
+  padding-top: 1px; cursor: help;
+}
+.id-prompt-txt {
+  min-width: 0; color: var(--muted); white-space: pre-wrap; word-break: break-word;
+  cursor: text;
+}
 .id-kws { display: flex; flex-wrap: wrap; gap: 4px; }
 .kw-chip {
   font-size: 10px; padding: 1px 6px; border-radius: 8px;
@@ -714,6 +727,13 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
   background: var(--panel); border: 1px solid var(--border);
   color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px;
 }
+.dlg-field textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px;
+  line-height: 1.55; font-family: inherit;
+}
+.dlg-field textarea:focus, .dlg-field input:focus { outline: 1px solid var(--accent); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 
 /* ---- 对话 RAG 开关 + 对比左右臂开关 ---- */

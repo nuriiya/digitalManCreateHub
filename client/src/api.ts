@@ -83,6 +83,7 @@ export interface IdentityAnchor {
 export interface Identity {
   id: number; name: string; mission: string | null
   description: string | null; keywords: string[]; status: string
+  prompt: string
   anchors: IdentityAnchor[]
 }
 export const getIdentities = () => api<{ identities: Identity[] }>('/api/ontology/identities')
@@ -100,10 +101,13 @@ export const updateAnchor = (id: number, patch: object) =>
   api(`/api/ontology/anchors/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
 export const addAnchor = (identityId: number, patch: object) =>
   api<{ id: number }>('/api/ontology/anchors', { method: 'POST', body: JSON.stringify({ identity_id: identityId, ...patch }) })
-export const createIdentity = (name: string, mission: string, seedCandidateIds: number[], description = '') =>
+export const createIdentity = (
+  name: string, mission: string, seedCandidateIds: number[],
+  description = '', prompt = '',
+) =>
   api<{ ok: boolean; id: number }>('/api/ontology/identities', {
     method: 'POST',
-    body: JSON.stringify({ name, mission, description, seed_candidate_ids: seedCandidateIds }),
+    body: JSON.stringify({ name, mission, description, seed_candidate_ids: seedCandidateIds, prompt }),
   })
 export const updateIdentity = (id: number, patch: object) =>
   api<{ ok: boolean }>(`/api/ontology/identities/${id}`, { method: 'PUT', body: JSON.stringify(patch) })

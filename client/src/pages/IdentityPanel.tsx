@@ -24,9 +24,9 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const [adding, setAdding] = useState<number | null>(null) // identity id being extended
   const [newAnchor, setNewAnchor] = useState({ name: '', type: '概念', definition: '' })
   const [editingId, setEditingId] = useState<number | null>(null) // identity being edited
-  const [idDraft, setIdDraft] = useState({ name: '', mission: '' })
+  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '' })
   const [creating, setCreating] = useState(false)
-  const [createDraft, setCreateDraft] = useState({ name: '', mission: '' })
+  const [createDraft, setCreateDraft] = useState({ name: '', mission: '', prompt: '' })
   // assembly per persona
   const [asm, setAsm] = useState<Record<number, AsmSummary>>({})
   const [personaOnt, setPersonaOnt] = useState<Record<number, PersonaOntItem[]>>({})
@@ -100,12 +100,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const startEditId = (it: Identity) => {
     setEditingId(it.id)
-    setIdDraft({ name: it.name, mission: it.mission || '' })
+    setIdDraft({ name: it.name, mission: it.mission || '', prompt: it.prompt || '' })
   }
   const saveEditId = async () => {
     if (!editingId) return
     try {
-      await updateIdentity(editingId, { name: idDraft.name, mission: idDraft.mission })
+      await updateIdentity(editingId, {
+        name: idDraft.name, mission: idDraft.mission, prompt: idDraft.prompt,
+      })
       toast('数字人已更新', 'ok')
       setEditingId(null)
       reload()
@@ -122,14 +124,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
         toast(`已启动自主创建：身份提名任务 #${r.job_id}（高频词统计 → LLM 提名）。完成后在「备选数字人」中审批。`, 'ok')
       } catch (e: any) { toast(e.message, 'err') }
       setCreating(false)
-      setCreateDraft({ name: '', mission: '' })
+      setCreateDraft({ name: '', mission: '', prompt: '' })
       return
     }
     if (!name) { toast('请填写数字人名称（或两栏都留空走「自主创建」）', 'err'); return }
     try {
-      const r = await createIdentity(name, defn, [])
+      const r = await createIdentity(name, defn, [], '', createDraft.prompt)
       toast(`数字人「${name}」已创建`, 'ok')
-      setCreateDraft({ name: '', mission: '' })
+      setCreateDraft({ name: '', mission: '', prompt: '' })
       setCreating(false)
       reload()
     } catch (e: any) { toast(e.message, 'err') }
@@ -516,14 +518,37 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
               </span>
             </div>
             {editingId === it.id ? (
-              <div className="id-anchor-edit" style={{ margin: '8px 0' }}>
-                <input value={idDraft.name} placeholder="名称" onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} />
-                <input value={idDraft.mission} placeholder="使命" onChange={(e) => setIdDraft({ ...idDraft, mission: e.target.value })} />
-                <button className="btn green small" onClick={saveEditId}>保存</button>
-                <button className="btn ghost small" onClick={() => setEditingId(null)}>取消</button>
+              <div className="id-anchor-edit" style={{ margin: '8px 0', flexDirection: 'column' }}>
+                <label className="dlg-field">
+                  <span>名称</span>
+                  <input value={idDraft.name} placeholder="名称" onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>使命</span>
+                  <textarea value={idDraft.mission} placeholder="一句话定义这个数字人负责什么" rows={2}
+                    onChange={(e) => setIdDraft({ ...idDraft, mission: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>附加指令（prompt · 对话/装配时注入 · 铁律由系统硬保证不可被覆盖）</span>
+                  <textarea value={idDraft.prompt} placeholder="如：回答前先给出结论再展开；一律引用本体术语…" rows={4}
+                    maxLength={4000}
+                    onChange={(e) => setIdDraft({ ...idDraft, prompt: e.target.value })} />
+                </label>
+                <div className="dlg-actions">
+                  <button className="btn ghost small" onClick={() => setEditingId(null)}>取消</button>
+                  <button className="btn green small" onClick={saveEditId}>保存</button>
+                </div>
               </div>
             ) : (
-              it.mission && <div className="id-mission">{it.mission}</div>
+              <>
+                {it.mission && <div className="id-mission">{it.mission}</div>}
+                {it.prompt ? (
+                  <div className="id-prompt">
+                    <span className="id-prompt-lbl" title="可复制；对话与装配时作为附加指令注入，铁律不可被覆盖">附加指令</span>
+                    <span className="id-prompt-txt">{it.prompt}</span>
+                  </div>
+                ) : null}
+              </>
             )}
             {it.keywords.length > 0 && (
               <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
@@ -548,6 +573,12 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
                 <span className={`status-pill ${it.status}`}>{it.status}</span>
               </div>
               {it.mission && <div className="id-mission">{it.mission}</div>}
+              {it.prompt ? (
+                <div className="id-prompt">
+                  <span className="id-prompt-lbl" title="可复制；对话与装配时作为附加指令注入，铁律不可被覆盖">附加指令</span>
+                  <span className="id-prompt-txt">{it.prompt}</span>
+                </div>
+              ) : null}
               {it.keywords.length > 0 && (
                 <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
               )}
@@ -569,7 +600,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       <div className="id-block">
         <div className="id-block-title">创造 · 删除 · 修改数字人</div>
         <div className="btnrow">
-          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '' }); setCreating(true) }}>
+          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '', prompt: '' }); setCreating(true) }}>
             创建数字人（可预输入 · 留空=自主创建）
           </button>
           <span className="note">从本体图谱点选种子创建 → 用下方图谱工具栏「从图谱创建数字人」</span>
@@ -582,7 +613,8 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
               <div className="dlg-tip">
                 可预输入「人名」与「初始定义」（初始定义将成为该数字人的使命）；
                 两栏都留空 → 自主创建（高频词统计 → LLM 提名身份与锚点，完成后在
-                「备选数字人」中审批）。
+                「备选数字人」中审批）。「附加指令」可自定义数字人言行风格，仅作引导——
+                系统铁律（绝对准确 / 不知即说不知 / 你终审）由代码硬保证，不会被覆盖。
               </div>
               <label className="dlg-field">
                 <span>人名</span>
@@ -591,8 +623,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
               </label>
               <label className="dlg-field">
                 <span>初始定义（使命）</span>
-                <input placeholder="一句话定义这个数字人负责什么（可留空）" value={createDraft.mission}
+                <textarea rows={2} placeholder="一句话定义这个数字人负责什么（可留空）" value={createDraft.mission}
                   onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
+              </label>
+              <label className="dlg-field">
+                <span>附加指令（prompt · 可留空 · 最长 4000 字）</span>
+                <textarea rows={4} maxLength={4000} placeholder="如：只引用本体术语回答；拿不准先说明不确定性…"
+                  value={createDraft.prompt}
+                  onChange={(e) => setCreateDraft({ ...createDraft, prompt: e.target.value })} />
               </label>
               <div className="dlg-actions">
                 <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
