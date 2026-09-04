@@ -202,3 +202,106 @@ def test_repair_is_idempotent(env, workdir, monkeypatch):
     ingest.run_summary_repair(env, job_id2)
     evs = [e for e in jobs.events_since(env, 0) if e["type"] == "repair.scan"]
     assert evs[-1]["payload"]["fallback_chunks"] == 0  # nothing left
+
+
+# ---------------- dedup-by-name (vs the old dedup-by-path) ----------------
+
+def test_dedup_by_name_same_content_skipped_even_with_new_path(
+        env, workdir, fake_llm):
+    """User-decided 2026-09-04: dedup is by NAME, not path.
+    Move the file to a new directory; same content -> still skipped."""
+    _run(env, workdir)
+    before = ingest.stats(env)
+    assert before["documents"] == 1
+
+    # move (rename / new path) and re-ingest a fresh workdir containing the copy
+    src = workdir / "a.md"
+    new_dir = workdir.parent / "docs2"
+    new_dir.mkdir()
+    (new_dir / "a.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    job_id, row = _run(env, new_dir)
+    assert row["status"] == "done"
+
+    # dedup by name -> still ONE doc row
+    after = ingest.stats(env)
+    assert after["documents"] == 1
+    assert after["chunks"] == before["chunks"]
+    # path got updated to the new location (UPDATE in place keeps id stable)
+    row_doc = env.execute(
+        "SELECT id, path FROM documents WHERE name='a.md'").fetchone()
+    assert row_doc["path"].endswith("docs2/a.md")
+    # and the second ingest emitted file_unchanged for that name
+    evs = jobs.events_since(env, 0)
+    assert sum(1 for e in evs
+               if e["type"] == "ingest.file_unchanged"
+               and e["payload"].get("file") == "a.md") >= 1
+
+
+def test_dedup_by_name_different_content_replaces_in_place(
+        env, workdir, fake_llm):
+    """Same name, different content -> UPDATE documents in place (id stable)."""
+    _run(env, workdir)
+    original_id = env.execute(
+        "SELECT id FROM documents WHERE name='a.md'").fetchone()["id"]
+    original_chunk_count = env.execute(
+        "SELECT COUNT(*) c FROM chunks WHERE doc_id=?", (original_id,)
+    ).fetchone()["c"]
+
+    # change the file's content; same path -> same name -> replace
+    (workdir / "a.md").write_text(
+        "完全不同的内容，关于考勤打卡的 V3 升级规则与异常处理流程。",
+        encoding="utf-8")
+    _run(env, workdir)
+
+    row = env.execute(
+        "SELECT id FROM documents WHERE name='a.md'").fetchone()
+    assert row["id"] == original_id  # id stable
+    # chunks were rebuilt
+    new_chunk_count = env.execute(
+        "SELECT COUNT(*) c FROM chunks WHERE doc_id=?", (original_id,)
+    ).fetchone()["c"]
+    assert new_chunk_count >= 1
+    # file_replaced event was emitted
+    evs = jobs.events_since(env, 0)
+    assert any(e["type"] == "ingest.file_replaced"
+               and e["payload"]["file"] == "a.md" for e in evs)
+
+
+def test_dedup_by_name_repeated_overwrites_keep_id_stable(
+        env, workdir, fake_llm):
+    """Three rounds of overwrite must keep documents.id constant
+    (downstream ontology graph references to this doc stay valid)."""
+    _run(env, workdir)
+    ids = [env.execute("SELECT id FROM documents WHERE name='a.md'"
+                       ).fetchone()["id"]]
+    for i in range(3):
+        (workdir / "a.md").write_text(
+            f"第{i}次内容变更，关于财务系统第{i}版功能说明文字填充。", encoding="utf-8")
+        _run(env, workdir)
+        ids.append(env.execute(
+            "SELECT id FROM documents WHERE name='a.md'"
+        ).fetchone()["id"])
+    # all ids must be equal to the original
+    assert len(set(ids)) == 1, f"id changed across overwrites: {ids}"
+    assert ingest.stats(env)["documents"] == 1
+
+
+def test_ingest_one_file_unit_skip_replace_added(env, workdir, fake_llm):
+    """Unit-level coverage of _ingest_one_file's three return paths."""
+    from app import loaders
+    docs = [loaders.load_text(workdir / "a.md")]
+
+    # 1st call -> "added"
+    job_id = jobs.create_job(env, "ingest", 0, "x")
+    kind, doc_id, n = ingest._ingest_one_file(env, job_id, docs[0], 0)
+    assert kind == "added" and doc_id and n >= 1
+
+    # 2nd call, same content -> "unchanged", 0 chunks written
+    kind, doc_id2, n = ingest._ingest_one_file(env, job_id, docs[0], 0)
+    assert kind == "unchanged" and doc_id2 == doc_id and n == 0
+
+    # 3rd call, content mutated -> "replaced", same doc_id
+    mutated = dict(docs[0])
+    mutated["text"] = mutated["text"] + " 全新追加一段不同的内容。"
+    kind, doc_id3, n = ingest._ingest_one_file(env, job_id, mutated, 0)
+    assert kind == "replaced" and doc_id3 == doc_id and n >= 1

@@ -22,7 +22,30 @@ export const testEmbedding = () => api('/api/settings/test-embedding', { method:
 
 export const triggerIngest = () => api('/api/rag/ingest', { method: 'POST' })
 export const triggerRepair = () => api('/api/rag/repair-summaries', { method: 'POST' })
-export const triggerOntology = () => api('/api/ontology/extract', { method: 'POST' })
+export const triggerOntology = () => api<{ job_id: number; resumed?: boolean }>(
+  '/api/ontology/extract', { method: 'POST' })
+export interface UploadConflict { name: string; doc_id: number; reason: string }
+export interface UploadResult {
+  job_id: number
+  added: string[]
+  skipped: string[]
+  conflicts: UploadConflict[]
+  errors: { name: string; error: string }[]
+}
+/** Send files (drop-zone + webkitdirectory both feed this).
+ *  First call: pass overwriteNames=[] -> the server adds new files and
+ *  returns the unresolved conflicts (the dialog then asks the user).
+ *  Second call: pass overwriteNames=[...confirmed names] -> the server
+ *  replaces those existing documents in place. */
+export const uploadFiles = (
+  files: File[],
+  overwriteNames: string[] = [],
+): Promise<UploadResult> => {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f, f.name)
+  fd.append('overwrite_names', overwriteNames.join(','))
+  return api<UploadResult>('/api/rag/upload-files', { method: 'POST', body: fd })
+}
 export const getJobs = () => api('/api/jobs')
 export const pauseJob = (id: number) => api(`/api/jobs/${id}/pause`, { method: 'POST' })
 export const resumeJob = (id: number) => api(`/api/jobs/${id}/resume`, { method: 'POST' })

@@ -244,6 +244,36 @@ def active_job(conn, kind: str) -> dict | None:
     return job_to_dict(row) if row else None
 
 
+def active_job_in_set(conn, kinds: set[str] | list[str]) -> dict | None:
+    """Mutex gate across a SET of job kinds: returns the first running/paused
+    job of any kind in `kinds`, or None. Used to enforce "only one of these
+    three task families may run at a time" (ingest / repair / ontology)."""
+    if not kinds:
+        return None
+    placeholders = ",".join("?" * len(kinds))
+    row = conn.execute(
+        f"SELECT * FROM jobs WHERE kind IN ({placeholders})"
+        " AND status IN ('running','paused')"
+        " ORDER BY id DESC LIMIT 1",
+        tuple(kinds)).fetchone()
+    return job_to_dict(row) if row else None
+
+
+def latest_resumable_job(conn, kind: str) -> dict | None:
+    """Most recent ontology-style job that the user can RESUME
+    (paused / failed / cancelled). None if there is no such row.
+
+    Used by the ontology-extract button: if a paused/failed ontology job
+    exists, the click is treated as "resume" rather than "create new" — so
+    re-running doesn't double-process already-seen chunks.
+    """
+    row = conn.execute(
+        "SELECT * FROM jobs WHERE kind=? AND status IN"
+        " ('paused','failed','cancelled')"
+        " ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
+    return job_to_dict(row) if row else None
+
+
 def recover_stale_jobs(conn, started_at: float | None = None) -> int:
     """Power-cut recovery: any job left 'running' from a previous process
     is marked failed (progress is persisted; user re-runs).
@@ -282,8 +312,12 @@ def job_to_dict(row) -> dict:
 
 def events_since(conn, since_seq: int, limit: int = 500,
                  job_id: int | None = None) -> list[dict]:
-    """Events after seq (ASC). job_id filter + DESC for job detail panels."""
-    import json as _json
+    """Events after seq (ASC). job_id filter + DESC for job detail panels.
+
+    `payload` lives in JSONB; psycopg3 hands it back as a Python dict/list
+    already. The shim & maybe_jsonb helper make this lazy so legacy rows
+    written as TEXT JSON are also decoded transparently."""
+    from .jsonb import maybe_jsonb
     if job_id is not None:
         rows = conn.execute(
             "SELECT seq, job_id, type, payload, ts FROM events WHERE job_id=?"
@@ -294,10 +328,7 @@ def events_since(conn, since_seq: int, limit: int = 500,
             " ORDER BY seq ASC LIMIT ?", (since_seq, limit)).fetchall()
     out = []
     for r in rows:
-        try:
-            payload = _json.loads(r["payload"]) if r["payload"] else {}
-        except Exception:
-            payload = {}
+        payload = maybe_jsonb(r["payload"]) or {}
         out.append({"seq": r["seq"], "job_id": r["job_id"], "type": r["type"],
                     "payload": payload, "ts": r["ts"]})
     return out

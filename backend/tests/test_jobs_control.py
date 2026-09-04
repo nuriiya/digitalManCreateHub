@@ -227,3 +227,87 @@ def test_recover_stale_benchmark_updates_link_table(env):
                     (job_id,)).fetchone()
     assert b["status"] == "failed"
     assert b["error"] == "interrupted (service restart)"
+
+
+# ---------------- mutex across a set of kinds ----------------
+
+def test_active_job_in_set_empty_kinds(env):
+    """Empty kind set = nothing to check; no row can ever match."""
+    assert jobs.active_job_in_set(env, set()) is None
+    assert jobs.active_job_in_set(env, []) is None
+
+
+def test_active_job_in_set_returns_most_recent(env):
+    """Among several running/paused jobs of different kinds in the set,
+    the most recently created wins (so the user-facing message points to
+    whichever task is actually blocking them)."""
+    a = jobs.create_job(env, "ingest", 5, "first")
+    b = jobs.create_job(env, "repair", 5, "second")
+    c = jobs.create_job(env, "ontology", 5, "third")
+    assert jobs.active_job_in_set(env, {"ingest", "repair", "ontology"})["id"] == c["id"]
+    assert jobs.active_job_in_set(env, {"ingest"})["id"] == a["id"]
+    assert jobs.active_job_in_set(env, {"repair"})["id"] == b["id"]
+
+
+def test_active_job_in_set_excludes_other_kinds(env):
+    """Kinds not in the set are ignored (e.g. identity job running must not
+    block ingest/repair/ontology gating)."""
+    jobs.create_job(env, "identity", 5, "nominate")
+    assert jobs.active_job_in_set(env, {"ingest", "repair", "ontology"}) is None
+    assert jobs.active_job_in_set(env, {"benchmark"}) is None
+
+
+def test_active_job_in_set_excludes_finished(env):
+    """Failed/cancelled/done jobs don't block (only running/paused do)."""
+    job_id = jobs.create_job(env, "ontology", 5, "x")
+    env.execute("UPDATE jobs SET status='failed' WHERE id=?", (job_id,))
+    env.commit()
+    assert jobs.active_job_in_set(env, {"ingest", "repair", "ontology"}) is None
+
+
+def test_active_job_in_set_catches_paused(env):
+    """A paused ontology job still blocks ingest/repair (don't let the user
+    start a fresh ingest while a paused one waits to resume)."""
+    p = jobs.create_job(env, "ontology", 5, "x")
+    jobs.request_pause(env, p["id"])
+    hit = jobs.active_job_in_set(env, {"ingest", "repair", "ontology"})
+    assert hit is not None and hit["id"] == p["id"]
+
+
+# ---------------- latest_resumable_job ----------------
+
+def test_latest_resumable_job_picks_paused(env):
+    a = jobs.create_job(env, "ontology", 5, "first")
+    b = jobs.create_job(env, "ontology", 5, "second")
+    jobs.request_pause(env, b["id"])
+    hit = jobs.latest_resumable_job(env, "ontology")
+    assert hit is not None and hit["id"] == b["id"]
+
+
+def test_latest_resumable_job_picks_failed_over_done(env):
+    """Failed is resumable; done is not (it completed successfully)."""
+    finished = jobs.create_job(env, "ontology", 5, "done")
+    env.execute("UPDATE jobs SET status='done' WHERE id=?",
+                (finished["id"],))
+    failed = jobs.create_job(env, "ontology", 5, "fail")
+    env.execute("UPDATE jobs SET status='failed' WHERE id=?",
+                (failed["id"],))
+    env.commit()
+    hit = jobs.latest_resumable_job(env, "ontology")
+    assert hit is not None and hit["id"] == failed["id"]
+
+
+def test_latest_resumable_job_running_not_resumable(env):
+    """A still-running job is not resumable (it IS the running thing)."""
+    r = jobs.create_job(env, "ontology", 5, "x")
+    assert jobs.latest_resumable_job(env, "ontology") is None
+    # and still blocks the gate
+    assert jobs.active_job_in_set(env, {"ingest", "repair", "ontology"})["id"] == r["id"]
+
+
+def test_latest_resumable_job_other_kinds_ignored(env):
+    """An identity paused job must not be picked as a resumable ontology job."""
+    jobs.create_job(env, "identity", 5, "x")
+    other = jobs.create_job(env, "identity", 5, "y")
+    jobs.request_pause(env, other["id"])
+    assert jobs.latest_resumable_job(env, "ontology") is None

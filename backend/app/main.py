@@ -1,16 +1,28 @@
 # -*- coding: utf-8 -*-
 """rag_mvp backend entry: FastAPI app + REST + WS event stream + static dist."""
 import asyncio
+import hashlib
 import json
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, ontology, orchestration, assembly, llm, embedding, identity, chat
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# Job kinds that touch the documents/chunks tables: must not run
+# concurrently with each other. (Mutex is per-kind by default; we extend
+# to a set so e.g. an ontology job blocks a fresh ingest and vice versa.)
+_MUTEX_KINDS = {"ingest", "repair", "ontology"}
 
 
 @asynccontextmanager
@@ -108,19 +120,24 @@ def test_embedding():
 # ---------------- jobs & events ----------------
 
 @app.post("/api/rag/ingest")
-def trigger_ingest():
+def trigger_ingest(path: str | None = None):
+    """Trigger a scan-and-ingest job. By default scans settings.work_dir;
+    an explicit `path` query parameter overrides it (used by the upload
+    dialog when the user picks a custom folder via webkitdirectory).
+    Concurrency: blocked by any running/paused ingest/repair/ontology job."""
     s = settings_store.load_settings()
-    if not s["work_dir"]:
+    target = path or s["work_dir"]
+    if not target:
         return JSONResponse({"error": "work_dir not set"}, status_code=400)
     conn = db.get_conn()
-    active = jobs.active_job(conn, "ingest") or jobs.active_job(conn, "repair")
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
     if active:
         return JSONResponse(
             {"error": f"任务 #{active['id']} 正在运行（{active['status']}），"
                       "请先暂停或删除它再触发，避免并发写库冲突"},
             status_code=409)
-    job_id = jobs.create_job(conn, "ingest", total=0, detail=s["work_dir"])
-    jobs.run_in_background(job_id, ingest.ingest_workdir, s["work_dir"])
+    job_id = jobs.create_job(conn, "ingest", total=0, detail=target)
+    jobs.run_in_background(job_id, ingest.ingest_workdir, target)
     return {"job_id": job_id}
 
 
@@ -132,7 +149,7 @@ def trigger_repair():
     if not llm.llm_configured():
         return JSONResponse({"error": "LLM 未配置 - 规则兜底是设计行为，无需修复"},
                             status_code=400)
-    active = jobs.active_job(conn, "ingest") or jobs.active_job(conn, "repair")
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
     if active:
         return JSONResponse(
             {"error": f"任务 #{active['id']} 正在运行（{active['status']}），"
@@ -145,19 +162,177 @@ def trigger_repair():
 
 @app.post("/api/ontology/extract")
 def trigger_ontology():
+    """Start (or RESUME) the ontology extraction task.
+
+    User-decided 2026-09-04 semantics:
+      - If a paused / failed / cancelled ontology job exists, this click
+        is a RESUME: progress_current is preserved, the next not-yet-seen
+        chunk gets picked up. We bypass the mutex gate for the resume
+        branch (the job was already running before, the user is just
+        continuing what they started).
+      - Otherwise create a new job sized to the current chunks table.
+      - Concurrency: a still-RUNNING ontology job blocks (409); any
+        running ingest/repair also blocks (409) — fresh ingest must wait
+        for ontology to drain, otherwise the chunk set changes underneath
+        the extractor.
+    """
     conn = db.get_conn()
     n = conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
     if n == 0:
         return JSONResponse({"error": "no chunks - run ingest first"}, status_code=400)
-    active = jobs.active_job(conn, "ontology")
+
+    resumable = jobs.latest_resumable_job(conn, "ontology")
+    if resumable:
+        # RESUME path: bypass the mutex gate. The job is already known
+        # to be in 'paused' / 'failed' / 'cancelled' state so it can't be
+        # the running one blocking the set. We just spin up the worker
+        # again with the same id so progress persists.
+        if not jobs.resume_job(conn, resumable["id"]):
+            return JSONResponse(
+                {"error": f"无法续跑本体任务 #{resumable['id']}（状态：{resumable['status']}）"},
+                status_code=400)
+        jobs.run_in_background(resumable["id"], ontology.run_extraction)
+        return {"job_id": resumable["id"], "resumed": True}
+
+    # FRESH job path: enforce the three-way mutex.
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
     if active:
         return JSONResponse(
-            {"error": f"本体提取任务 #{active['id']} 正在运行（{active['status']}），"
+            {"error": f"任务 #{active['id']} 正在运行（{active['status']}），"
                       "请先暂停或删除它再触发"},
             status_code=409)
     job_id = jobs.create_job(conn, "ontology", total=n, detail="EDC-lite extraction")
     jobs.run_in_background(job_id, ontology.run_extraction)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "resumed": False}
+
+
+@app.post("/api/rag/upload-files")
+async def rag_upload_files(
+    files: list[UploadFile] = File(...),
+    overwrite_names: str = Form(default=""),
+):
+    """Receive uploaded files (drop-zone + webkitdirectory both feed this),
+    save each into settings.work_dir (uuid-suffixed name to avoid stomping
+    on an existing file with the same basename), and per-file ingest with
+    the SAME name-dedup rule as the scan-and-ingest path.
+
+    Two-step interaction:
+      - 1st call (overwrite_names empty): for each file compute content_hash
+        and look up by name. Files that match (same hash + complete) are
+        classified `skipped`; files whose name exists but hash differs are
+        classified `conflict` (NOT ingested). Files whose name is new are
+        ingested and classified `added`. Response carries the lists so the
+        UI can render a per-file log and a confirmation dialog.
+      - 2nd call (overwrite_names = CSV of user-confirmed conflicts): the
+        client posts the same files AGAIN with the names the user agreed
+        to overwrite; this call ingests them in REPLACE-IN-PLACE mode
+        (keeps documents.id stable).
+    """
+    s = settings_store.load_settings()
+    work_dir = s["work_dir"]
+    if not work_dir:
+        return JSONResponse({"error": "work_dir not set"}, status_code=400)
+    work_path = Path(work_dir)
+    work_path.mkdir(parents=True, exist_ok=True)
+
+    overwrite_set = {n.strip() for n in overwrite_names.split(",") if n.strip()}
+
+    # Three-way mutex: don't pour new chunks into a DB another job is writing.
+    conn = db.get_conn()
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
+    if active:
+        return JSONResponse(
+            {"error": f"任务 #{active['id']} 正在运行（{active['status']}），"
+                      "请先暂停或删除它再上传"},
+            status_code=409)
+
+    added: list[str] = []
+    skipped: list[str] = []
+    conflicts: list[dict] = []  # [{name, reason}] - awaiting user decision
+    errors: list[dict] = []
+
+    job_id = jobs.create_job(conn, "ingest", total=len(files),
+                             detail=f"upload-files · {len(files)} files")
+    try:
+        jobs.set_current_job(job_id)
+        for f in files:
+            raw = await f.read()
+            raw_name = Path(f.filename or "upload").name  # strip any path parts
+            # Save with uuid suffix to avoid clobbering the existing copy in
+            # work_dir; the dedup check below is by NAME (not path), so the
+            # suffix doesn't matter — we always look up the row by raw_name.
+            stamp = uuid.uuid4().hex[:8]
+            target = work_path / f"{stamp}_{raw_name}"
+            target.write_bytes(raw)
+            try:
+                doc = loaders.load_text(target)
+            except Exception as e:
+                errors.append({"name": raw_name, "error": str(e)})
+                target.unlink(missing_ok=True)
+                jobs.emit(conn, job_id, "ingest.file_error",
+                          {"file": raw_name, "error": str(e)})
+                continue
+
+            chash = _sha256(doc["text"])
+            existing = conn.execute(
+                "SELECT id, content_hash, doc_summary FROM documents WHERE name=?",
+                (raw_name,)).fetchone()
+
+            if existing and existing["content_hash"] == chash \
+                    and (existing["doc_summary"] or "").strip():
+                # Identical, complete: skip (file_unchanged).
+                target.unlink(missing_ok=True)
+                skipped.append(raw_name)
+                jobs.emit(conn, job_id, "ingest.file_unchanged",
+                          {"file": raw_name, "doc_id": existing["id"]})
+                continue
+
+            if existing and raw_name not in overwrite_set:
+                # Name conflict: don't ingest until the user decides.
+                # Drop the temp copy; the second call will re-save + ingest.
+                target.unlink(missing_ok=True)
+                conflicts.append({"name": raw_name, "doc_id": existing["id"],
+                                  "reason": "already_extracted_different_content"})
+                jobs.emit(conn, job_id, "ingest.file_conflict",
+                          {"file": raw_name, "doc_id": existing["id"]})
+                continue
+
+            # Either: no existing row, OR user has confirmed `overwrite` for it.
+            status, _doc_id, _n = ingest._ingest_one_file(conn, job_id, doc, 0)
+            if status == "error":
+                errors.append({"name": raw_name, "error": "ingest failed (see event log)"})
+                target.unlink(missing_ok=True)
+            elif status == "replaced":
+                added.append(raw_name)
+                jobs.emit(conn, job_id, "ingest.file_overwritten",
+                          {"file": raw_name})
+            else:  # "added"
+                added.append(raw_name)
+            # cleanup the temp copy on disk now that ingest has the chunks
+            target.unlink(missing_ok=True)
+
+        jobs.update_progress(conn, job_id, len(files))
+        jobs.emit(conn, job_id, "ingest.upload_done",
+                  {"added": added, "skipped": skipped,
+                   "conflicts": conflicts, "errors": errors,
+                   "overwrite_applied": bool(overwrite_set)})
+        jobs.finish_job(conn, job_id, ok=True)
+        return {
+            "job_id": job_id,
+            "added": added,
+            "skipped": skipped,
+            "conflicts": conflicts,
+            "errors": errors,
+        }
+    except jobs.JobPaused:
+        jobs.auto_pause(conn, job_id, "upload-files 被用户暂停")
+        raise
+    except Exception as e:  # noqa: BLE001
+        jobs.emit(conn, job_id, "ingest.upload_error", {"error": str(e)})
+        jobs.finish_job(conn, job_id, ok=False, error=str(e))
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        jobs.set_current_job(None)
 
 
 @app.get("/api/jobs")
@@ -437,6 +612,7 @@ class IdentityCreateBody(BaseModel):
     mission: str = ""
     description: str = ""
     seed_candidate_ids: list[int] = []
+    prompt: str = ""            # 附加指令（创建时直接设定；铁律由代码硬保证不被绕过）
 
 
 @app.post("/api/ontology/identities")
@@ -445,7 +621,8 @@ def create_identity(body: IdentityCreateBody):
     candidates become both approved anchors and the persona's initial ontology
     段 (their explicit pick = final adjudication)."""
     iid = identity.create_identity(db.get_conn(), body.name, body.mission,
-                                   body.description, body.seed_candidate_ids)
+                                   body.description, body.seed_candidate_ids,
+                                   body.prompt)
     if iid is None:
         return JSONResponse({"error": "名字不能为空或过长"}, status_code=400)
     jobs.emit(db.get_conn(), None, "identity.created",
@@ -457,6 +634,7 @@ class IdentityUpdateBody(BaseModel):
     name: str | None = None
     mission: str | None = None
     description: str | None = None
+    prompt: str | None = None          # 附加指令（铁律由代码硬保证不被绕过）
 
 
 @app.put("/api/ontology/identities/{identity_id}")

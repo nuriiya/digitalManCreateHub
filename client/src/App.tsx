@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  triggerIngest, triggerOntology, triggerRepair, getJobs, getStats,
+  triggerOntology, triggerRepair, getJobs, getStats,
   pauseJob, resumeJob, deleteJob, getJobEvents,
 } from './api'
 import { useEvents } from './useEvents'
@@ -9,6 +9,7 @@ import SettingsPage from './pages/SettingsPage'
 import RagPage from './pages/RagPage'
 import OntologyPage from './pages/OntologyPage'
 import ChatPage from './pages/ChatPage'
+import IngestDialog from './components/IngestDialog'
 import type { EventItem } from './api'
 
 type Tab = 'ingest' | 'rag' | 'ontology' | 'chat' | 'settings'
@@ -186,6 +187,7 @@ function Console() {
   const [expandedJob, setExpandedJob] = useState<number | null>(null)
   const [jobEvents, setJobEvents] = useState<EventItem[]>([])
   const [showLlm, setShowLlm] = useState(false)
+  const [showIngestDialog, setShowIngestDialog] = useState(false)
   const { toast } = useToast()
 
   const bump = () => setRefreshKey((k) => k + 1)
@@ -226,14 +228,7 @@ function Console() {
     }).catch(() => {})
   }, [expandedJob])
 
-  const doIngest = async () => {
-    try {
-      const r = await triggerIngest()
-      toast(`入库任务 #${r.job_id} 已启动`, 'ok')
-      refreshJobs()
-    } catch (e: any) { toast(e.message, 'err') }
-  }
-  const doRepair = async () => {
+const doRepair = async () => {
     try {
       const r = await triggerRepair()
       toast(`修复任务 #${r.job_id} 已启动`, 'ok')
@@ -292,13 +287,22 @@ function Console() {
       </div>
 
       <div className="content">
+        {showIngestDialog && (
+          <IngestDialog
+            onClose={() => setShowIngestDialog(false)}
+            disabled={ingestBusy}
+            onDone={() => refreshJobs()}
+          />
+        )}
         {tab === 'ingest' && (
           <>
             <div className="card">
               <h3>管线触发</h3>
               <div className="desc">工作目录与模型在「设置」页配置。入库：加载→分段→摘要/标签（Flash）→嵌入→入库；本体提取：EDC 式提名→三关校验→待审批。同类型任务运行中不可重复触发（防并发写库冲突）。</div>
               <div className="btnrow">
-                <button className="btn" onClick={doIngest} disabled={ingestBusy} title={ingestBusy ? '入库/修复任务进行中' : ''}>① 扫描并入库</button>
+                <button className="btn" onClick={() => setShowIngestDialog(true)}
+                        disabled={ingestBusy}
+                        title={ingestBusy ? '入库/修复任务进行中' : ''}>① 添加资料</button>
                 <button className="btn ghost" onClick={doRepair} disabled={ingestBusy} title="重跑之前因网络波动退化为规则兜底的摘要/标签（LLM 未配置时无需修复）">③ 修复兜底摘要</button>
                 <button className="btn ghost" onClick={doOntology} disabled={!stats.chunks || ontologyBusy} title={ontologyBusy ? '本体提取任务进行中' : ''}>② 本体提取（提名+校验）</button>
                 <button className="btn ghost" onClick={refreshJobs}>刷新</button>
