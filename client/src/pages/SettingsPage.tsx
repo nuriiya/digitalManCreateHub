@@ -174,7 +174,7 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
 
         <div className="card">
           <h3>账号安全</h3>
-          <div className="desc">修改当前账号（admin）的登录密码。默认密码 Xyf.748159，建议首次登录后修改。</div>
+          <div className="desc">修改当前账号（admin）的登录密码。</div>
           <label className="field"><span>原密码</span>
             <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
           </label>

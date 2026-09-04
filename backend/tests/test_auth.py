@@ -9,7 +9,7 @@ def test_admin_seed_and_password(env):
     assert row is not None
     assert row["role"] == "admin"
     # default password verifies, wrong one does not
-    assert auth.authenticate(env, "admin", "Xyf.748159") is not None
+    assert auth.authenticate(env, "admin", "123456") is not None
     assert auth.authenticate(env, "admin", "wrong") is None
 
 
@@ -30,6 +30,6 @@ def test_token_roundtrip_and_reject(env):
 def test_change_password(env):
     auth.ensure_admin(env)
     assert auth.change_password(env, "admin", "wrong-old", "newpass123") is False
-    assert auth.change_password(env, "admin", "Xyf.748159", "newpass123") is True
-    assert auth.authenticate(env, "admin", "Xyf.748159") is None
+    assert auth.change_password(env, "admin", "123456", "newpass123") is True
+    assert auth.authenticate(env, "admin", "123456") is None
     assert auth.authenticate(env, "admin", "newpass123") is not None

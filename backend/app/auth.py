@@ -22,7 +22,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SECRET_PATH = DATA_DIR / "auth_secret"
 
 DEFAULT_ADMIN_USER = "admin"
-DEFAULT_ADMIN_PASSWORD = "Xyf.748159"
+DEFAULT_ADMIN_PASSWORD = "123456"
 TOKEN_TTL = 60 * 60 * 24 * 7  # 7 days
 
 _lock = threading.RLock()

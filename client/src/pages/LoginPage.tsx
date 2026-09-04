@@ -34,7 +34,7 @@ export default function LoginPage({ onLogin }: { onLogin: (username: string) => 
         </label>
         <label className="dlg-field">
           <span>密码</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="默认 Xyf.748159" />
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && <div className="login-err">{error}</div>}
         <button className="btn green login-btn" type="submit" disabled={busy}>
