@@ -74,6 +74,7 @@ def _resolve_dsn() -> str:
 _Q2S = re.compile(r"\?")
 _INSERT = re.compile(r"^\s*INSERT\b", re.IGNORECASE)
 _RETURNING = re.compile(r"\bRETURNING\b", re.IGNORECASE)
+_READ = re.compile(r"^\s*(SELECT|WITH|SHOW|EXPLAIN|VALUES)\b", re.IGNORECASE)
 
 
 def _q2s(sql: str) -> str:
@@ -137,15 +138,20 @@ class _Conn:
 
     def execute(self, sql: str, params: Any = ()):
         sql = _q2s(sql)
+        is_read = bool(_READ.match(sql))
         try:
-            return self._do_execute(sql, params)
+            result = self._do_execute(sql, params)
+            if is_read:
+                # A bare SELECT under autocommit=False still opens a
+                # transaction that lingers as `idle in transaction` until
+                # commit/rollback — and that dangling txn holds an
+                # AccessShareLock which blocks any DDL (e.g. _init_schema's
+                # ALTER TABLE) from taking AccessExclusiveLock. End the read
+                # transaction immediately so read-only queries (WS events
+                # polling, benchmark stats) never wedge schema migrations.
+                self._c.commit()
+            return result
         except Exception as e:  # noqa: BLE001 - recover, then re-raise
-            # Any failed statement aborts the transaction under
-            # autocommit=False (the abort surfaces as UndefinedColumn /
-            # DatatypeMismatch on the FIRST bad query, then as
-            # InFailedSqlTransaction on every subsequent one). Roll back
-            # unconditionally so one bad query can't poison this thread's
-            # later work — already-committed rows are unaffected.
             try:
                 self._c.rollback()
             except Exception:
