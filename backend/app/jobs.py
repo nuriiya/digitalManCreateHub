@@ -228,6 +228,9 @@ def run_in_background(job_id: int, fn, *args) -> threading.Thread:
                 pass
         finally:
             set_current_job(None)
+            # Close this thread's own connection (thread-local) so a job thread
+            # doesn't leak a PG connection for its whole lifetime.
+            db.reset_conn()
 
     t = threading.Thread(target=_wrapper, daemon=True, name=f"job-{job_id}")
     with _lock:

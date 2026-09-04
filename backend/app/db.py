@@ -36,8 +36,15 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DSN_FILE = DATA_DIR / "pg_dsn"  # start.ps1 writes it after starting pgvector
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-_lock = threading.RLock()
-_conn = None  # singleton _PGConn wrapper
+# Per-thread connection instead of a process-wide singleton. The old single
+# connection was shared by the request threads AND the ontology job's
+# concurrent workers, which psycopg3 cannot handle (its connections are not
+# thread-safe) -> `DeadlockDetected` and cross-thread transaction pollution.
+# Each thread now owns its own connection; a failure in one thread can never
+# abort another thread's transaction.
+_threadlocal = threading.local()
+_schema_ready = False
+_schema_lock = threading.Lock()
 
 
 # ---------------- DSN resolution ----------------
@@ -130,6 +137,22 @@ class _Conn:
 
     def execute(self, sql: str, params: Any = ()):
         sql = _q2s(sql)
+        try:
+            return self._do_execute(sql, params)
+        except Exception as e:  # noqa: BLE001 - recover, then re-raise
+            # Any failed statement aborts the transaction under
+            # autocommit=False (the abort surfaces as UndefinedColumn /
+            # DatatypeMismatch on the FIRST bad query, then as
+            # InFailedSqlTransaction on every subsequent one). Roll back
+            # unconditionally so one bad query can't poison this thread's
+            # later work — already-committed rows are unaffected.
+            try:
+                self._c.rollback()
+            except Exception:
+                pass
+            raise
+
+    def _do_execute(self, sql: str, params: Any = ()):
         lastrowid = None
         if _INSERT.match(sql) and not _RETURNING.search(sql):
             # Auto-append RETURNING id so cur.lastrowid stays meaningful.
@@ -182,27 +205,48 @@ def _connect():
 
 
 def get_conn(db_path=None) -> _Conn:  # db_path kept for API compat with old tests
-    """Thread-safe singleton (RLock + single connection). `db_path` is
-    accepted but ignored on PG — tests should rely on the PG fixtures in
-    conftest (which set a per-test schema, not a per-test file)."""
-    global _conn
-    with _lock:
-        if _conn is None:
-            _conn = _Conn(_connect())
-            _init_schema(_conn)
-        return _conn
+    """Per-thread connection (thread-local). Each thread gets its own
+    psycopg3 connection so concurrent job workers never share a connection
+    (psycopg3 is not thread-safe; the old process-wide singleton caused
+    deadlocks + cross-thread transaction pollution).
+
+    `db_path` is accepted but ignored on PG — tests should rely on the PG
+    fixtures in conftest (which set a per-test schema, not a per-test file).
+    """
+    conn = getattr(_threadlocal, "conn", None)
+    if conn is None:
+        conn = _Conn(_connect())
+        _ensure_schema(conn)
+        _threadlocal.conn = conn
+    return conn
+
+
+def _ensure_schema(conn: _Conn) -> None:
+    """Run _init_schema exactly once per process. The DDL is idempotent but
+    ALTER TABLE still takes AccessExclusiveLock — running it from many
+    threads at once is itself a deadlock vector, so gate it behind a flag."""
+    global _schema_ready
+    with _schema_lock:
+        if not _schema_ready:
+            _init_schema(conn)
+            _schema_ready = True
 
 
 def reset_conn() -> None:
-    """Drop the singleton (used by tests + by main during dev recovery)."""
-    global _conn
-    with _lock:
-        if _conn is not None:
-            try:
-                _conn.close()
-            except Exception:
-                pass
-            _conn = None
+    """Close the *current thread's* connection (used by job threads on exit,
+    and by tests). Rolls back any aborted transaction first so the teardown
+    never leaves the shared PG state dirty."""
+    conn = getattr(_threadlocal, "conn", None)
+    if conn is not None:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _threadlocal.conn = None
 
 
 # ---------------- schema (PostgreSQL + pgvector) ----------------
