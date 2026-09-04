@@ -9,9 +9,11 @@ Iron laws hold throughout:
     extraction prompt - as GUIDANCE, never a whitelist (full extraction
     semantics untouched: entities outside the anchors are still nominated).
 """
+import json
 import re
 
 from . import db, jobs, llm
+from .jsonb import maybe_jsonb
 from .ontology import ENTITY_TYPES, MAX_NAME_LEN, MAX_DEFINITION_LEN
 
 TOP_WORDS = 80          # high-freq words fed to the nominator
@@ -24,6 +26,8 @@ _STOP_CHARS = set("的了和与及或对为等按其该本各被从到将使由�
 _STOP_LATIN = {"the", "and", "for", "with", "this", "that", "from", "are", "was",
                "were", "will", "shall", "not", "but", "all", "can", "may", "you",
                "your", "our", "their", "into", "onto", "when", "then", "than"}
+
+MAX_PROMPT_LEN = 4000   # 用户可编辑的附加指令上限（与 chat.py 注入上限一致）
 
 
 # ---------------- step 1: deterministic high-freq stats (0 LLM) ----------------
@@ -69,16 +73,13 @@ def high_freq_words(conn, top: int = TOP_WORDS) -> list[tuple[str, int]]:
 
 def tag_stats(conn, top: int = 20) -> list[tuple[str, int]]:
     """Aggregate chunk tags (already computed at ingest time, 0 LLM)."""
-    import json as _json
     counts: dict[str, int] = {}
     for row in conn.execute("SELECT tags FROM chunks WHERE tags IS NOT NULL").fetchall():
-        try:
-            tags = _json.loads(row["tags"])
-        except Exception:
-            continue
+        tags = maybe_jsonb(row["tags"]) or []
         for t in tags if isinstance(tags, list) else []:
             if isinstance(t, str) and t.strip():
-                counts[t.strip()] = counts.get(t.strip(), 0) + 1
+                v = t.strip()
+                counts[v] = counts.get(v, 0) + 1
     return sorted(counts.items(), key=lambda kv: -kv[1])[:top]
 
 
@@ -169,10 +170,11 @@ def run_nomination(conn, job_id: int) -> None:
         return
     for ident in idents:
         cur = conn.execute(
-            "INSERT INTO identities(name, mission, description, keywords, status,"
-            " created_at) VALUES(?,?,?,?, 'pending', ?)",
+            "INSERT INTO identities(name, mission, description, keywords, prompt,"
+            " status, created_at) VALUES(?,?,?,?, ?, ?, ?)",
             (ident["name"], ident["mission"], ident["description"],
-             jobs.json_dumps(ident["keywords"]), db.now()))
+             json.dumps(ident["keywords"], ensure_ascii=False),
+             "", "pending", db.now()))
         conn.commit()
         iid = cur.lastrowid
         for a in ident["anchors"]:
@@ -258,7 +260,8 @@ def delete_identity(conn, identity_id: int) -> bool:
 
 def create_identity(conn, name: str, mission: str,
                     description: str = "",
-                    seed_candidate_ids: list[int] | None = None) -> int | None:
+                    seed_candidate_ids: list[int] | None = None,
+                    prompt: str = "") -> int | None:
     """Create a digital person from the ontology graph (user-defined).
 
     The user picks candidate nodes on the graph as SEED ontology; their pick
@@ -268,6 +271,9 @@ def create_identity(conn, name: str, mission: str,
         when the user later runs assembly to pull in more related ontology.
     The new identity is created 'approved' (user-authored, not LLM-nominated),
     so multiple digital persons can coexist.
+
+    `prompt` is the user's optional ADDITIVE system-instruction tail (iron
+    laws stay hard-coded ABOVE the tail in chat._system_prompt).
     """
     name = str(name or "").strip()
     mission = str(mission or "").strip()
@@ -275,11 +281,12 @@ def create_identity(conn, name: str, mission: str,
         return None
     if len(mission) > 500:
         return None
+    user_prompt = str(prompt or "").strip()[:MAX_PROMPT_LEN]
     cur = conn.execute(
-        "INSERT INTO identities(name, mission, description, keywords, status,"
-        " created_at) VALUES(?,?,?, '[]', 'approved', ?)",
+        "INSERT INTO identities(name, mission, description, keywords, prompt,"
+        " status, created_at) VALUES(?,?,?,?, ?, ?, ?)",
         (name, mission, str(description or "").strip()[:MAX_DEFINITION_LEN],
-         db.now()))
+         "[]", user_prompt, "approved", db.now()))
     identity_id = cur.lastrowid
     for cid in (seed_candidate_ids or []):
         cand = conn.execute(
@@ -307,7 +314,7 @@ def create_identity(conn, name: str, mission: str,
 
 
 def update_identity(conn, identity_id: int, patch: dict) -> bool:
-    """Lightweight edit: name / mission / description only. Anchors are edited
+    """Lightweight edit: name / mission / description / prompt. Anchors are edited
     separately (update_anchor / add_anchor); the assembled ontology 段 is
     untouched (it iterates independently)."""
     sets, vals = [], []
@@ -326,6 +333,15 @@ def update_identity(conn, identity_id: int, patch: dict) -> bool:
         if len(d) > MAX_DEFINITION_LEN:
             return False
         sets.append("description=?"); vals.append(d)
+    if "prompt" in patch:
+        # empty string allowed (clears the user-tail); whitespace normalized.
+        # `prompt` may be None from the API (skip), but empty str is a valid clear.
+        p_raw = patch.get("prompt")
+        if p_raw is None:
+            pass
+        else:
+            user_prompt = str(p_raw).strip()[:MAX_PROMPT_LEN]
+            sets.append("prompt=?"); vals.append(user_prompt)
     if not sets:
         return False
     vals.append(identity_id)
@@ -391,11 +407,8 @@ def list_identities(conn) -> list[dict]:
     out = []
     for r in conn.execute("SELECT * FROM identities ORDER BY id DESC").fetchall():
         ident = dict(r)
-        try:
-            import json as _json
-            ident["keywords"] = _json.loads(ident.get("keywords") or "[]")
-        except Exception:
-            ident["keywords"] = []
+        ident["keywords"] = maybe_jsonb(ident.get("keywords")) or []
+        ident["prompt"] = ident.get("prompt") or ""
         anchors = conn.execute(
             "SELECT id, identity_id, name, type, definition, status FROM anchors"
             " WHERE identity_id=? ORDER BY id", (r["id"],)).fetchall()

@@ -573,9 +573,9 @@ def rollback_version(conn, identity_id: int, version_id: int) -> dict:
         (version_id, identity_id)).fetchone()
     if row is None:
         return {"ok": False, "error": "版本不存在"}
-    try:
-        snapshot = json.loads(row["snapshot"])
-    except (ValueError, TypeError):
+    from .jsonb import maybe_jsonb
+    snapshot = maybe_jsonb(row["snapshot"])
+    if not isinstance(snapshot, list):
         return {"ok": False, "error": "快照损坏，无法回滚"}
     current = _snapshot_rows(conn, identity_id)
     version = (conn.execute(

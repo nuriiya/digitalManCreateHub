@@ -9,7 +9,7 @@ import json
 import math
 import urllib.request
 
-from . import settings_store, db
+from . import settings_store, db, netutil
 
 HASH_DIM = 512
 _fake_embed = None  # UT hook
@@ -41,11 +41,11 @@ def _hash_embed(text: str, dim: int = HASH_DIM) -> list[float]:
 
 
 def _ollama_embed(text: str, base_url: str, model: str) -> list[float]:
-    req = urllib.request.Request(
+    # loopback call: bypass the Windows/registry proxy (see app/netutil.py)
+    req = netutil.local_request(
         f"{base_url.rstrip('/')}/api/embeddings",
-        data=json.dumps({"model": model, "prompt": text}).encode("utf-8"),
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+        data=json.dumps({"model": model, "prompt": text}).encode("utf-8"))
+    with netutil.local_urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["embedding"]
 
@@ -76,7 +76,7 @@ def embed(text: str) -> list[float]:
 def check_ollama(base_url: str, model: str) -> dict:
     """Connectivity + model presence probe for the settings page."""
     try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=8) as r:
+        with netutil.local_urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=8) as r:
             data = json.loads(r.read().decode("utf-8"))
         models = [m.get("name", "") for m in data.get("models", [])]
         has_model = any(m == model or m.split(":")[0] == model for m in models)

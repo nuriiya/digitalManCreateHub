@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import sys
+import uuid
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -8,19 +9,87 @@ sys.path.insert(0, str(BASE))
 import pytest
 
 
+# Per-test PG schema isolation: one connection pool per process, but every test
+# runs inside its own namespace so writes from one test never leak into another
+# (the old SQLite fixture relied on a fresh `app.db` file per test, which is
+# not portable to PG). The schema name embeds a uuid so parallel test runs
+# against the same database don't collide.
+
+PG_TEST_DSN_ENV_KEYS = ("RAG_DATABASE_URL", "DATABASE_URL")
+
+
+def _resolve_pg_dsn() -> str:
+    """Resolve the test PG DSN from env (mirrors db._resolve_dsn priority).
+
+    Falls back to the same DSN as the app so developers can point both at one
+    dev database (the schema-prefixed isolation makes parallel writes safe).
+    """
+    import os
+    for k in PG_TEST_DSN_ENV_KEYS:
+        dsn = (os.environ.get(k) or "").strip()
+        if dsn:
+            return dsn
+    # last resort: the same default the app uses
+    from app import db
+    try:
+        return db._resolve_dsn()
+    except Exception:
+        return db.DEFAULT_DSN
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Redirect settings + sqlite into tmp_path, return a fresh connection."""
+    """Per-test isolated PG connection. Sets search_path to a unique schema,
+    runs the app's DDL there, and drops the schema on teardown. Returns a
+    fresh shim _Conn against a dedicated psycopg3 connection (not the shared
+    singleton) so it can be closed without disturbing the global state."""
+    import psycopg
     from app import settings_store, db
+    from app.db import DSN_FILE
+    import json as _json
+
+    # isolate settings (still JSON, untouched by the DB migration)
     monkeypatch.setattr(settings_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(settings_store, "SETTINGS_PATH", tmp_path / "settings.json")
-    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setattr(db, "_conn", None)
-    conn = db.get_conn()
+
+    dsn = _resolve_pg_dsn()
+    schema = "test_" + uuid.uuid4().hex[:12]
+    pg = psycopg.connect(dsn, autocommit=False)
+    with pg.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA "{schema}"')
+        cur.execute(f'SET search_path TO "{schema}"')
+        # Run the app DDL with the schema pinned. _SCHEMA_SQL is CREATE
+        # EXTENSION + CREATE TABLE IF NOT EXISTS — both safe in a fresh
+        # schema. CREATE EXTENSION in particular is a superuser-level grant;
+        # if the test role lacks it we skip silently (vector stays NULL,
+        # tests that need it explicitly assert the dim).
+        try:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            pass
+        cur.execute(db._SCHEMA_SQL)
+    pg.commit()
+
+    # Build a shim Conn around THIS pg connection so the test sees only its
+    # own tables and the cleanup at teardown only drops its own schema.
+    from pgvector.psycopg import register_vector
+    try:
+        register_vector(pg)
+    except Exception:
+        pass
+
+    conn = db._Conn(pg)
+
     yield conn
+
     conn.close()
-    monkeypatch.setattr(db, "_conn", None)
+    try:
+        pg2 = psycopg.connect(dsn, autocommit=True)
+        with pg2.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        pg2.close()
+    except Exception:
+        pass
 
 
 @pytest.fixture

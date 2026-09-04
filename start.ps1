@@ -221,7 +221,125 @@ if ($OllamaReady) {
     } catch { } finally { Pop-Location }
 }
 
-# ---------- 4. Start backend ----------
+# ---------- 4. PostgreSQL + pgvector (the new task+data store) ----------
+# Priority:
+#   (1) PG already reachable on 5432 (host or WSL forwarded -> same DSN)
+#   (2) WSL2 + Docker available -> ensure pgvector stack via docker compose
+#   (3) WSL2 present but no Docker -> try installing docker-ce + compose
+#   (4) No WSL, no Docker -> instruct user to install one of them
+#
+# Whatever we land on, we MUST leave a writable DSN at backend/data/pg_dsn
+# so `db._resolve_dsn()` (12-factor env override -> file -> default) finds it.
+
+$PgReady = $false
+
+function Test-PgLocal {
+    $env:PGPASSWORD = 'postgres'
+    try {
+        $x = & psql -h localhost -p 5432 -U postgres -d postgres -tAc "SELECT 1" 2>$null
+        return ($x -and $x.Trim() -eq '1')
+    } catch { return $false }
+}
+
+function Get-WslUser {
+    $users = @()
+    try {
+        $raw = & wsl -e bash -c "getent passwd | awk -F: '`$3>=1000 && `$3<65534 {print `$1}'" 2>$null
+        if ($raw) { $users = @($raw | Where-Object { $_ -and $_ -ne "nobody" }) }
+    } catch { }
+    if ($users.Count -eq 0) { $users = @("root") }
+    return $users[0]
+}
+
+# ---------- (1) Already reachable? ----------
+if (Test-PgLocal) {
+    $PgReady = $true
+    Write-Step "PostgreSQL reachable on localhost:5432 (external) - WSL/Docker setup skipped"
+}
+
+# ---------- (2/3) WSL2 + pgvector via Docker ----------
+if (-not $PgReady) {
+    $WslOk = $false
+    try {
+        $status = & wsl --status 2>$null
+        if ($LASTEXITCODE -eq 0) { $WslOk = $true }
+    } catch { }
+
+    if ($WslOk) {
+        Write-Step "WSL2 detected - ensuring Docker + pgvector"
+        $WslUser = Get-WslUser
+        $hasDocker = & wsl -u $WslUser -e bash -c "command -v docker" 2>$null
+        $hasCompose = & wsl -u $WslUser -e bash -c "command -v docker-compose || docker compose version" 2>$null
+        if (-not $hasDocker) {
+            Write-Step "installing Docker in WSL2 (first time only)..."
+            $install = "curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker `$USER"
+            & wsl -u $WslUser -e bash -c $install
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn2 "Docker install failed - falling through; you can install Docker Desktop for Windows instead"
+            }
+            $hasDocker = & wsl -u $WslUser -e bash -c "command -v docker" 2>$null
+        }
+
+        if ($hasDocker) {
+            # ensure dockerd is running (idempotent)
+            & wsl -u $WslUser -e bash -c "pgrep -x dockerd >/dev/null 2>&1 || (sudo nohup dockerd >/dev/null 2>&1 &)" 2>$null
+            Start-Sleep -Seconds 2
+            $composeFile = Join-Path $Root "ops\docker\pgvector.yml"
+            if (-not (Test-Path $composeFile)) {
+                # minimal stack: pure pgvector image (pgvector/pgvector:pg17)
+                $opsDir = Join-Path $Root "ops\docker"
+                New-Item -ItemType Directory -Force -Path $opsDir | Out-Null
+                @"
+services:
+  pgvector:
+    image: pgvector/pgvector:pg17
+    container_name: rag_pgvector
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - rag_pgdata:/var/lib/postgresql/data
+volumes:
+  rag_pgdata: {}
+"@ | Set-Content -Path $composeFile -Encoding utf8
+                Write-Step "wrote pgvector compose file (first time): $composeFile"
+            }
+            $composeLocal = ($composeFile -replace '\\','/')
+            & wsl -u $WslUser -e bash -c "cd /mnt/" + ($Root -replace ':','').Replace('\','/').Substring(1).ToLower().Substring(1) + " && docker compose -f `"$composeLocal`" up -d" 2>$null
+            # fallback: bring it up by short relative path
+            & wsl -u $WslUser -e bash -c "docker compose -f `"$composeLocal`" up -d" 2>$null
+            for ($i = 0; $i -lt 30 -and -not $PgReady; $i++) {
+                Start-Sleep -Seconds 2
+                if (Test-PgLocal) { $PgReady = $true; break }
+            }
+        }
+    } else {
+        Write-Warn2 "WSL2 not available - assuming a host-local PostgreSQL on :5432"
+        # loop and hope - many devs run Postgres on the host directly
+        for ($i = 0; $i -lt 8; $i++) {
+            if (Test-PgLocal) { $PgReady = $true; break }
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
+if (-not $PgReady) {
+    Write-Warn2 "PostgreSQL still not reachable on :5432."
+    Write-Warn2 "  install one of: Docker Desktop for Windows, a host-local Postgres, or enable WSL2 + Docker."
+    Write-Warn2 "  once reachable, re-run start.ps1; the DSN file backend\data\pg_dsn is what the app reads first."
+}
+
+# Always (re)write the DSN file on success so the app picks up a fresh host.
+if ($PgReady) {
+    New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+    Set-Content -Path (Join-Path $DataDir "pg_dsn") -Value "postgresql://postgres:postgres@localhost:5432/rag" -NoNewline
+    Write-Step "wrote DSN file: data\pg_dsn"
+}
+
+# ---------- 5. Start backend ----------
 Write-Step "starting backend on http://localhost:8000 (Ctrl+C to stop)..."
 $env:PYTHONIOENCODING = "utf-8"
 Push-Location (Join-Path $Root "backend")

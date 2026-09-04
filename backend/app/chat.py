@@ -21,11 +21,16 @@ Iron laws:
   - if the question falls outside the ontology, the persona says it doesn't
     know rather than hallucinating (iron law 2);
   - no rule fallback on the chat channel: GLM unreachable -> LLMError.
+  - the user's `ident.prompt` is an ADDITIVE system-instruction tail; iron
+    laws and the ontology block are hard-coded *before* the user tail and
+    cannot be overridden by it (tail is wrapped so the persona sees it as
+    guidance, never as a rule).
 """
 import re
 from collections import defaultdict
 
-from . import db, llm
+from . import db, llm, netutil
+from .jsonb import maybe_jsonb
 
 HISTORY_LIMIT = 20     # recent messages fed back as conversation context
 
@@ -72,13 +77,31 @@ RAG_SNIPPET_MAX = 500          # 单条片段截断字符数（保留证据语�
 _RE_WORD = re.compile(r"[a-z0-9]+")                     # english tokens
 _RE_KW = re.compile(r"[\u4e00-\u9fff]{2,}|[a-z0-9]{3,}")  # CJK 2+ / ascii 3+
 
+# 附加指令尾部提示（iron law 紧固层）：把用户的自定义 prompt 显式包成「附加」
+# 在最后一段，并强调铁律优先于附加指令，模型不得以附加指令为由绕过铁律。
+PROMPT_TAIL_HEADER = (
+    "\n\n【附加指令 · 用户在该数字人上额外设定】"
+    "\n以下指令由用户在该数字人上额外填写，作为「辅助指引」叠加在上面的"
+    "铁律之上；上面任何铁律（尤其是「不知道就说不知道」「不编造来源」「只依"
+    "据本体约束回答」）依然高于本段附加指令。\n"
+)
+
+PROMPT_TAIL_FOOTER = (
+    "\n【/附加指令 · 铁律优先，如与本体/铁律冲突则以铁律为准】\n"
+)
+
 
 # ---------------- constraint assembly (deterministic, 0 LLM) ----------------
 
 def _identity(conn, identity_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM identities WHERE id=?",
                        (identity_id,)).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    d["keywords"] = maybe_jsonb(d.get("keywords")) or []
+    d["prompt"] = d.get("prompt") or ""
+    return d
 
 
 def _approved_anchors(conn, identity_id: int) -> list[dict]:
@@ -200,7 +223,28 @@ def _system_prompt(ctx: dict, use_ontology: bool = True) -> str:
         lines.append("1. 诚实回答，不编造事实、不虚构来源。")
         lines.append("2. 如果不知道或不确认，明确说「我不确定」而不是猜测。")
     lines.append("3. 用中文回答。")
+
+    prompt_text = _wrap_user_prompt_tail(ident.get("prompt") or "")
+    if prompt_text:
+        lines.append(prompt_text)
+
     return "\n".join(lines)
+
+
+def _wrap_user_prompt_tail(prompt: str) -> str:
+    """Wrap the user-defined additional prompt as an additive tail.
+
+    Iron laws (ontology, "say I don't know", no fabrication) are hard-coded
+    ABOVE this block and cannot be overridden by it. The wrapping explicitly
+    states that the tail is auxiliary, so the LLM knows to defer to the iron
+    laws on conflict. An empty/whitespace prompt yields nothing (no extra
+    noise in the system prompt for users who didn't customize)."""
+    p = (prompt or "").strip()
+    if not p:
+        return ""
+    # Cap accidental huge prompts defensively (matches the chunk_summary cap).
+    p = p[:4000]
+    return PROMPT_TAIL_HEADER + p + PROMPT_TAIL_FOOTER
 
 
 # ---------------- history persistence ----------------
@@ -280,12 +324,10 @@ def _ollama_context_length(model: str, base_url: str) -> int:
         return _ollama_ctx_cache[model]
     try:
         import json as _json
-        import urllib.request as _ur
-        req = _ur.Request(
+        req = netutil.local_request(
             f"{base_url.rstrip('/')}/api/show",
-            data=_json.dumps({"model": model}).encode("utf-8"),
-            headers={"Content-Type": "application/json"})
-        with _ur.urlopen(req, timeout=5) as r:
+            data=_json.dumps({"model": model}).encode("utf-8"))
+        with netutil.local_urlopen(req, timeout=5) as r:
             info = _json.loads(r.read().decode("utf-8")).get("model_info", {})
         for key, val in info.items():
             if key.endswith("context_length") and isinstance(val, int):
@@ -310,12 +352,10 @@ def _ollama_num_ctx(model: str, base_url: str) -> int:
     try:
         import json as _json
         import re as _re
-        import urllib.request as _ur
-        req = _ur.Request(
+        req = netutil.local_request(
             f"{base_url.rstrip('/')}/api/show",
-            data=_json.dumps({"model": model}).encode("utf-8"),
-            headers={"Content-Type": "application/json"})
-        with _ur.urlopen(req, timeout=5) as r:
+            data=_json.dumps({"model": model}).encode("utf-8"))
+        with netutil.local_urlopen(req, timeout=5) as r:
             params = _json.loads(r.read().decode("utf-8")).get("parameters", "") or ""
         m = _re.search(r"num_ctx\s+(\d+)", params)
         val = int(m.group(1)) if m else OLLAMA_NUM_CTX_DEFAULT
@@ -795,6 +835,7 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
                 "model_context_length": model_ctx_len,
                 "percent": percent,
             },
+            "has_user_prompt": bool((ident.get("prompt") or "").strip()),
         },
     }
 

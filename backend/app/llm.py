@@ -14,7 +14,7 @@ import json
 import re
 import threading
 
-from . import settings_store
+from . import netutil, settings_store
 
 # hook for UT: tests inject a fake callable (messages -> str)
 _fake_chat = None
@@ -235,8 +235,16 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
     def run() -> None:
         try:
             from openai import OpenAI
+            # loopback endpoints (Ollama) must NOT go through any proxy:
+            # httpx defaults to trust_env=True, which sends localhost through
+            # the system proxy -> 502 (killed benchmark job #30).
+            kwargs_client = {}
+            if netutil.is_local_url(s["base_url"]):
+                import httpx
+                kwargs_client["http_client"] = httpx.Client(trust_env=False)
             client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
-                            timeout=idle_seconds, max_retries=0)
+                            timeout=idle_seconds, max_retries=0,
+                            **kwargs_client)
             kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
                           stream=True, stream_options={"include_usage": True})
             if extra_body:
