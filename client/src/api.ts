@@ -232,7 +232,11 @@ export const getPersonaOntology = (identityId?: number) =>
 
 export interface ChatMessage {
   id: number; identity_id: number; role: 'user' | 'assistant'
-  content: string; created_at: number
+  content: string; created_at: number; session_id?: number | null
+}
+export interface ChatSession {
+  id: number; identity_id: number; title: string
+  created_at: number; message_count: number
 }
 export interface ChatContext {
   provider: string
@@ -278,7 +282,7 @@ export interface ChatUsage {
 }
 export interface ChatReply {
   ok: boolean; reply: string; messages: ChatMessage[]
-  context: ChatContext
+  context: ChatContext; session_id?: number
 }
 export interface ChatModels {
   llm: { configured: boolean; model: string }
@@ -288,7 +292,7 @@ export interface ChatModels {
 export const getChatModels = () => api<ChatModels>('/api/chat/models')
 export const sendChat = (
   identityId: number, message: string,
-  opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null } = {},
+  opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null; session_id?: number | null } = {},
 ) =>
   api<ChatReply>('/api/chat', {
     method: 'POST',
@@ -317,10 +321,27 @@ export const compareChat = (
     method: 'POST',
     body: JSON.stringify({ identity_id: identityId, message, ...opts }),
   })
-export const getChatMessages = (identityId: number) =>
-  api<{ messages: ChatMessage[] }>(`/api/chat/messages?identity_id=${identityId}`)
-export const clearChat = (identityId: number) =>
-  api<{ ok: boolean; deleted: number }>(`/api/chat/messages?identity_id=${identityId}`, { method: 'DELETE' })
+export const getChatMessages = (identityId: number, sessionId?: number | null) =>
+  api<{ messages: ChatMessage[] }>(
+    `/api/chat/messages?identity_id=${identityId}${sessionId != null ? `&session_id=${sessionId}` : ''}`)
+export const clearChat = (identityId: number, sessionId?: number | null) =>
+  api<{ ok: boolean; deleted: number }>(
+    `/api/chat/messages?identity_id=${identityId}${sessionId != null ? `&session_id=${sessionId}` : ''}`,
+    { method: 'DELETE' })
+
+// ---------------- chat sessions (多会话历史) ----------------
+export const getChatSessions = (identityId: number) =>
+  api<{ sessions: ChatSession[] }>(`/api/chat/sessions?identity_id=${identityId}`)
+export const createChatSession = (identityId: number, title = '') =>
+  api<{ ok: boolean; session: ChatSession }>('/api/chat/sessions', {
+    method: 'POST', body: JSON.stringify({ identity_id: identityId, title }),
+  })
+export const renameChatSession = (sessionId: number, title: string) =>
+  api<{ ok: boolean }>(`/api/chat/sessions/${sessionId}`, {
+    method: 'PATCH', body: JSON.stringify({ title }),
+  })
+export const deleteChatSession = (sessionId: number) =>
+  api<{ ok: boolean; deleted: number }>(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' })
 
 // ---------------- persona benchmark (四组对照测试 + 归因提名 + 版本管理) ----------------
 

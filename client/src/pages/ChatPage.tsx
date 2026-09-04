@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getIdentities, getChatModels, getChatMessages, sendChat, clearChat, compareChat,
-  type Identity, type ChatMessage, type ChatContext, type ChatModels, type CompareSide,
+  getChatSessions, deleteChatSession, renameChatSession,
+  type Identity, type ChatMessage, type ChatContext, type ChatModels,
+  type CompareSide, type ChatSession,
 } from '../api'
 import { useToast } from '../Toast'
 
@@ -10,6 +12,20 @@ interface Props {
 }
 
 type Provider = 'llm2' | 'llm' | 'ollama'
+
+function dateLabel(d: Date): string {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yest = new Date(today); yest.setDate(today.getDate() - 1)
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  if (day.getTime() === today.getTime()) return '今天'
+  if (day.getTime() === yest.getTime()) return '昨天'
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function timeLabel(ts: number): string {
+  const d = new Date(ts * 1000)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 /** 数字人对话页：选择一个已批准数字人，与其对话。回答可由 GLM 5.2 / DeepSeek
  * / 本地 Ollama 7B 生成，并可按开关决定是否用该数字人的本体约束（身份 + 锚点 +
@@ -20,6 +36,10 @@ export default function ChatPage({ refreshKey }: Props) {
   const [chatModels, setChatModels] = useState<ChatModels | null>(null)
   const [selId, setSelId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessionId, setSessionId] = useState<number | null>(null)
+  const [renamingId, setRenamingId] = useState<number | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -40,6 +60,20 @@ export default function ChatPage({ refreshKey }: Props) {
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
   const sel = useMemo(() => approved.find((i) => i.id === selId) ?? null, [approved, selId])
+
+  // 消息按日期分组（今天 / 昨天 / 具体日期）
+  const grouped = useMemo(() => {
+    const groups: { key: string; label: string; items: ChatMessage[] }[] = []
+    for (const m of messages) {
+      const d = new Date(m.created_at * 1000)
+      const key = d.toDateString()
+      if (!groups.length || groups[groups.length - 1].key !== key) {
+        groups.push({ key, label: dateLabel(d), items: [] })
+      }
+      groups[groups.length - 1].items.push(m)
+    }
+    return groups
+  }, [messages])
 
   // prefer the 32k variant (num_ctx pinned to the model max) when present
   const preferredOllama = useCallback((models?: string[]) => {
@@ -69,15 +103,39 @@ export default function ChatPage({ refreshKey }: Props) {
       setOllamaModel(preferredOllama(chatModels.ollama.models))
   }, [provider, ollamaModel, chatModels, preferredOllama])
 
-  // load history when the selected persona changes
+  // load history when the selected persona / session changes (cancelled flag
+  // fixes the stale-response race when switching fast)
   useEffect(() => {
     if (selId === null) {
       setMessages([]); setCtx(null); setCmpLeft(null); setCmpRight(null)
       return
     }
+    let cancelled = false
     setLoading(true)
-    getChatMessages(selId).then((r) => setMessages(r.messages ?? [])).catch(() => { })
-      .finally(() => setLoading(false))
+    getChatMessages(selId, sessionId)
+      .then((r) => { if (!cancelled) setMessages(r.messages ?? []) })
+      .catch(() => { })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [selId, sessionId])
+
+  // load sessions for the selected persona; reset sessionId if it vanished
+  useEffect(() => {
+    if (selId === null) {
+      setSessions([]); setSessionId(null)
+      return
+    }
+    let cancelled = false
+    getChatSessions(selId).then((r) => {
+      if (cancelled) return
+      const list = r.sessions ?? []
+      setSessions(list)
+      setSessionId((cur) => {
+        if (cur != null && !list.some((s) => s.id === cur)) return null
+        return cur
+      })
+    }).catch(() => { })
+    return () => { cancelled = true }
   }, [selId])
 
   // auto-scroll to the newest message
@@ -89,6 +147,8 @@ export default function ChatPage({ refreshKey }: Props) {
   const select = (id: number) => {
     if (id === selId) return
     setSelId(id)
+    setSessionId(null)
+    setSessions([])
     setMessages([])
     setCtx(null)
     setCtxOpen(false)
@@ -139,10 +199,16 @@ export default function ChatPage({ refreshKey }: Props) {
         use_rag: useRag,
         provider,
         ollama_model: provider === 'ollama' ? ollamaModel : null,
+        session_id: sessionId,
       })
       setMessages(r.messages ?? [])
       setCtx(r.context ?? null)
       setCtxOpen(true)
+      if (r.session_id != null && r.session_id !== sessionId) {
+        // 自动创建了新会话：更新当前会话 + 刷新会话列表
+        setSessionId(r.session_id)
+        getChatSessions(selId).then((s) => setSessions(s.sessions ?? [])).catch(() => { })
+      }
     } catch (e: any) {
       toast(e.message, 'err')
       setMessages((m) => m.filter((x) => x.id !== -1))
@@ -154,15 +220,56 @@ export default function ChatPage({ refreshKey }: Props) {
 
   const doClear = async () => {
     if (!selId) return
-    if (!confirm('清空与当前数字人的全部对话记录？')) return
+    if (!confirm(sessionId ? '清空当前会话的全部消息？' : '清空与当前数字人的全部对话记录？')) return
     try {
-      await clearChat(selId)
+      await clearChat(selId, sessionId)
       setMessages([])
       setCtx(null)
       setCtxOpen(false)
       setCmpLeft(null)
       setCmpRight(null)
       toast('对话已清空', 'ok')
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  // ---- 会话操作：新建 / 切换 / 重命名 / 删除 ----
+  const newSession = () => {
+    setSessionId(null)   // 发下一条消息时自动创建新会话
+    setMessages([])
+    setCtx(null)
+    setCtxOpen(false)
+    setCmpLeft(null)
+    setCmpRight(null)
+  }
+  const switchSession = (id: number) => {
+    if (id === sessionId) return
+    setSessionId(id)
+    setCtx(null); setCtxOpen(false); setCmpLeft(null); setCmpRight(null)
+  }
+  const startRename = (s: ChatSession) => {
+    setRenamingId(s.id)
+    setRenameDraft(s.title)
+  }
+  const commitRename = async () => {
+    const id = renamingId
+    if (id == null) return
+    const title = renameDraft.trim()
+    setRenamingId(null)
+    if (!title) return
+    try {
+      await renameChatSession(id, title)
+      setSessions((list) => list.map((s) => (s.id === id ? { ...s, title } : s)))
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+  const removeSession = async (id: number) => {
+    if (!confirm('删除该会话及其全部消息？')) return
+    try {
+      await deleteChatSession(id)
+      setSessions((list) => list.filter((s) => s.id !== id))
+      if (sessionId === id) {
+        setSessionId(null)
+        setMessages([]); setCtx(null); setCtxOpen(false)
+      }
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -216,6 +323,49 @@ export default function ChatPage({ refreshKey }: Props) {
               </div>
             )
           })}
+
+          {selId !== null && (
+            <>
+              <div className="chat-sess-head">
+                <span className="note">会话</span>
+                <button className="btn ghost tiny" onClick={newSession} title="新建会话">＋ 新建</button>
+              </div>
+              <div className="chat-sess-list">
+                {sessions.length === 0 && (
+                  <div className="note" style={{ padding: '4px 0' }}>暂无历史会话，发送消息即自动创建。</div>
+                )}
+                {sessions.map((s) => (
+                  <div key={s.id}
+                    className={`chat-sess ${s.id === sessionId ? 'on' : ''}`}
+                    onClick={() => switchSession(s.id)}>
+                    {renamingId === s.id ? (
+                      <input
+                        className="chat-sess-input"
+                        value={renameDraft}
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitRename()
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                      />
+                    ) : (
+                      <span className="chat-sess-title" title={s.title}>{s.title}</span>
+                    )}
+                    <span className="chat-sess-count">{s.message_count}</span>
+                    {renamingId !== s.id && (
+                      <span className="chat-sess-ops" onClick={(e) => e.stopPropagation()}>
+                        <button className="op" title="重命名" onClick={() => startRename(s)}>✎</button>
+                        <button className="op del" title="删除" onClick={() => removeSession(s.id)}>×</button>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="chat-main">
@@ -490,8 +640,16 @@ export default function ChatPage({ refreshKey }: Props) {
                   向「{sel?.name ?? '数字人'}」提问吧。它会只依据自己的本体知识回答。
                 </div>
               )}
-              {messages.map((m) => (
-                <div key={m.id} className={`chat-msg ${m.role}`}>{m.content}</div>
+              {grouped.map((g) => (
+                <div key={g.key} className="chat-day">
+                  <div className="chat-day-label">{g.label}</div>
+                  {g.items.map((m) => (
+                    <div key={m.id} className={`chat-msg ${m.role}`}>
+                      <span className="chat-msg-time">{timeLabel(m.created_at)}</span>
+                      <span className="chat-msg-body">{m.content}</span>
+                    </div>
+                  ))}
+                </div>
               ))}
               {sending && <div className="chat-msg assistant chat-typing">正在思考…</div>}
             </div>

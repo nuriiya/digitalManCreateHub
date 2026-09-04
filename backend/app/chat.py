@@ -249,31 +249,100 @@ def _wrap_user_prompt_tail(prompt: str) -> str:
 
 # ---------------- history persistence ----------------
 
-def _history_messages(conn, identity_id: int, limit: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT role, content FROM chat_messages WHERE identity_id=?"
-        " ORDER BY id DESC LIMIT ?", (identity_id, limit)).fetchall()
+def _history_messages(conn, identity_id: int, limit: int,
+                      session_id: int | None = None) -> list[dict]:
+    if session_id is not None:
+        rows = conn.execute(
+            "SELECT role, content FROM chat_messages WHERE identity_id=?"
+            " AND session_id=? ORDER BY id DESC LIMIT ?",
+            (identity_id, session_id, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT role, content FROM chat_messages WHERE identity_id=?"
+            " AND session_id IS NULL ORDER BY id DESC LIMIT ?",
+            (identity_id, limit)).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
-def _save(conn, identity_id: int, role: str, content: str) -> None:
+def _save(conn, identity_id: int, role: str, content: str,
+          session_id: int | None = None) -> None:
     conn.execute(
-        "INSERT INTO chat_messages(identity_id, role, content, created_at)"
-        " VALUES(?,?,?,?)", (identity_id, role, content, db.now()))
+        "INSERT INTO chat_messages(identity_id, role, content, created_at, session_id)"
+        " VALUES(?,?,?,?,?)", (identity_id, role, content, db.now(), session_id))
     conn.commit()
 
 
-def list_messages(conn, identity_id: int) -> list[dict]:
-    return [dict(r) for r in conn.execute(
-        "SELECT id, identity_id, role, content, created_at FROM chat_messages"
-        " WHERE identity_id=? ORDER BY id", (identity_id,)).fetchall()]
+def list_messages(conn, identity_id: int, session_id: int | None = None) -> list[dict]:
+    if session_id is not None:
+        rows = conn.execute(
+            "SELECT id, identity_id, role, content, created_at, session_id"
+            " FROM chat_messages WHERE identity_id=? AND session_id=?"
+            " ORDER BY id", (identity_id, session_id)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, identity_id, role, content, created_at, session_id"
+            " FROM chat_messages WHERE identity_id=?"
+            " ORDER BY id", (identity_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
-def clear_messages(conn, identity_id: int) -> int:
-    cur = conn.execute("DELETE FROM chat_messages WHERE identity_id=?",
-                       (identity_id,))
+def clear_messages(conn, identity_id: int, session_id: int | None = None) -> int:
+    if session_id is not None:
+        cur = conn.execute(
+            "DELETE FROM chat_messages WHERE identity_id=? AND session_id=?",
+            (identity_id, session_id))
+    else:
+        cur = conn.execute("DELETE FROM chat_messages WHERE identity_id=?",
+                           (identity_id,))
     conn.commit()
     return cur.rowcount
+
+
+# ---------------- chat sessions (multi-session history) ----------------
+
+def _auto_title(message: str) -> str:
+    """Derive a session title from the first user message."""
+    one = " ".join((message or "").split())
+    return (one[:20] + "…") if len(one) > 20 else (one or "新对话")
+
+
+def create_session(conn, identity_id: int, title: str = "") -> dict | None:
+    if not _identity(conn, identity_id):
+        return None
+    cur = conn.execute(
+        "INSERT INTO chat_sessions(identity_id, title, created_at) VALUES(?,?,?)",
+        (identity_id, title or "新对话", db.now()))
+    conn.commit()
+    return {"id": cur.lastrowid, "identity_id": identity_id,
+            "title": title or "新对话", "created_at": db.now()}
+
+
+def rename_session(conn, session_id: int, title: str) -> bool:
+    title = (title or "").strip()
+    if not title:
+        return False
+    cur = conn.execute("UPDATE chat_sessions SET title=? WHERE id=?",
+                       (title, session_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_session(conn, session_id: int) -> int:
+    """Delete a session and its messages. Returns message count deleted."""
+    n = conn.execute("DELETE FROM chat_messages WHERE session_id=?",
+                     (session_id,)).rowcount
+    conn.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
+    conn.commit()
+    return n
+
+
+def list_sessions(conn, identity_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT s.id, s.identity_id, s.title, s.created_at,"
+        " (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count"
+        " FROM chat_sessions s WHERE s.identity_id=? ORDER BY s.id DESC",
+        (identity_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------- responder dispatch (multi-model) ----------------
@@ -713,7 +782,8 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 
 def _generate(conn, identity_id: int, message: str, use_ontology: bool,
               provider: str, ollama_model: str | None,
-              concept_fallback: bool = False, use_rag: bool = False) -> dict:
+              concept_fallback: bool = False, use_rag: bool = False,
+              session_id: int | None = None) -> dict:
     """Core one-shot generation (validation + retrieval + assembly + dispatch),
     shared by `answer` (persist) and `compare` (A/B, no persist).
 
@@ -743,7 +813,7 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
     anchors = _approved_anchors(conn, identity_id)
     ontology = _persona_ontology(conn, identity_id)
     relations = _relations(conn, identity_id)
-    history = _history_messages(conn, identity_id, HISTORY_LIMIT)
+    history = _history_messages(conn, identity_id, HISTORY_LIMIT, session_id)
 
     if use_ontology:
         query_text = _query_text(message, history)
@@ -842,9 +912,9 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
 
 def answer(conn, identity_id: int, message: str, use_ontology: bool = True,
            provider: str = "llm2", ollama_model: str | None = None,
-           use_rag: bool = False) -> dict:
+           use_rag: bool = False, session_id: int | None = None) -> dict:
     """Answer one user message as the persona, grounded by its ontology, and
-    persist the turn to chat_messages.
+    persist the turn to chat_messages (grouped under a chat session).
 
     provider selects the responder (llm2=GLM 5.2 default / llm=DeepSeek
     V4-Flash / ollama=local 7B). use_ontology=False strips the ontology block
@@ -852,19 +922,34 @@ def answer(conn, identity_id: int, message: str, use_ontology: bool = True,
     use_rag=True additionally injects top-K corpus snippets as 参考资料
     (independent of the ontology block, may be combined).
 
+    When session_id is omitted, a new session is auto-created (titled from the
+    first message) so the conversation lands in a fresh, named thread; if
+    generation then fails, the empty session is rolled back.
+
     Raises llm.LLMError when the responder is configured but unreachable (the
     caller must surface it — iron law 2). Returns {"ok": False, "error": ...}
     for deterministic input errors (unknown identity / empty message)."""
+    created_session = False
+    if session_id is None:
+        sess = create_session(conn, identity_id, _auto_title(message))
+        if sess is None:
+            return {"ok": False, "error": f"数字人 #{identity_id} 不存在"}
+        session_id = sess["id"]
+        created_session = True
     result = _generate(conn, identity_id, message, use_ontology, provider,
-                       ollama_model, concept_fallback=True, use_rag=use_rag)
+                       ollama_model, concept_fallback=True, use_rag=use_rag,
+                       session_id=session_id)
     if not result.get("ok"):
+        if created_session:
+            delete_session(conn, session_id)  # roll back the empty session
         return result
-    _save(conn, identity_id, "user", message)
-    _save(conn, identity_id, "assistant", result["reply"])
+    _save(conn, identity_id, "user", message, session_id)
+    _save(conn, identity_id, "assistant", result["reply"], session_id)
     return {
         "ok": True,
         "reply": result["reply"],
-        "messages": list_messages(conn, identity_id),
+        "session_id": session_id,
+        "messages": list_messages(conn, identity_id, session_id),
         "context": result["context"],
     }
 

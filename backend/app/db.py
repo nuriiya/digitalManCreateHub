@@ -498,12 +498,22 @@ CREATE INDEX IF NOT EXISTS idx_persona_ont_identity
     ON persona_ontology(identity_id);
 
 -- chat history
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    identity_id BIGINT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_identity
+    ON chat_sessions(identity_id);
+
 CREATE TABLE IF NOT EXISTS chat_messages (
     id BIGSERIAL PRIMARY KEY,
     identity_id BIGINT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at DOUBLE PRECISION NOT NULL
+    created_at DOUBLE PRECISION NOT NULL,
+    session_id BIGINT REFERENCES chat_sessions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_chat_identity
     ON chat_messages(identity_id);
@@ -584,6 +594,9 @@ def _init_schema(conn: _Conn) -> None:
         # kv's PK is `k` (TEXT), same RETURNING id shim issue — kv_set crashed
         # ingest's assert_model_lock. Same fix.
         cur.execute("ALTER TABLE kv ADD COLUMN IF NOT EXISTS id BIGSERIAL")
+        # chat_sessions migration (2026-09-05): chat_messages gains a nullable
+        # session_id so conversations can be grouped into named sessions.
+        cur.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id BIGINT")
     conn.commit()
 
 

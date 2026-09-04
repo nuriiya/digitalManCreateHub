@@ -975,6 +975,7 @@ class ChatBody(BaseModel):
     use_rag: bool = False              # toggle optional corpus-reference injection
     provider: str = "llm2"             # llm2 | llm | ollama
     ollama_model: str | None = None    # required when provider == "ollama"
+    session_id: int | None = None      # chat session; omitted -> auto-create
 
 
 class CompareArm(BaseModel):
@@ -1023,7 +1024,8 @@ def persona_chat(body: ChatBody):
                              use_ontology=body.use_ontology,
                              provider=body.provider,
                              ollama_model=body.ollama_model,
-                             use_rag=body.use_rag)
+                             use_rag=body.use_rag,
+                             session_id=body.session_id)
     except llm.LLMError as e:
         return JSONResponse({"error": f"模型调用失败：{e}"}, status_code=502)
     if not result.get("ok"):
@@ -1052,13 +1054,50 @@ def persona_chat_compare(body: CompareBody):
 
 
 @app.get("/api/chat/messages")
-def chat_messages(identity_id: int):
-    return {"messages": chat.list_messages(db.get_conn(), identity_id)}
+def chat_messages(identity_id: int, session_id: int | None = None):
+    return {"messages": chat.list_messages(db.get_conn(), identity_id, session_id)}
 
 
 @app.delete("/api/chat/messages")
-def clear_chat_messages(identity_id: int):
-    return {"ok": True, "deleted": chat.clear_messages(db.get_conn(), identity_id)}
+def clear_chat_messages(identity_id: int, session_id: int | None = None):
+    return {"ok": True, "deleted": chat.clear_messages(db.get_conn(), identity_id, session_id)}
+
+
+# ---------------- chat sessions (multi-session history) ----------------
+
+class SessionCreateBody(BaseModel):
+    identity_id: int
+    title: str = ""
+
+
+class SessionRenameBody(BaseModel):
+    title: str
+
+
+@app.get("/api/chat/sessions")
+def chat_sessions(identity_id: int):
+    return {"sessions": chat.list_sessions(db.get_conn(), identity_id)}
+
+
+@app.post("/api/chat/sessions")
+def create_chat_session(body: SessionCreateBody):
+    sess = chat.create_session(db.get_conn(), body.identity_id, body.title)
+    if sess is None:
+        return JSONResponse({"error": f"数字人 #{body.identity_id} 不存在"},
+                            status_code=404)
+    return {"ok": True, "session": sess}
+
+
+@app.patch("/api/chat/sessions/{session_id}")
+def rename_chat_session(session_id: int, body: SessionRenameBody):
+    if not chat.rename_session(db.get_conn(), session_id, body.title):
+        return JSONResponse({"error": "会话不存在或标题为空"}, status_code=400)
+    return {"ok": True}
+
+
+@app.delete("/api/chat/sessions/{session_id}")
+def delete_chat_session(session_id: int):
+    return {"ok": True, "deleted": chat.delete_session(db.get_conn(), session_id)}
 
 
 # ---------------- persona benchmark (四组对照测试 + 本体问题归因 + 版本管理) ----------------
