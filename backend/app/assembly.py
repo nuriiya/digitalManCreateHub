@@ -390,10 +390,16 @@ def confirm_assembly(conn, identity_id: int | None = None) -> dict:
     """User's one-click final adjudication over pending batches (optionally
     scoped to one persona). Copies every adopted candidate into
     persona_ontology; exclude is a no-op. Nothing is copied until this call."""
-    q = "SELECT * FROM assembly_batches WHERE status='pending'"
+    # Select any batch that still HAS pending items — NOT batches whose status
+    # is 'pending'. A batch can be left 'confirmed' while its items are still
+    # 'pending' (a historical deadlock half-committed the batch row before its
+    # items); scoping by batch.status would make those items un-confirmable.
+    q = ("SELECT DISTINCT b.id, b.identity_id FROM assembly_batches b"
+         " JOIN assembly_items ai ON ai.batch_id = b.id"
+         " WHERE ai.status='pending'")
     args: tuple = ()
     if identity_id is not None:
-        q += " AND identity_id=?"
+        q += " AND b.identity_id=?"
         args = (identity_id,)
     batches = [dict(r) for r in conn.execute(q, args).fetchall()]
     if not batches:
