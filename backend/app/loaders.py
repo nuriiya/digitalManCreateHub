@@ -83,6 +83,7 @@ def scan_workdir(work_dir: str, recursive: bool = True) -> list[Path]:
 
 def _load_text_plain(p: Path) -> dict:
     text = p.read_text(encoding="utf-8", errors="replace")
+    text = text.replace("\x00", "")  # PG text can't hold NUL
     file_type = _file_type_of(_ext_of(p))
     chunks = [_make_chunk(0, text, file_type, p.name, start=0, end=len(text))]
     return {"name": p.name, "path": str(p), "text": text, "note": None,
@@ -102,6 +103,7 @@ def _load_pdf(p: Path) -> dict:
         else:
             empty_pages += 1
     text = "\n".join(parts)
+    text = text.replace("\x00", "")  # PG text can't hold NUL; some PDFs emit it
     note = None
     if not text.strip():
         note = "no text layer (scanned pdf?) - skipped"

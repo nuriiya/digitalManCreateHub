@@ -28,6 +28,7 @@ Dedup policy (user-decided 2026-09-04):
   - New name -> INSERT a fresh row.
 """
 import hashlib
+import json
 
 from . import db, jobs, loaders, llm, embedding
 from .jsonb import maybe_jsonb
@@ -153,7 +154,7 @@ def _ingest_one_file(conn, job_id: int, doc: dict, start_chunk_index: int
                 (doc_id, c["index"], c["text"], meta["summary"],
                  meta["tags"] or [], emb,
                  _content_hash(c["text"]),
-                 c.get("source_meta") or {}))
+                 json.dumps(c.get("source_meta") or {}, ensure_ascii=False)))
             # atomic unit: data + progress in one tx
             done_local += 1
             jobs.update_progress(conn, job_id, start_chunk_index + done_local)

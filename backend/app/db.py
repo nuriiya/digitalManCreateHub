@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE TABLE IF NOT EXISTS events (
     seq BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     job_id BIGINT REFERENCES jobs(id) ON DELETE CASCADE,
     type TEXT NOT NULL,
     payload JSONB,
@@ -309,7 +310,8 @@ CREATE TABLE IF NOT EXISTS relations (
 
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
-    v JSONB NOT NULL
+    v JSONB NOT NULL,
+    id BIGSERIAL
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -530,6 +532,14 @@ def _init_schema(conn: _Conn) -> None:
         # Migrations for databases created before a column existed.
         cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS"
                     " tags TEXT[] NOT NULL DEFAULT '{}'::text[]")
+        # events uses `seq` as its business PK, but the RETURNING id shim in
+        # _Conn.execute appends RETURNING id to every INSERT — add an id column
+        # so the shim doesn't crash on events (regression found 2026-09-05:
+        # no job ever started post-migration because create_job -> emit died).
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS id BIGSERIAL")
+        # kv's PK is `k` (TEXT), same RETURNING id shim issue — kv_set crashed
+        # ingest's assert_model_lock. Same fix.
+        cur.execute("ALTER TABLE kv ADD COLUMN IF NOT EXISTS id BIGSERIAL")
     conn.commit()
 
 
