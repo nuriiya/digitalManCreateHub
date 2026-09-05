@@ -327,7 +327,7 @@ def run_pipeline(conn, job_id: int, path: str, identity_id: int | None) -> None:
     # step 1: 添加资料
     jobs.update_progress(conn, job_id, 0, 3)
     jobs.emit(conn, job_id, "pipeline.step", {"step": 1, "name": "添加资料", "status": "running"})
-    ing_job = jobs.create_job(conn, "ingest", 0, detail=path)
+    ing_job = jobs.create_job(conn, "ingest", 0, detail=path, parent_id=job_id)
     jobs.run_in_background(ing_job, ingest.ingest_workdir, path)
     st = jobs.wait_job(conn, ing_job)
     if st != "done":
@@ -338,7 +338,7 @@ def run_pipeline(conn, job_id: int, path: str, identity_id: int | None) -> None:
     jobs.update_progress(conn, job_id, 1, 3)
     jobs.emit(conn, job_id, "pipeline.step", {"step": 2, "name": "本体提取", "status": "running"})
     n = conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
-    ont_job = jobs.create_job(conn, "ontology", n, detail="EDC-lite extraction")
+    ont_job = jobs.create_job(conn, "ontology", n, detail="EDC-lite extraction", parent_id=job_id)
     jobs.run_in_background(ont_job, ontology.run_extraction)
     st = jobs.wait_job(conn, ont_job)
     if st != "done":
@@ -360,7 +360,8 @@ def run_pipeline(conn, job_id: int, path: str, identity_id: int | None) -> None:
         return
     jobs.update_progress(conn, job_id, 2, 3)
     jobs.emit(conn, job_id, "pipeline.step", {"step": 3, "name": "装配", "status": "running"})
-    asm_job = jobs.create_job(conn, "assemble", 0, detail="数字人本体装配", ref_id=identity_id)
+    asm_job = jobs.create_job(conn, "assemble", 0, detail="数字人本体装配",
+                              ref_id=identity_id, parent_id=job_id)
     jobs.run_in_background(asm_job, assembly.run_assembly, identity_id)
     st = jobs.wait_job(conn, asm_job)
     if st != "done":

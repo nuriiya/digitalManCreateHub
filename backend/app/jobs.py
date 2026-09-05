@@ -74,14 +74,15 @@ def drain_telemetry(conn) -> None:
 
 
 def create_job(conn, kind: str, total: int, detail: str = "",
-               ref_id: int | None = None) -> int:
+               ref_id: int | None = None, parent_id: int | None = None) -> int:
     cur = conn.execute(
         "INSERT INTO jobs(kind, status, progress_current, progress_total, detail,"
-        " ref_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
-        (kind, "running", 0, total, detail, ref_id, db.now(), db.now()))
+        " ref_id, parent_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (kind, "running", 0, total, detail, ref_id, parent_id, db.now(), db.now()))
     conn.commit()
     job_id = cur.lastrowid
-    emit(conn, job_id, "job.started", {"kind": kind, "total": total, "detail": detail})
+    emit(conn, job_id, "job.started", {"kind": kind, "total": total,
+                                       "detail": detail, "parent_id": parent_id})
     return job_id
 
 

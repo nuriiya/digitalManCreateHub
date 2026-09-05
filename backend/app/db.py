@@ -286,6 +286,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     cancel_flag BIGINT NOT NULL DEFAULT 0,
     ref_id BIGINT,
+    parent_id BIGINT,
     created_at DOUBLE PRECISION NOT NULL,
     updated_at DOUBLE PRECISION NOT NULL
 );
@@ -630,6 +631,8 @@ def _init_schema(conn: _Conn) -> None:
         # parenthetical-stripped). Backfilled by scripts/backfill_name_norm.py.
         cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS name_norm TEXT NOT NULL DEFAULT ''")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_kind_norm ON candidates(kind, name_norm)")
+        # jobs parent_id (2026-09-05): pipeline sub-jobs nest under their parent.
+        cur.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parent_id BIGINT")
     conn.commit()
 
 

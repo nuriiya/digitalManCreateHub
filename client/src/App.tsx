@@ -277,6 +277,52 @@ const doRepair = async () => {
   const ontologyBusy = !!activeJob('ontology')
   const pipelineBusy = !!activeJob('pipeline') || !!activeJob('assemble') || ingestBusy || ontologyBusy
 
+  // 单条任务行（父/子复用）；子任务缩进且不重复渲染详情展开
+  const renderJobRow = (j: any, isSub: boolean) => (
+    <div key={j.id} className={isSub ? 'job-sub' : undefined}>
+      <div className={`jobline${isSub ? ' sub' : ''}`}>
+        <span className="kind clickable" onClick={() => setExpandedJob(expandedJob === j.id ? null : j.id)}>
+          {expandedJob === j.id ? '▾' : '▸'} {j.kind} #{j.id}
+        </span>
+        <span className={`status-pill ${j.status}`}>{j.status}</span>
+        <div className="bar">
+          <div className="progressbar">
+            <div style={{ width: `${j.progress_total ? Math.round(100 * j.progress_current / j.progress_total) : 0}%` }} />
+          </div>
+        </div>
+        <span className="num">{j.progress_current}/{j.progress_total}</span>
+        {j.error && <span className="warn" title={j.error}>错误</span>}
+        <span className="jobactions">
+          {j.status === 'running' && (
+            <button className="btn ghost small" onClick={() => doPause(j.id)}>暂停</button>
+          )}
+          {(j.status === 'paused' || j.status === 'failed' || j.status === 'cancelled') && (
+            <button className="btn ghost small green" onClick={() => doResume(j.id)}>继续</button>
+          )}
+          <button className="btn ghost small red" onClick={() => doDelete(j.id)}>删除</button>
+        </span>
+      </div>
+      {j.error && (
+        <div className="joberr" title={j.error}>
+          {j.status === 'paused' ? '⚠ 已自动暂停 · ' : '⚠ '}{j.error}
+          {j.status === 'paused' && '（排查后点「继续」重跑）'}
+        </div>
+      )}
+      {!isSub && expandedJob === j.id && (
+        <div className="jobdetail">
+          <div className="note">
+            {j.detail}
+            {j.error ? ` · ${j.error}` : ''}
+          </div>
+          <div className="log">
+            {jobEvents.length === 0 && <div className="ev">（无事件）</div>}
+            {jobEvents.map((e) => <EventRow key={e.seq} e={e} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'conversation', label: '对话' },
     { id: 'ingest', label: '数字人创建台' },
@@ -340,48 +386,10 @@ const doRepair = async () => {
             </div>
             <div className="card">
               <h3>任务进度（点击行展开详情，含发给大模型的内容）</h3>
-              {jobs.map((j) => (
+              {jobs.filter((j) => j.parent_id == null).map((j) => (
                 <div key={j.id}>
-                  <div className="jobline">
-                    <span className="kind clickable" onClick={() => setExpandedJob(expandedJob === j.id ? null : j.id)}>
-                      {expandedJob === j.id ? '▾' : '▸'} {j.kind} #{j.id}
-                    </span>
-                    <span className={`status-pill ${j.status}`}>{j.status}</span>
-                    <div className="bar">
-                      <div className="progressbar">
-                        <div style={{ width: `${j.progress_total ? Math.round(100 * j.progress_current / j.progress_total) : 0}%` }} />
-                      </div>
-                    </div>
-                    <span className="num">{j.progress_current}/{j.progress_total}</span>
-                    {j.error && <span className="warn" title={j.error}>错误</span>}
-                    <span className="jobactions">
-                      {j.status === 'running' && (
-                        <button className="btn ghost small" onClick={() => doPause(j.id)}>暂停</button>
-                      )}
-                      {(j.status === 'paused' || j.status === 'failed' || j.status === 'cancelled') && (
-                        <button className="btn ghost small green" onClick={() => doResume(j.id)}>继续</button>
-                      )}
-                      <button className="btn ghost small red" onClick={() => doDelete(j.id)}>删除</button>
-                    </span>
-                  </div>
-                  {j.error && (
-                    <div className="joberr" title={j.error}>
-                      {j.status === 'paused' ? '⚠ 已自动暂停 · ' : '⚠ '}{j.error}
-                      {j.status === 'paused' && '（排查后点「继续」重跑）'}
-                    </div>
-                  )}
-                  {expandedJob === j.id && (
-                    <div className="jobdetail">
-                      <div className="note">
-                        {j.detail}
-                        {j.error ? ` · ${j.error}` : ''}
-                      </div>
-                      <div className="log">
-                        {jobEvents.length === 0 && <div className="ev">（无事件）</div>}
-                        {jobEvents.map((e) => <EventRow key={e.seq} e={e} />)}
-                      </div>
-                    </div>
-                  )}
+                  {renderJobRow(j, false)}
+                  {jobs.filter((s) => s.parent_id === j.id).map((sub) => renderJobRow(sub, true))}
                 </div>
               ))}
               {!jobs.length && <div className="note">暂无任务</div>}
