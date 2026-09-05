@@ -37,7 +37,7 @@ def search_arxiv(query: str, max_results: int = 10) -> list[dict]:
     """在 arXiv 搜索论文，返回标题/作者/摘要/年份/PDF 链接。"""
     url = "https://export.arxiv.org/api/query"
     params = {"search_query": f"all:{query}", "start": 0,
-              "max_results": max_results, "sortBy": "relevance"}
+              "max_results": max_results, "sortBy": "submittedDate"}
     r = _client().get(url, params=params)
     r.raise_for_status()
     root = ET.fromstring(r.text)
