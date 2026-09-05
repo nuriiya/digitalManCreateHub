@@ -201,6 +201,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const [texts, setTexts] = useState<Record<number, string>>({})
   const [q, setQ] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'doubt'>('all')
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [mergeInto, setMergeInto] = useState('')
   const [checked, setChecked] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
@@ -461,10 +462,21 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const isDoubtful = (c: Cand) =>
     !!c.exam && (c.exam.fail > 0 || c.exam.missing > 0)
 
+  // 领域标签计数（6 类闭集，按固定顺序）——用于标签筛选 chips
+  const TAG_ORDER = ['规则', '法律', '专业知识', '术语概念', '数据指标', '案例示例']
+  const tagCounts = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const c of visible) {
+      for (const t of c.tags || []) m[t] = (m[t] || 0) + 1
+    }
+    return TAG_ORDER.map((t) => [t, m[t] || 0] as const)
+  }, [visible])
+
   const filtered = loadedVisible.filter((c) =>
     (statusFilter === 'all' ||
       (statusFilter === 'doubt' ? isDoubtful(c) : c.status === statusFilter)) &&
-    (!q || c.name.toLowerCase().includes(q.toLowerCase())),
+    (!q || c.name.toLowerCase().includes(q.toLowerCase())) &&
+    (!tagFilter || (c.tags || []).includes(tagFilter)),
   )
 
   // ---------------- multi-select + batch delete ----------------
@@ -747,6 +759,17 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
               <button key={s} className={statusFilter === s ? 'on' : ''}
                 onClick={() => setStatusFilter(s)}>
                 {s === 'all' ? '全部' : s === 'pending' ? '待审' : s === 'approved' ? '已批准' : '存疑'}
+              </button>
+            ))}
+          </div>
+          <div className="og-tag-filter">
+            <span className="og-chip-label">领域</span>
+            {tagCounts.map(([t, n]) => (
+              <button key={t}
+                className={`og-chip ${tagFilter === t ? 'on' : ''}${n === 0 ? ' empty' : ''}`}
+                onClick={() => setTagFilter(tagFilter === t ? null : t)}
+                disabled={n === 0}>
+                {t} · {n}
               </button>
             ))}
           </div>

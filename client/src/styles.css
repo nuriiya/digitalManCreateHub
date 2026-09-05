@@ -814,6 +814,9 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
   font-size: 11px; color: var(--muted); opacity: .75;
   align-self: center; margin-right: 2px;
 }
+.og-tag-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.og-chip.empty { opacity: .38; cursor: not-allowed; }
+.og-chip.empty:hover { color: var(--muted); border-color: var(--border); }
 
 /* ---- 添加资料弹窗（选项 A/B · 日志 · 冲突面板） ---- */
 .dlg .dlg-head {

@@ -17,8 +17,10 @@ import re
 from . import db, jobs, llm
 
 ENTITY_TYPES = {"概念", "角色", "系统", "流程", "规则", "对象", "其他"}
-# Domain tags: an orthogonal dimension to `kind`. Preset closed set seeds the
-# UI, but custom tags are allowed (LLM nominates, code gates length/count).
+# Domain tags: an orthogonal dimension to `kind`. CLOSED preset set — tags
+# must come from this fixed taxonomy (rules / law / domain knowledge / term /
+# metric / example) so the ontology stays a stable classification, not a pile
+# of free-form keywords. The LLM nominates from the closed set; code enforces it.
 TAG_PRESET = {"规则", "法律", "专业知识", "术语概念", "数据指标", "案例示例"}
 MAX_TAGS_PER_ENTITY = 5
 MAX_TAG_LEN = 16
@@ -29,9 +31,9 @@ MAX_DEFINITION_LEN = 300
 # ---------------- gate 1: structure ----------------
 
 def _normalize_tags(tags) -> list[str]:
-    """Deterministic cleanup: strip, drop blanks, dedupe, cap count. Custom
-    tags (outside TAG_PRESET) are kept — the LLM may propose, code only gates
-    format (the preset is a convenience seed, not a closed set)."""
+    """Deterministic cleanup + closed-set filter: strip, drop blanks, dedupe,
+    cap count, and DROP any tag outside TAG_PRESET. The closed set keeps tags
+    a stable taxonomy (the LLM only nominates from the preset list)."""
     if not isinstance(tags, list):
         return []
     out: list[str] = []
@@ -40,7 +42,7 @@ def _normalize_tags(tags) -> list[str]:
         if not isinstance(t, str):
             continue
         t = t.strip()
-        if not t or t in seen or len(t) > MAX_TAG_LEN:
+        if not t or t in seen or t not in TAG_PRESET:
             continue
         seen.add(t)
         out.append(t)
@@ -89,6 +91,8 @@ def validate_structure(cand: dict) -> tuple[bool, str]:
                 return False, f"tag too long: {t}"
             if t in seen:
                 return False, f"duplicate tag: {t}"
+            if t not in TAG_PRESET:
+                return False, f"tag not in closed set: {t}"
             seen.add(t)
     return True, ""
 
@@ -142,10 +146,9 @@ def _extract_prompt(chunk_text: str, anchors: str = "") -> str:
         "合并重复与近义项，去芜存菁；实体与关系各不超过 20 个。"
         "mentions 必须是文本中**逐字出现**的原文片段（这是硬性要求，"
         "不允许改写、翻译或概括）。\n"
-        "每个实体标注 1~5 个「领域标签」：优先从预设集选择"
-        f"（{' / '.join(sorted(TAG_PRESET))}），"
-        "预设不贴合时可自拟简短标签（≤16 字）。标签描述实体所属的知识域，"
-        "与 type（实体类型）是正交的两个维度。\n"
+        "每个实体标注 1~5 个「领域标签」，且**只能**从以下固定分类里选："
+        f"{' / '.join(sorted(TAG_PRESET))}。不得自拟标签。"
+        "标签描述实体所属的知识域，与 type（实体类型）是正交的两个维度。\n"
         "同时请针对该文本内容出 2~3 道考题（用于之后检验提取出的本体是否够用），"
         "考题的 evidence 必须是文本中**逐字出现**的原文片段。\n"
         "严格按 JSON 输出：\n"

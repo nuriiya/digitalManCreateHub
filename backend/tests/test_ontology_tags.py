@@ -4,10 +4,17 @@ from app import ontology
 
 
 def test_normalize_tags_dedupe_strip_cap():
+    # 闭集：只保留 6 类预设，strip/去重/限数
     assert ontology._normalize_tags([" 规则 ", "规则", "法律"]) == ["规则", "法律"]
-    assert ontology._normalize_tags(["a", "b", "c", "d", "e", "f"]) == ["a", "b", "c", "d", "e"]
-    assert ontology._normalize_tags(["x" * 20, "ok"]) == ["ok"]
-    assert ontology._normalize_tags(["", "  ", None, "ok"]) == ["ok"]
+    # 预设外标签被丢弃（闭集收敛，不再保留自由标签）
+    assert ontology._normalize_tags(["AI智能体", "计算化学", "规则"]) == ["规则"]
+    assert ontology._normalize_tags(["a", "b", "c", "d", "e", "f"]) == []
+    assert ontology._normalize_tags(["x" * 20, "ok"]) == []
+    assert ontology._normalize_tags(["", "  ", None, "规则"]) == ["规则"]
+    # 限数：最多 5 个
+    assert ontology._normalize_tags(
+        ["规则", "法律", "专业知识", "术语概念", "数据指标", "案例示例"]
+    ) == ["规则", "法律", "专业知识", "术语概念", "数据指标"]
     assert ontology._normalize_tags("not-a-list") == []
     assert ontology._normalize_tags(None) == []
 
