@@ -293,7 +293,7 @@ export default function ChatPage({ refreshKey }: Props) {
   return (
     <div className="card">
       <h3>
-        数字人对话
+        数字人测试（调试）
         <span className="note" style={{ marginLeft: 8 }}>
           可选 GLM 5.2 / DeepSeek / 本地 Ollama 7B · 本体约束 / RAG 资料各自可开关（幻觉 A/B 对比）
         </span>

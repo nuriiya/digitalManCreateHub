@@ -233,6 +233,10 @@ export const getPersonaOntology = (identityId?: number) =>
 export interface ChatMessage {
   id: number; identity_id: number; role: 'user' | 'assistant'
   content: string; created_at: number; session_id?: number | null
+  identity_name?: string | null
+}
+export interface ChatRoute {
+  identity_id: number; identity_name: string; score: number; matched: string[]
 }
 export interface ChatSession {
   id: number; identity_id: number; title: string
@@ -290,6 +294,10 @@ export interface ChatModels {
   ollama: { configured: boolean; models: string[]; base_url: string; error?: string }
 }
 export const getChatModels = () => api<ChatModels>('/api/chat/models')
+export const routeChat = (message: string) =>
+  api<{ route: ChatRoute | null }>('/api/chat/route', {
+    method: 'POST', body: JSON.stringify({ message }),
+  })
 export const sendChat = (
   identityId: number, message: string,
   opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null; session_id?: number | null } = {},

@@ -27,6 +27,19 @@ MAX_TAG_LEN = 16
 MAX_NAME_LEN = 32
 MAX_DEFINITION_LEN = 300
 
+# name normalization for dedupe: lower-case, drop parentheticals, collapse
+# whitespace — so "Large Language Models", "large language models (LLMs)" and
+# "LLM" all fold to one canonical key instead of three near-duplicate entities.
+_PAREN = re.compile(r"[（(].*?[)）]")
+_WS = re.compile(r"\s+")
+
+
+def _norm_name(name: str) -> str:
+    n = (name or "").strip().lower()
+    n = _PAREN.sub(" ", n)
+    n = _WS.sub(" ", n)
+    return n.strip()
+
 
 # ---------------- gate 1: structure ----------------
 
@@ -114,9 +127,16 @@ def locate_mention(mention: str, chunk_text: str) -> tuple[int, int] | None:
 # ---------------- gate 3: semantics (dedupe) ----------------
 
 def find_duplicate(conn, kind: str, name: str, exclude_id: int | None = None) -> dict | None:
+    # exact match first (fast path), then normalized match (folds case /
+    # parenthetical variants into one canonical key)
+    norm = _norm_name(name)
     row = conn.execute(
         "SELECT id, kind, name, definition, status FROM candidates"
         " WHERE kind=? AND name=?", (kind, name.strip())).fetchone()
+    if row is None and norm:
+        row = conn.execute(
+            "SELECT id, kind, name, definition, status FROM candidates"
+            " WHERE kind=? AND name_norm=?", (kind, norm)).fetchone()
     if row is None:
         return None
     if exclude_id is not None and row["id"] == exclude_id:
@@ -323,9 +343,10 @@ def run_extraction(conn, job_id: int) -> None:
                 dupes += 1
                 continue
             cur = conn.execute(
-                "INSERT INTO candidates(kind, name, definition, status, tags, created_at)"
-                " VALUES('entity', ?, ?, 'pending', ?, ?)",
-                (ent["name"].strip(), (ent.get("definition") or "").strip(),
+                "INSERT INTO candidates(kind, name, name_norm, definition, status, tags, created_at)"
+                " VALUES('entity', ?, ?, ?, 'pending', ?, ?)",
+                (ent["name"].strip(), _norm_name(ent["name"]),
+                 (ent.get("definition") or "").strip(),
                  _normalize_tags(ent.get("tags")), db.now()))
             conn.commit()
             cand_id = cur.lastrowid

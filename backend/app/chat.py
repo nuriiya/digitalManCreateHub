@@ -146,6 +146,43 @@ def persona_context(conn, identity_id: int) -> dict | None:
     }
 
 
+def route_identity(conn, message: str) -> dict | None:
+    """Deterministic auto-routing: decide which approved digital persona should
+    answer this message (0 LLM — the routing is a pure string-match score, in
+    line with the iron law that the LLM never adjudicates).
+
+    Score = how many of the persona's ontology-段 entities + anchors literally
+    appear in (or contain) the message. Highest score wins; None when there is
+    no approved persona or nothing matched (caller then asks the user to pick).
+    """
+    idents = [dict(r) for r in conn.execute(
+        "SELECT id, name FROM identities WHERE status='approved' ORDER BY id"
+    ).fetchall()]
+    if not idents:
+        return None
+    msg = (message or "").strip().lower()
+    if not msg:
+        return None
+    best: dict | None = None
+    for i in idents:
+        score = 0
+        matched: list[str] = []
+        for o in _persona_ontology(conn, i["id"]):
+            nm = (o.get("name") or "").strip().lower()
+            if nm and (nm in msg or (len(nm) >= 3 and msg in nm)):
+                score += 3
+                matched.append(o["name"])
+        for a in _approved_anchors(conn, i["id"]):
+            nm = (a.get("name") or "").strip().lower()
+            if nm and nm in msg:
+                score += 2
+                matched.append(a["name"])
+        if score > 0 and (best is None or score > best["score"]):
+            best = {"identity_id": i["id"], "identity_name": i["name"],
+                    "score": score, "matched": list(dict.fromkeys(matched))}
+    return best
+
+
 def _fmt_anchor(a: dict) -> str:
     defn = (a.get("definition") or "").strip()
     return f"- {a['name']}（{a.get('type') or '概念'}）" + (f"：{defn}" if defn else "")
@@ -273,16 +310,19 @@ def _save(conn, identity_id: int, role: str, content: str,
 
 
 def list_messages(conn, identity_id: int, session_id: int | None = None) -> list[dict]:
+    # session 模式：按会话查全部消息（可跨数字人），带 identity_name 供气泡标注
     if session_id is not None:
         rows = conn.execute(
-            "SELECT id, identity_id, role, content, created_at, session_id"
-            " FROM chat_messages WHERE identity_id=? AND session_id=?"
-            " ORDER BY id", (identity_id, session_id)).fetchall()
+            "SELECT m.id, m.identity_id, m.role, m.content, m.created_at,"
+            " m.session_id, i.name AS identity_name"
+            " FROM chat_messages m LEFT JOIN identities i ON i.id = m.identity_id"
+            " WHERE m.session_id=? ORDER BY m.id", (session_id,)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, identity_id, role, content, created_at, session_id"
-            " FROM chat_messages WHERE identity_id=?"
-            " ORDER BY id", (identity_id,)).fetchall()
+            "SELECT m.id, m.identity_id, m.role, m.content, m.created_at,"
+            " m.session_id, i.name AS identity_name"
+            " FROM chat_messages m LEFT JOIN identities i ON i.id = m.identity_id"
+            " WHERE m.identity_id=? ORDER BY m.id", (identity_id,)).fetchall()
     return [dict(r) for r in rows]
 
 

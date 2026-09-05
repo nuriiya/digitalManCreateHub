@@ -332,6 +332,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     id BIGSERIAL PRIMARY KEY,
     kind TEXT NOT NULL,
     name TEXT NOT NULL,
+    name_norm TEXT NOT NULL DEFAULT '',
     definition TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     merged_into BIGINT,
@@ -603,6 +604,10 @@ def _init_schema(conn: _Conn) -> None:
         # chat_sessions migration (2026-09-05): chat_messages gains a nullable
         # session_id so conversations can be grouped into named sessions.
         cur.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id BIGINT")
+        # candidates name_norm (2026-09-05): normalized dedupe key (lower-case +
+        # parenthetical-stripped). Backfilled by scripts/backfill_name_norm.py.
+        cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS name_norm TEXT NOT NULL DEFAULT ''")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_kind_norm ON candidates(kind, name_norm)")
     conn.commit()
 
 

@@ -978,6 +978,10 @@ class ChatBody(BaseModel):
     session_id: int | None = None      # chat session; omitted -> auto-create
 
 
+class RouteBody(BaseModel):
+    message: str
+
+
 class CompareArm(BaseModel):
     use_ontology: bool = True
     use_rag: bool = False
@@ -1012,6 +1016,14 @@ def chat_models():
         "error": probe.get("error"),
     }
     return out
+
+
+@app.post("/api/chat/route")
+def chat_route(body: RouteBody):
+    """Auto-route a message to the best-matching approved digital persona
+    (deterministic score, 0 LLM). Returns None when nothing matched."""
+    r = chat.route_identity(db.get_conn(), body.message)
+    return {"route": r}
 
 
 @app.post("/api/chat")

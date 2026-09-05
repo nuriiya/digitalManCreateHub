@@ -640,6 +640,10 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 }
 .chat-msg-time { font-size: 10px; opacity: 0.55; line-height: 1; }
 .chat-msg-body { white-space: pre-wrap; word-break: break-word; }
+.cv-identity {
+  font-size: 10px; font-weight: 600; line-height: 1; color: var(--green);
+  opacity: 0.9;
+}
 .chat-day { display: flex; flex-direction: column; gap: 8px; }
 .chat-day-label {
   align-self: center; font-size: 11px; color: var(--muted);
