@@ -63,6 +63,10 @@ export const triggerIngest = () => api('/api/rag/ingest', { method: 'POST' })
 export const triggerRepair = () => api('/api/rag/repair-summaries', { method: 'POST' })
 export const triggerOntology = () => api<{ job_id: number; resumed?: boolean }>(
   '/api/ontology/extract', { method: 'POST' })
+export const triggerPipeline = (opts: { identity_id?: number | null } = {}) =>
+  api<{ job_id: number }>('/api/ontology/pipeline', {
+    method: 'POST', body: JSON.stringify(opts),
+  })
 export interface UploadConflict { name: string; doc_id: number; reason: string }
 export interface UploadResult {
   job_id: number

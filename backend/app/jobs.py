@@ -113,6 +113,23 @@ def finish_job(conn, job_id: int, ok: bool, error: str | None = None) -> None:
     emit(conn, job_id, "job.finished" if ok else "job.failed", {"error": error})
 
 
+def wait_job(conn, job_id: int, timeout: float = 7200) -> str:
+    """Poll a job until a terminal state. Returns the status ('done' / 'failed'
+    / 'paused' / 'cancelled' / 'missing' / 'timeout'). Used by the pipeline
+    orchestrator to run ingest → ontology → assemble sequentially."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        row = conn.execute("SELECT status FROM jobs WHERE id=?",
+                           (job_id,)).fetchone()
+        if not row:
+            return "missing"
+        if row["status"] in ("done", "failed", "paused", "cancelled"):
+            return row["status"]
+        time.sleep(2)
+    return "timeout"
+
+
 # ---------------- cooperative control (pause / resume / delete) ----------------
 
 def request_pause(conn, job_id: int) -> bool:

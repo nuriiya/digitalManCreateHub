@@ -345,15 +345,15 @@ def search(conn, query: str, top_k: int = 5, tag: str | None = None) -> list[dic
     if tag:
         rows = conn.execute(
             "SELECT id, doc_id, seq, text, summary, tags, source_meta,"
-            " 1 - (embedding <=> ?) AS score FROM chunks"
+            " 1 - (embedding <=> ?::vector) AS score FROM chunks"
             " WHERE ? = ANY(tags)"
-            " ORDER BY embedding <=> ? LIMIT ?",
+            " ORDER BY embedding <=> ?::vector LIMIT ?",
             (q_emb, tag, q_emb, top_k)).fetchall()
     else:
         rows = conn.execute(
             "SELECT id, doc_id, seq, text, summary, tags, source_meta,"
-            " 1 - (embedding <=> ?) AS score FROM chunks"
-            " ORDER BY embedding <=> ? LIMIT ?",
+            " 1 - (embedding <=> ?::vector) AS score FROM chunks"
+            " ORDER BY embedding <=> ?::vector LIMIT ?",
             (q_emb, q_emb, top_k)).fetchall()
     out = []
     for r in rows:

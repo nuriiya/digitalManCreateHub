@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  triggerOntology, triggerRepair, getJobs, getStats,
+  triggerOntology, triggerRepair, getJobs, getStats, triggerPipeline,
   pauseJob, resumeJob, deleteJob, getJobEvents,
   getToken, setToken,
 } from './api'
@@ -246,6 +246,13 @@ const doRepair = async () => {
       refreshJobs()
     } catch (e: any) { toast(e.message, 'err') }
   }
+  const doPipeline = async () => {
+    try {
+      const r = await triggerPipeline()
+      toast(`一键流水线任务 #${r.job_id} 已启动（添加资料 → 本体提取 → 装配）`, 'ok')
+      refreshJobs()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
   const doPause = async (id: number) => {
     try { await pauseJob(id); toast(`任务 #${id} 将在当前 chunk 完成后暂停`, 'ok') }
     catch (e: any) { toast(e.message, 'err') }
@@ -268,12 +275,13 @@ const doRepair = async () => {
     jobs.find((j) => j.kind === kind && (j.status === 'running' || j.status === 'paused'))
   const ingestBusy = !!activeJob('ingest') || !!activeJob('repair')
   const ontologyBusy = !!activeJob('ontology')
+  const pipelineBusy = !!activeJob('pipeline') || !!activeJob('assemble') || ingestBusy || ontologyBusy
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'ingest', label: '入库' },
+    { id: 'conversation', label: '对话' },
+    { id: 'ingest', label: '数字人创建台' },
     { id: 'rag', label: 'RAG 预览' },
     { id: 'ontology', label: '本体图谱' },
-    { id: 'conversation', label: '对话' },
     { id: 'chat', label: '测试' },
     { id: 'mcp', label: 'MCP 沙盒' },
     { id: 'settings', label: '设置' },
@@ -304,16 +312,31 @@ const doRepair = async () => {
         {tab === 'ingest' && (
           <>
             <div className="card">
-              <h3>管线触发</h3>
-              <div className="desc">工作目录与模型在「设置」页配置。入库：加载→分段→摘要/标签（Flash）→嵌入→入库；本体提取：EDC 式提名→三关校验→待审批。同类型任务运行中不可重复触发（防并发写库冲突）。</div>
+              <h3>数字人创建台</h3>
+              <div className="desc">
+                一键流水线自动串起三步：<b>① 添加资料</b>（加载→分段→摘要→嵌入）→ <b>② 本体提取</b>（提名→三关校验）→ <b>③ 装配</b>（装配到数字人本体段）。下方任务栏可查看三步各自进度。
+              </div>
               <div className="btnrow">
-                <button className="btn" onClick={() => setShowIngestDialog(true)}
-                        disabled={ingestBusy}
-                        title={ingestBusy ? '入库/修复任务进行中' : ''}>① 添加资料</button>
-                <button className="btn ghost" onClick={doRepair} disabled={ingestBusy} title="重跑之前因网络波动退化为规则兜底的摘要/标签（LLM 未配置时无需修复）">③ 修复兜底摘要</button>
-                <button className="btn ghost" onClick={doOntology} disabled={!stats.chunks || ontologyBusy} title={ontologyBusy ? '本体提取任务进行中' : ''}>② 本体提取（提名+校验）</button>
+                <button className="btn green" onClick={doPipeline}
+                        disabled={pipelineBusy}
+                        title={pipelineBusy ? '已有流水线/入库/提取/装配任务进行中' : ''}>
+                  一键创建数字人（添加资料 → 本体提取 → 装配）
+                </button>
                 <button className="btn ghost" onClick={refreshJobs}>刷新</button>
               </div>
+              <details style={{ marginTop: 10 }}>
+                <summary className="note">高级：分步手动触发</summary>
+                <div className="btnrow" style={{ marginTop: 8 }}>
+                  <button className="btn ghost" onClick={() => setShowIngestDialog(true)}
+                          disabled={ingestBusy}
+                          title={ingestBusy ? '入库/修复任务进行中' : ''}>① 添加资料</button>
+                  <button className="btn ghost" onClick={doOntology}
+                          disabled={!stats.chunks || ontologyBusy}
+                          title={ontologyBusy ? '本体提取任务进行中' : ''}>② 本体提取（提名+校验）</button>
+                  <button className="btn ghost" onClick={doRepair} disabled={ingestBusy}
+                          title="重跑之前因网络波动退化为规则兜底的摘要/标签">③ 修复兜底摘要</button>
+                </div>
+              </details>
             </div>
             <div className="card">
               <h3>任务进度（点击行展开详情，含发给大模型的内容）</h3>

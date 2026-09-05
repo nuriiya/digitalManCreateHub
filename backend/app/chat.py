@@ -26,6 +26,7 @@ Iron laws:
     cannot be overridden by it (tail is wrapped so the persona sees it as
     guidance, never as a rule).
 """
+import json
 import re
 from collections import defaultdict
 
@@ -820,6 +821,42 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 
 # ---------------- answer / compare ----------------
 
+MAX_ACTION_ROUNDS = 3
+_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)(?:</[^>]*>|\Z)", re.DOTALL)
+
+
+def _actions_block(actions_list: list[dict]) -> str:
+    lines = "\n".join(f"- {a['name']}：{a['description']}" for a in actions_list)
+    return (
+        "\n\n你拥有以下可用动作（需要时通过 <tool_call> 调用）：\n"
+        + lines +
+        "\n调用动作时，只输出这一行（不要额外文字），严格以 </tool_call> 结尾：\n"
+        "<tool_call>{\"name\": \"动作名\", \"args\": {\"query\": \"...\"}}</tool_call>\n"
+        "然后停止，等待执行结果。不需要动作时直接回答。"
+    )
+
+
+def _parse_tool_call(reply: str) -> tuple[str, dict] | None:
+    m = _TOOL_CALL.search(reply or "")
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        data = json.loads(raw[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = str(data.get("name") or "").strip()
+    args = data.get("args") or {}
+    if not name or not isinstance(args, dict):
+        return None
+    return name, args
+
+
 def _generate(conn, identity_id: int, message: str, use_ontology: bool,
               provider: str, ollama_model: str | None,
               concept_fallback: bool = False, use_rag: bool = False,
@@ -892,11 +929,43 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
         "rag": rag_texts,
     }
     system = _system_prompt(ctx, use_ontology=use_ontology)
+    # 附上该数字人已批准的动作清单（六元组 actions）
+    from . import actions as actions_mod
+    approved_acts = actions_mod.approved_actions(conn, identity_id)
+    if approved_acts:
+        system += _actions_block(approved_acts)
+
     messages = [{"role": "system", "content": system}] + history + [
         {"role": "user", "content": message}]
 
     usage: dict = {}
     reply = _dispatch(provider, messages, ollama_model, usage)  # raises LLMError
+
+    # 动作调用循环（tool-use）：LLM 只提名 <tool_call>，guard 确定性裁决，执行后注入
+    tool_calls: list[dict] = []
+    for _ in range(MAX_ACTION_ROUNDS):
+        parsed = _parse_tool_call(reply)
+        if not parsed:
+            break
+        name, args = parsed
+        ok, reason, action_row = actions_mod.guard_action(conn, identity_id, name, args)
+        if not ok:
+            tool_calls.append({"name": name, "ok": False, "reason": reason})
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({"role": "user",
+                             "content": f"动作「{name}」被拒绝：{reason}。请直接回答或换一种方式。"})
+            reply = _dispatch(provider, messages, ollama_model, usage)
+            continue
+        result = actions_mod.execute_action(conn, identity_id, action_row, args)
+        tool_calls.append({"name": name, "ok": result.get("ok", False),
+                           "result": (result.get("result") if result.get("ok")
+                                      else result.get("error"))})
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user",
+                         "content": "动作「" + name + "」执行结果："
+                         + json.dumps(result, ensure_ascii=False)
+                         + "。请基于此结果继续回答。"})
+        reply = _dispatch(provider, messages, ollama_model, usage)
 
     prompt_tokens = usage.get("prompt_tokens")
     estimate = not isinstance(prompt_tokens, int)
@@ -915,6 +984,8 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
             "use_ontology": use_ontology,
             "use_rag": use_rag,
             "rag": rag_info,
+            "tool_calls": tool_calls,
+            "actions_available": [a["name"] for a in approved_acts],
             "anchors": [{"name": a["name"],
                          "definition": a.get("definition") or ""}
                         for a in anchors],

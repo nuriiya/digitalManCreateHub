@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions
 
 
 def _sha256(text: str) -> str:
@@ -309,6 +309,86 @@ def trigger_ontology():
     job_id = jobs.create_job(conn, "ontology", total=n, detail="EDC-lite extraction")
     jobs.run_in_background(job_id, ontology.run_extraction)
     return {"job_id": job_id, "resumed": False}
+
+
+# ---------------- one-click pipeline (数字人创建台) ----------------
+
+class PipelineBody(BaseModel):
+    path: str | None = None
+    identity_id: int | None = None
+
+
+def run_pipeline(conn, job_id: int, path: str, identity_id: int | None) -> None:
+    """一键流水线：添加资料 → 本体提取 → 装配，三步串行（各自是子 job）。
+
+    Each step spawns a real sub-job and waits for it; a step that does not
+    reach 'done' aborts the pipeline with a step-scoped error. If no persona
+    is given, step 3 picks the first approved one (or skips with a notice)."""
+    # step 1: 添加资料
+    jobs.update_progress(conn, job_id, 0, 3)
+    jobs.emit(conn, job_id, "pipeline.step", {"step": 1, "name": "添加资料", "status": "running"})
+    ing_job = jobs.create_job(conn, "ingest", 0, detail=path)
+    jobs.run_in_background(ing_job, ingest.ingest_workdir, path)
+    st = jobs.wait_job(conn, ing_job)
+    if st != "done":
+        jobs.finish_job(conn, job_id, ok=False, error=f"步骤1「添加资料」{st}")
+        return
+
+    # step 2: 本体提取
+    jobs.update_progress(conn, job_id, 1, 3)
+    jobs.emit(conn, job_id, "pipeline.step", {"step": 2, "name": "本体提取", "status": "running"})
+    n = conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
+    ont_job = jobs.create_job(conn, "ontology", n, detail="EDC-lite extraction")
+    jobs.run_in_background(ont_job, ontology.run_extraction)
+    st = jobs.wait_job(conn, ont_job)
+    if st != "done":
+        jobs.finish_job(conn, job_id, ok=False, error=f"步骤2「本体提取」{st}")
+        return
+
+    # step 3: 装配
+    if identity_id is None:
+        row = conn.execute(
+            "SELECT id FROM identities WHERE status='approved' ORDER BY id LIMIT 1"
+        ).fetchone()
+        identity_id = row["id"] if row else None
+    if identity_id is None:
+        jobs.emit(conn, job_id, "pipeline.step",
+                  {"step": 3, "name": "装配", "status": "skipped",
+                   "reason": "无已批准数字人"})
+        jobs.update_progress(conn, job_id, 3, 3)
+        jobs.finish_job(conn, job_id, ok=True)
+        return
+    jobs.update_progress(conn, job_id, 2, 3)
+    jobs.emit(conn, job_id, "pipeline.step", {"step": 3, "name": "装配", "status": "running"})
+    asm_job = jobs.create_job(conn, "assemble", 0, detail="数字人本体装配", ref_id=identity_id)
+    jobs.run_in_background(asm_job, assembly.run_assembly, identity_id)
+    st = jobs.wait_job(conn, asm_job)
+    if st != "done":
+        jobs.finish_job(conn, job_id, ok=False, error=f"步骤3「装配」{st}")
+        return
+
+    jobs.update_progress(conn, job_id, 3, 3)
+    jobs.finish_job(conn, job_id, ok=True)
+
+
+@app.post("/api/ontology/pipeline")
+def trigger_pipeline(body: PipelineBody):
+    """一键流水线入口（数字人创建台）：添加资料 → 本体提取 → 装配。"""
+    conn = db.get_conn()
+    s = settings_store.load_settings()
+    path = body.path or s["work_dir"]
+    if not path:
+        return JSONResponse({"error": "work_dir 未设置"}, status_code=400)
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS | {"assemble", "pipeline"})
+    if active:
+        return JSONResponse(
+            {"error": f"任务 #{active['id']} 正在运行（{active['status']}），请先等待完成"},
+            status_code=409)
+    job_id = jobs.create_job(conn, "pipeline", 3,
+                             detail="一键流水线：添加资料 → 本体提取 → 装配",
+                             ref_id=body.identity_id)
+    jobs.run_in_background(job_id, run_pipeline, path, body.identity_id)
+    return {"job_id": job_id}
 
 
 @app.post("/api/rag/upload-files")
@@ -922,6 +1002,38 @@ def trigger_assembly(body: AssembleBody):
 @app.get("/api/ontology/assembly")
 def get_assembly(identity_id: int | None = None):
     return assembly.pending_summary(db.get_conn(), identity_id)
+
+
+# ---------------- persona actions (六元组 actions 维度) ----------------
+
+class ActionNominateBody(BaseModel):
+    identity_id: int
+
+
+class ActionStatusBody(BaseModel):
+    status: str
+
+
+@app.get("/api/ontology/actions")
+def list_persona_actions(identity_id: int):
+    return {"actions": actions.list_actions(db.get_conn(), identity_id)}
+
+
+@app.post("/api/ontology/actions/nominate")
+def nominate_persona_actions(body: ActionNominateBody):
+    """LLM 提名动作（只提名），三关校验后落库 pending，待用户审批。"""
+    result = actions.nominate_actions(db.get_conn(), body.identity_id)
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error", "nominate failed")},
+                            status_code=400)
+    return result
+
+
+@app.post("/api/ontology/actions/{action_id}/status")
+def set_persona_action_status(action_id: int, body: ActionStatusBody):
+    if not actions.set_action_status(db.get_conn(), action_id, body.status):
+        return JSONResponse({"error": "invalid status or id"}, status_code=400)
+    return {"ok": True}
 
 
 class AssemblyActionBody(BaseModel):

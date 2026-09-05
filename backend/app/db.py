@@ -504,6 +504,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_ont_uniq
 CREATE INDEX IF NOT EXISTS idx_persona_ont_identity
     ON persona_ontology(identity_id);
 
+-- persona actions (六元组 actions 维度): a digital person's callable actions.
+-- Definition mirrors the Claude Agent SDK tool schema (name + description +
+-- input_schema JSON Schema), plus a binding: kind = 'mcp' (bind an MCP tool) or
+-- 'builtin' (bind a built-in capability like ontology/RAG retrieval).
+CREATE TABLE IF NOT EXISTS persona_actions (
+    id BIGSERIAL PRIMARY KEY,
+    identity_id BIGINT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    input_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    kind TEXT NOT NULL DEFAULT 'builtin',
+    mcp_server_id BIGINT,
+    mcp_tool_name TEXT,
+    builtin_name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_action_uniq
+    ON persona_actions(identity_id, name);
+CREATE INDEX IF NOT EXISTS idx_persona_action_identity
+    ON persona_actions(identity_id);
+
 -- chat history
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id BIGSERIAL PRIMARY KEY,
