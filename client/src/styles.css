@@ -168,7 +168,7 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 /* ontology graph (React Flow, three-column) */
 .og-wrap { display: flex; height: 560px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .og-side {
-  width: 230px; min-width: 230px; max-width: 230px; flex-shrink: 0;
+  width: 340px; min-width: 340px; max-width: 340px; flex-shrink: 0;
   background: var(--panel); border-right: 1px solid var(--border); padding: 10px;
   display: flex; flex-direction: column; gap: 10px; overflow: hidden;
   box-sizing: border-box; min-height: 0;
