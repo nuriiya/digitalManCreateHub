@@ -32,6 +32,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import psycopg
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DSN_FILE = DATA_DIR / "pg_dsn"  # start.ps1 writes it after starting pgvector
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,6 +138,15 @@ class _Conn:
         pgvector registration, autocommit toggling, etc.)."""
         return self._c
 
+    def _reconnect(self):
+        """Drop the dead connection and open a fresh one (PG restart / network
+        blip). The new connection re-runs register_vector + the session SETs."""
+        try:
+            self._c.close()
+        except Exception:
+            pass
+        self._c = _connect()
+
     def execute(self, sql: str, params: Any = ()):
         sql = _q2s(sql)
         is_read = bool(_READ.match(sql))
@@ -149,6 +160,14 @@ class _Conn:
                 # ALTER TABLE) from taking AccessExclusiveLock. End the read
                 # transaction immediately so read-only queries (WS events
                 # polling, benchmark stats) never wedge schema migrations.
+                self._c.commit()
+            return result
+        except psycopg.OperationalError:
+            # Connection died mid-flight (PG restarted, container recreated,
+            # network blip). Reconnect and retry the statement once.
+            self._reconnect()
+            result = self._do_execute(sql, params)
+            if is_read:
                 self._c.commit()
             return result
         except Exception as e:  # noqa: BLE001 - recover, then re-raise
