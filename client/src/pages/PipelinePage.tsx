@@ -9,6 +9,7 @@ import {
   type Identity,
 } from '../api'
 import { useToast } from '../Toast'
+import TrainerPanel from '../components/TrainerPanel'
 
 const REL_TYPE_LABEL: Record<string, string> = {
   design: '设计', supply: '供给知识', review: '复核', handoff: '交接', compose: '组装',
@@ -58,7 +59,7 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   const [sel, setSel] = useState<number | null>(null)
   const [cur, setCur] = useState<Pipeline | null>(null)
   const [idents, setIdents] = useState<Identity[]>([])
-  const [view, setView] = useState<'graph' | 'edit' | 'chat'>('graph')
+  const [view, setView] = useState<'graph' | 'edit' | 'chat' | 'train'>('graph')
   const [changes, setChanges] = useState<PipelineChange[]>([])
   const [valErrors, setValErrors] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
@@ -230,6 +231,7 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
                 <button className={`btn ${view === 'graph' ? '' : 'ghost'} small`} onClick={() => setView('graph')}>流程图</button>
                 <button className={`btn ${view === 'edit' ? '' : 'ghost'} small`} onClick={() => setView('edit')}>编辑</button>
                 <button className={`btn ${view === 'chat' ? '' : 'ghost'} small`} onClick={() => setView('chat')}>对话</button>
+                <button className={`btn ${view === 'train' ? '' : 'ghost'} small`} onClick={() => setView('train')}>训练</button>
                 <span style={{ marginLeft: 'auto' }} className="note">
                   v{cur.version} · {cur.status} · {cur.tags.join(' / ')}
                 </span>
@@ -345,6 +347,8 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
                 </div>
               </div>
             )}
+
+            {view === 'train' && <TrainerPanel personas={idents} />}
           </>
         )}
       </div>

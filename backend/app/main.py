@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer
 
 
 def _sha256(text: str) -> str:
@@ -1933,6 +1933,54 @@ def capability_repo_log():
 @app.post("/api/capability/repo/rollback")
 def capability_repo_rollback(body: dict):
     return capability.repo_rollback((body or {}).get("hash", ""))
+
+
+# ---------------- Pipeline 训练师（找训练集→建基线→迭代→更新数字人） ----------------
+
+@app.get("/api/trainer")
+def trainer_info():
+    """训练师信息 + 训练集（能力题按角色分组）。"""
+    conn = db.get_conn()
+    tid = trainer.ensure_trainer(conn)
+    return {"trainer_id": tid, "train_sets": trainer.list_train_sets(conn)}
+
+
+@app.get("/api/trainer/tasks")
+def trainer_tasks(persona_role: str = "code_engineer"):
+    """某角色的训练集（能力题）。"""
+    return {"tasks": trainer.list_tasks_by_role(db.get_conn(), persona_role)}
+
+
+@app.get("/api/trainer/ontology")
+def trainer_ontology(identity_id: int):
+    return {"ontology": trainer.list_ontology(db.get_conn(), identity_id)}
+
+
+@app.post("/api/trainer/baseline")
+def trainer_baseline(body: dict):
+    """建基线：目标数字人批量跑题。body={identity_id, task_ids, provider}"""
+    return trainer.baseline(
+        db.get_conn(), int(body.get("identity_id") or 0),
+        body.get("task_ids") or [], body.get("provider", "llm"))
+
+
+@app.post("/api/trainer/iterate")
+def trainer_iterate(body: dict):
+    """训练迭代：装配本体 + 重新测 + 提升率。body={identity_id, task_ids, ontology_seeds}"""
+    conn = db.get_conn()
+    tid = trainer.ensure_trainer(conn)
+    return trainer.train_iteration(
+        conn, tid, int(body.get("identity_id") or 0),
+        body.get("task_ids") or [], body.get("provider", "llm"),
+        body.get("ontology_seeds") or [])
+
+
+@app.post("/api/trainer/report")
+def trainer_report(body: dict):
+    """训练报告：通过率 + 本体。"""
+    return trainer.report(
+        db.get_conn(), int(body.get("identity_id") or 0),
+        body.get("task_ids") or [], body.get("provider", "llm"))
 
 
 # ---------------- static frontend (dist) ----------------
