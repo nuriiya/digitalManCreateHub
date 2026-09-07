@@ -58,16 +58,26 @@ def list_tasks_by_role(conn, persona_role) -> list[dict]:
         " ORDER BY id", (persona_role,)).fetchall()]
 
 
-def baseline(conn, identity_id, task_ids, provider="llm") -> dict:
-    """建基线：批量跑题，返回通过率 + 逐题结果。"""
+def baseline(conn, identity_id, task_ids, provider="llm", samples=1) -> dict:
+    """建基线：批量跑题，返回通过率 + 逐题结果。
+
+    samples>1 时每题跑多次取多数票（LLM 解题有随机性，单次采样噪声大，
+    多数票才是稳定信号）。逐题结果 verdict 为多数票，另附 per_sample。
+    """
     results = []
     for tid in task_ids:
-        r = capability.run_for_identity(conn, identity_id, tid, provider=provider)
-        results.append({"task_id": tid, "verdict": r.get("verdict")})
+        votes = []
+        for _ in range(samples):
+            r = capability.run_for_identity(conn, identity_id, tid, provider=provider)
+            votes.append(r.get("verdict"))
+        passes = votes.count("pass")
+        verdict = "pass" if passes > len(votes) / 2 else "fail"
+        results.append({"task_id": tid, "verdict": verdict,
+                        "per_sample": votes, "pass_count": passes})
     passed = sum(1 for x in results if x["verdict"] == "pass")
     return {"total": len(results), "pass": passed,
             "pass_rate": round(passed / len(results), 4) if results else None,
-            "results": results}
+            "results": results, "samples": samples}
 
 
 def add_ontology(conn, identity_id, kind, name, definition, note="") -> int:
@@ -200,10 +210,11 @@ def _validate_seeds(seeds: list[dict]) -> list[dict]:
 
 
 def auto_iterate(conn, trainer_id, identity_id, task_ids, provider="llm",
-                 max_rounds=3, progress=None) -> dict:
+                 max_rounds=3, samples=1, progress=None) -> dict:
     """自动迭代闭环：跑题 → 失败归因 → 提名本体 → 三关 → 装配 → 复测。
 
     循环直到无提升或达 max_rounds。返回逐轮记录 + 最终提升率。
+    samples>1 时每题跑多次取多数票（消除 LLM 解题随机性）。
     progress 可选回调（job 进度上报用）。
     """
     def _tick(stage, done, total, msg=""):
@@ -211,9 +222,10 @@ def auto_iterate(conn, trainer_id, identity_id, task_ids, provider="llm",
             progress(stage=stage, done=done, total=total, msg=msg)
 
     rounds = []
-    base = baseline(conn, identity_id, task_ids, provider)
+    base = baseline(conn, identity_id, task_ids, provider, samples)
     base_rate = base["pass_rate"] or 0
-    _tick("baseline", len(task_ids), len(task_ids), f"基线 {base['pass']}/{base['total']}")
+    _tick("baseline", len(task_ids), len(task_ids),
+          f"基线 {base['pass']}/{base['total']}（×{samples} 采样）")
     prev_rate = base_rate
 
     for rnd in range(1, max_rounds + 1):
@@ -234,7 +246,7 @@ def auto_iterate(conn, trainer_id, identity_id, task_ids, provider="llm",
                          note=f"训练师 #{trainer_id} 自动归因（第 {rnd} 轮）")
             added += 1
 
-        after = baseline(conn, identity_id, task_ids, provider)
+        after = baseline(conn, identity_id, task_ids, provider, samples)
         after_rate = after["pass_rate"] or 0
         improvement = round(after_rate - prev_rate, 4)
         _tick("round_done", len(task_ids), len(task_ids),
@@ -269,7 +281,7 @@ def auto_iterate(conn, trainer_id, identity_id, task_ids, provider="llm",
 # ---------------- 训练任务（后台线程 + 进度上报） ----------------
 
 def start_job(identity_id: int, task_ids: list[int], provider="llm",
-              max_rounds=3, auto=True, ontology_seeds=None) -> str:
+              max_rounds=3, auto=True, ontology_seeds=None, samples=1) -> str:
     """启动一个训练任务（后台线程），返回 job_id。前端轮询 job_progress 拿进度。"""
     job_id = uuid.uuid4().hex[:12]
     with _JOBS_LOCK:
@@ -296,7 +308,7 @@ def start_job(identity_id: int, task_ids: list[int], provider="llm",
             if auto:
                 result = auto_iterate(conn, tid, identity_id, task_ids,
                                       provider=provider, max_rounds=max_rounds,
-                                      progress=_progress)
+                                      samples=samples, progress=_progress)
             else:
                 result = train_iteration(conn, tid, identity_id, task_ids,
                                          provider=provider,

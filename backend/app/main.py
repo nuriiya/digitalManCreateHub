@@ -1986,7 +1986,7 @@ def trainer_report(body: dict):
 @app.post("/api/trainer/auto")
 def trainer_auto(body: dict):
     """启动自动迭代训练（后台线程），返回 job_id。
-    body={identity_id, task_ids, provider, max_rounds}"""
+    body={identity_id, task_ids, provider, max_rounds, samples}"""
     identity_id = int(body.get("identity_id") or 0)
     task_ids = body.get("task_ids") or []
     if not identity_id or not task_ids:
@@ -1995,6 +1995,7 @@ def trainer_auto(body: dict):
         identity_id, task_ids,
         provider=body.get("provider", "llm"),
         max_rounds=int(body.get("max_rounds") or 3),
+        samples=int(body.get("samples") or 1),
         auto=True)
     return {"ok": True, "job_id": job_id}
 

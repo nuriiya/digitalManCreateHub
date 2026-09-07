@@ -18,6 +18,7 @@ export default function TrainerPanel({ personas }: { personas: Identity[] }) {
   const [targetId, setTargetId] = useState<number>(0)
   const [taskCount, setTaskCount] = useState<number>(12)
   const [provider, setProvider] = useState<'llm' | 'llm2'>('llm')
+  const [samples, setSamples] = useState<number>(1)
   const [busy, setBusy] = useState(false)
   const [job, setJob] = useState<JobProgress | null>(null)
   const [result, setResult] = useState<any>(null)
@@ -58,7 +59,7 @@ export default function TrainerPanel({ personas }: { personas: Identity[] }) {
     try {
       const r = await api<{ job_id: string }>('/api/trainer/auto', {
         method: 'POST',
-        body: JSON.stringify({ identity_id: targetId, task_ids: taskIds(), provider }),
+        body: JSON.stringify({ identity_id: targetId, task_ids: taskIds(), provider, samples }),
       })
       toast('自动迭代已启动', 'ok')
       startPolling(r.job_id)
@@ -123,6 +124,13 @@ export default function TrainerPanel({ personas }: { personas: Identity[] }) {
           <select value={provider} onChange={(e) => setProvider(e.target.value as 'llm' | 'llm2')}>
             <option value="llm">DeepSeek V4 Flash</option>
             <option value="llm2">GLM 5.2</option>
+          </select>
+        </label>
+        <label className="field"><span>每题采样次数（多数票降噪）</span>
+          <select value={samples} onChange={(e) => setSamples(Number(e.target.value))}>
+            <option value={1}>1 次（快）</option>
+            <option value={3}>3 次（推荐，稳定）</option>
+            <option value={5}>5 次（最稳，慢）</option>
           </select>
         </label>
       </div>
