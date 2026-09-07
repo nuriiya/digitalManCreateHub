@@ -762,6 +762,33 @@ CREATE TABLE IF NOT EXISTS pipeline_run_handoffs (
     created_at DOUBLE PRECISION NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_phand_run ON pipeline_run_handoffs(run_id);
+
+-- capability tasks（能力题：任务 + 隐藏测试，判定走可执行验证而非 LLM）
+CREATE TABLE IF NOT EXISTS capability_tasks (
+    id BIGSERIAL PRIMARY KEY,
+    task_key TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL DEFAULT 'code_generation',
+    persona_role TEXT NOT NULL DEFAULT 'code_engineer',
+    prompt TEXT NOT NULL,
+    entry_point TEXT NOT NULL,
+    test TEXT NOT NULL,
+    canonical_solution TEXT,
+    source TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+-- capability runs（能力测试运行：数字人解题 + 可执行验证结果）
+CREATE TABLE IF NOT EXISTS capability_runs (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES capability_tasks(id) ON DELETE CASCADE,
+    identity_id BIGINT REFERENCES identities(id) ON DELETE SET NULL,
+    code TEXT NOT NULL,
+    verdict TEXT NOT NULL DEFAULT 'pending',
+    output TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_caprun_task ON capability_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_caprun_identity ON capability_runs(identity_id);
 """
 
 

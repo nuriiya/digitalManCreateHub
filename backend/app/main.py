@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability
 
 
 def _sha256(text: str) -> str:
@@ -1854,6 +1854,39 @@ def chat_pipeline(pipeline_id: int, body: PipelineChatBody):
         return {"ok": True, "changes": [], "note": "未能解析出有效修改提名"}
     cid = pipeline.nominate_changes(db.get_conn(), pipeline_id, changes)
     return {"ok": True, "change_id": cid, "changes": changes}
+
+
+# ---------------- capability test sandbox（能力型测试：可执行验证） ----------------
+
+class CapabilityRunBody(BaseModel):
+    code: str
+    identity_id: int = None
+
+
+@app.get("/api/capability/tasks")
+def capability_tasks():
+    return {"tasks": capability.list_tasks(db.get_conn())}
+
+
+@app.post("/api/capability/import")
+def capability_import(body: dict):
+    """幂等导入能力题。body = {"tasks": [...]}（convert_humaneval.py 产出）。"""
+    tasks = body.get("tasks") if isinstance(body, dict) else []
+    if not isinstance(tasks, list):
+        return JSONResponse({"error": "tasks must be a list"}, status_code=400)
+    added = capability.import_tasks(db.get_conn(), tasks)
+    return {"ok": True, "added": added}
+
+
+@app.post("/api/capability/tasks/{task_id}/run")
+def capability_run(task_id: int, body: CapabilityRunBody):
+    """跑一道能力题：数字人生的代码丢进一次性容器跑 assert，绿=通过。"""
+    return capability.run_task(db.get_conn(), task_id, body.code, body.identity_id)
+
+
+@app.get("/api/capability/stats")
+def capability_stats(identity_id: int = None):
+    return capability.run_stats(db.get_conn(), identity_id)
 
 
 # ---------------- static frontend (dist) ----------------

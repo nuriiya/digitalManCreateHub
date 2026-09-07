@@ -54,6 +54,8 @@ services:
       RAG_DATABASE_URL: postgresql://postgres:postgres@pg:5432/rag
       EMBEDDING_BASE_URL: http://ollama:11434
       RAG_WORK_DIR: /data
+      # 能力测试沙箱的一次性 python 镜像（国内走镜像前缀，与 Dockerfile 一致）
+      CAPABILITY_SANDBOX_IMAGE: ${REGISTRY_LIBRARY_PREFIX:-}python:3.13-slim
     ports:
       - "8000:8000"
     volumes:
