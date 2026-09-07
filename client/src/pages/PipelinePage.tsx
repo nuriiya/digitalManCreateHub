@@ -18,9 +18,33 @@ const KIND_LABEL: Record<string, string> = {
   nominate: '提名节点', deterministic: '确定性节点',
 }
 
-// 简单拓扑分层布局（DAG）
-function layoutPipeline(p: Pipeline | null): Record<number, { x: number; y: number }> {
-  const pos: Record<number, { x: number; y: number }> = {}
+// 估算文本渲染宽度（中文全角按 1 个字号宽，英文半角按 0.6 个字号宽）
+function textWidth(s: string, fontSize: number): number {
+  let w = 0
+  for (const ch of s) {
+    w += ch.charCodeAt(0) > 0x2E80 ? fontSize : fontSize * 0.6
+  }
+  return w
+}
+
+// 计算节点框宽（根据 node_key / step_name / kind 三行文字自适应，最小 100）
+function nodeBoxWidth(n: PipelineNode, personaName: (id: number | null) => string): number {
+  const label = n.step_name || personaName(n.persona_id)
+  const lines = [
+    { text: n.node_key, fs: 12 },
+    { text: label, fs: 11 },
+    { text: KIND_LABEL[n.kind] || n.kind, fs: 10 },
+  ]
+  const maxText = Math.max(...lines.map((l) => textWidth(l.text, l.fs)))
+  return Math.max(100, Math.min(240, maxText + 28))
+}
+
+// 简单拓扑分层布局（DAG），节点宽度自适应、层内垂直排布
+function layoutPipeline(
+  p: Pipeline | null,
+  personaName: (id: number | null) => string,
+): Record<number, { x: number; y: number; w: number }> {
+  const pos: Record<number, { x: number; y: number; w: number }> = {}
   if (!p) return pos
   const adj: Record<number, number[]> = {}
   const indeg: Record<number, number> = {}
@@ -48,8 +72,21 @@ function layoutPipeline(p: Pipeline | null): Record<number, { x: number; y: numb
     queue.push(...next)
   }
   p.nodes.forEach((n) => { if (!visited.has(n.id)) layers.push([n.id]) })
+
+  const nodeById = new Map(p.nodes.map((n) => [n.id, n]))
+  const widths = layers.map((layer) =>
+    Math.max(...layer.map((id) => nodeBoxWidth(nodeById.get(id)!, personaName))))
+  const H_GAP = 40   // 节点垂直间距
+  const V_GAP = 50   // 层水平间距
+  let x = 40
   layers.forEach((layer, li) => {
-    layer.forEach((id, i) => { pos[id] = { x: 50 + li * 190, y: 60 + i * 100 } })
+    const w = widths[li]
+    let y = 40
+    layer.forEach((id) => {
+      pos[id] = { x, y, w }
+      y += 60 + H_GAP
+    })
+    x += w + V_GAP
   })
   return pos
 }
@@ -171,7 +208,7 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
     } catch (e: any) { toast(e.message, 'err') }
   }
 
-  const layout = useMemo(() => layoutPipeline(cur), [cur])
+  const layout = useMemo(() => layoutPipeline(cur, personaName), [cur, idents])
 
   return (
     <div className="grid cols2" style={{ gridTemplateColumns: '280px 1fr' }}>
@@ -357,9 +394,19 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
 }
 
 // 自绘 SVG 流程图（DAG）
-function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Record<number, { x: number; y: number }>; personaName: (id: number | null) => string }) {
-  const W = Math.max(640, ...cur.nodes.map((n) => layout[n.id]?.x ?? 0).concat([0])) + 220
+function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Record<number, { x: number; y: number; w: number }>; personaName: (id: number | null) => string }) {
+  const W = Math.max(640, ...cur.nodes.map((n) => (layout[n.id]?.x ?? 0) + (layout[n.id]?.w ?? 100)).concat([0])) + 60
   const H = Math.max(300, ...cur.nodes.map((n) => layout[n.id]?.y ?? 0).concat([0])) + 120
+  // 文字超宽时截断（追加 …）
+  const clip = (s: string, fs: number, maxW: number) => {
+    if (textWidth(s, fs) <= maxW) return s
+    let out = ''
+    for (const ch of s) {
+      if (textWidth(out + ch + '…', fs) > maxW) break
+      out += ch
+    }
+    return out + '…'
+  }
   return (
     <div style={{ overflowX: 'auto' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img">
@@ -371,10 +418,11 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
         {cur.relations.map((r) => {
           const a = layout[r.from_node_id]; const b = layout[r.to_node_id]
           if (!a || !b) return null
-          const mx = (a.x + b.x) / 2; const my = (a.y + b.y) / 2
+          const ax = a.x + a.w; const bx = b.x
+          const mx = (ax + bx) / 2; const my = (a.y + b.y) / 2
           return (
             <g key={r.id}>
-              <path d={`M ${a.x + 100} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${b.x + 100} ${b.y + 30}`} fill="none" stroke="#888780" strokeWidth="1.5" markerEnd="url(#parrow)" />
+              <path d={`M ${ax} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${bx} ${b.y + 30}`} fill="none" stroke="#888780" strokeWidth="1.5" markerEnd="url(#parrow)" />
               <text x={mx} y={my - 6} textAnchor="middle" fontSize="11" fill="#5F5E5A">{REL_TYPE_LABEL[r.relation_type] || r.relation_type}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
             </g>
           )
@@ -384,12 +432,14 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           const fill = n.kind === 'deterministic' ? '#E1F5EE' : '#FAEEDA'
           const stroke = n.kind === 'deterministic' ? '#0F6E56' : '#854F0B'
           const title = n.kind === 'deterministic' ? '#085041' : '#633806'
+          const label = n.step_name || personaName(n.persona_id)
+          const cx = p.x + p.w / 2
           return (
             <g key={n.id}>
-              <rect x={p.x} y={p.y} width="100" height="60" rx="8" fill={fill} stroke={stroke} strokeWidth="0.5" />
-              <text x={p.x + 50} y={p.y + 24} textAnchor="middle" fontSize="12" fontWeight="500" fill={title}>{n.node_key}</text>
-              <text x={p.x + 50} y={p.y + 42} textAnchor="middle" fontSize="11" fill={title}>{n.step_name || personaName(n.persona_id)}</text>
-              <text x={p.x + 50} y={p.y + 55} textAnchor="middle" fontSize="10" fill="#888780">{KIND_LABEL[n.kind]}</text>
+              <rect x={p.x} y={p.y} width={p.w} height="60" rx="8" fill={fill} stroke={stroke} strokeWidth="0.5" />
+              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="12" fontWeight="500" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
+              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11" fill={title}>{clip(label, 11, p.w - 16)}</text>
+              <text x={cx} y={p.y + 55} textAnchor="middle" fontSize="10" fill="#888780">{KIND_LABEL[n.kind]}</text>
             </g>
           )
         })}

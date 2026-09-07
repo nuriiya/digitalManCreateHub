@@ -1983,6 +1983,45 @@ def trainer_report(body: dict):
         body.get("task_ids") or [], body.get("provider", "llm"))
 
 
+@app.post("/api/trainer/auto")
+def trainer_auto(body: dict):
+    """启动自动迭代训练（后台线程），返回 job_id。
+    body={identity_id, task_ids, provider, max_rounds}"""
+    identity_id = int(body.get("identity_id") or 0)
+    task_ids = body.get("task_ids") or []
+    if not identity_id or not task_ids:
+        return JSONResponse({"error": "identity_id 和 task_ids 必填"}, status_code=400)
+    job_id = trainer.start_job(
+        identity_id, task_ids,
+        provider=body.get("provider", "llm"),
+        max_rounds=int(body.get("max_rounds") or 3),
+        auto=True)
+    return {"ok": True, "job_id": job_id}
+
+
+@app.post("/api/trainer/run")
+def trainer_run(body: dict):
+    """启动训练任务（手工 seed 模式），后台线程，返回 job_id。"""
+    identity_id = int(body.get("identity_id") or 0)
+    task_ids = body.get("task_ids") or []
+    if not identity_id or not task_ids:
+        return JSONResponse({"error": "identity_id 和 task_ids 必填"}, status_code=400)
+    job_id = trainer.start_job(
+        identity_id, task_ids,
+        provider=body.get("provider", "llm"),
+        auto=False, ontology_seeds=body.get("ontology_seeds") or [])
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/api/trainer/job/{job_id}")
+def trainer_job(job_id: str):
+    """查询训练任务进度（前端轮询）。"""
+    p = trainer.job_progress(job_id)
+    if not p:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+    return p
+
+
 # ---------------- static frontend (dist) ----------------
 
 DIST = Path(__file__).resolve().parent.parent.parent / "client" / "dist"
