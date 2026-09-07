@@ -62,7 +62,7 @@ fi
 # Pull via mirror prefixes then re-tag to standard names so compose does not hit
 # registry-1.docker.io directly. Override the mirrors via REGISTRY_MIRRORS env.
 # Dev skips the ollama image (reuses host Ollama via host.docker.internal).
-MIRRORS="${REGISTRY_MIRRORS:-docker.1ms.run dockerproxy.net}"
+MIRRORS="${REGISTRY_MIRRORS:-dockerproxy.net docker.1ms.run}"
 IMAGES="pgvector/pgvector:pg17"
 [ "$ENV" = "prod" ] && IMAGES="$IMAGES ollama/ollama:latest"
 for img in $IMAGES; do

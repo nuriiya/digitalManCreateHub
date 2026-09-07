@@ -112,7 +112,7 @@ if ($EnvName -eq "prod") {
 # Pull via mirror prefixes then re-tag to the standard names so compose does not
 # hit registry-1.docker.io. This works even when the daemon's registry-mirrors
 # config has not been applied (no daemon restart needed).
-$mirrorPrefixes = @("docker.1ms.run", "dockerproxy.net")
+$mirrorPrefixes = @("dockerproxy.net", "docker.1ms.run")
 $baseImages = @("pgvector/pgvector:pg17")
 if ($EnvName -eq "prod") { $baseImages += @("ollama/ollama:latest") }
 foreach ($img in $baseImages) {
