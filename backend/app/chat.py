@@ -27,6 +27,7 @@ Iron laws:
     guidance, never as a rule).
 """
 import json
+import os
 import re
 from collections import defaultdict
 
@@ -65,7 +66,10 @@ OLLAMA_NUM_CTX_DEFAULT = 2048
 # default local 7B responder: a Modelfile variant with `PARAMETER num_ctx 32768`
 # (Ollama's default num_ctx is 2048 and silently truncates the injected
 # ontology, which would corrupt the hallucination A/B baseline).
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b-32k"
+# qwen2.5:7b-cpu is a sibling variant with num_ctx 4096 — used on hosts
+# without an NVIDIA GPU (pure CPU prefill, ~3 min/turn otherwise); use the
+# full 32k variant only when the benchmark actually needs long context.
+DEFAULT_OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "qwen2.5:7b-cpu")
 
 # chat 可选的 RAG 参考资料注入（「是否使用 RAG」开关）：对用户消息检索
 # 已入库语料，把 top-K 原文片段以【参考资料】注入 system prompt。与本体约束

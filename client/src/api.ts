@@ -59,7 +59,7 @@ export const testLlm = () => api('/api/settings/test-llm', { method: 'POST' })
 export const testLlm2 = () => api('/api/settings/test-llm2', { method: 'POST' })
 export const testEmbedding = () => api('/api/settings/test-embedding', { method: 'POST' })
 
-export const triggerIngest = () => api('/api/rag/ingest', { method: 'POST' })
+export const triggerIngest = () => api<{ job_id: number }>('/api/rag/ingest', { method: 'POST' })
 export const triggerRepair = () => api('/api/rag/repair-summaries', { method: 'POST' })
 export const triggerOntology = () => api<{ job_id: number; resumed?: boolean }>(
   '/api/ontology/extract', { method: 'POST' })

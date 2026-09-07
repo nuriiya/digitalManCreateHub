@@ -75,10 +75,35 @@ _Q2S = re.compile(r"\?")
 _INSERT = re.compile(r"^\s*INSERT\b", re.IGNORECASE)
 _RETURNING = re.compile(r"\bRETURNING\b", re.IGNORECASE)
 _READ = re.compile(r"^\s*(SELECT|WITH|SHOW|EXPLAIN|VALUES)\b", re.IGNORECASE)
+_INSERT_TABLE = re.compile(r'^\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+["\'`\[]?([\w.]+)',
+                           re.IGNORECASE)
+
+# Some tables (events, kv) have no `id` column, so the automatic
+# "RETURNING id" append in _Conn.execute must skip them. Cached per table:
+# the schema is fixed once the app has created its tables.
+_HAS_ID_CACHE: dict[str, bool] = {}
 
 
 def _q2s(sql: str) -> str:
     return _Q2S.sub("%s", sql)
+
+
+def _insert_table(sql: str) -> str | None:
+    """Table targeted by an INSERT, or None if it cannot be parsed."""
+    m = _INSERT_TABLE.match(sql)
+    if not m:
+        return None
+    return m.group(1).split(".")[-1].strip('"\'`[]')
+
+
+def _has_id_column(pg_conn, table: str) -> bool:
+    if table not in _HAS_ID_CACHE:
+        cur = pg_conn.execute(
+            "SELECT 1 FROM information_schema.columns"
+            " WHERE table_schema = 'public' AND table_name = %s"
+            " AND column_name = 'id'", (table,))
+        _HAS_ID_CACHE[table] = cur.fetchone() is not None
+    return _HAS_ID_CACHE[table]
 
 
 class _Cursor:
@@ -120,10 +145,10 @@ class _Cursor:
 class _Conn:
     """sqlite3-Connection-compatible wrapper over a psycopg3 connection.
 
-    All execute/commit calls are serialized by the module-level RLock +
-    jobs._emit_lock (callers). psycopg3 connections are NOT thread-safe for
-    concurrent use; the single-singleton + write-side locking model keeps
-    that safe.
+    Per-thread connection (thread-local via get_conn): each thread owns its
+    own psycopg3 connection so concurrent job workers never share one
+    (psycopg3 is not thread-safe; the old process-wide singleton caused
+    deadlocks + cross-thread transaction pollution — see commit 814b54a).
     """
     __slots__ = ("_c",)
 
@@ -136,7 +161,28 @@ class _Conn:
         pgvector registration, autocommit toggling, etc.)."""
         return self._c
 
+    def _recover_if_aborted(self):
+        """psycopg3 never auto-recovers from InFailedSqlTransaction: once a
+        statement fails, every later command on the connection errors until a
+        rollback. Connections are thread-local (814b54a) so a failure on one
+        thread can't poison another's, but we still defensively roll back so
+        the current thread can recover cleanly on the next call."""
+        try:
+            from psycopg.pq import TransactionStatus
+            if (self._c.info.transaction_status
+                    == TransactionStatus.INERROR):
+                self._c.rollback()
+        except Exception:
+            pass  # nothing to recover / connection already gone
+
     def execute(self, sql: str, params: Any = ()):
+        try:
+            return self._execute_locked(sql, params)
+        except Exception:
+            self._recover_if_aborted()
+            raise
+
+    def _execute_locked(self, sql: str, params: Any):
         sql = _q2s(sql)
         is_read = bool(_READ.match(sql))
         try:
@@ -164,19 +210,30 @@ class _Conn:
             # Auto-append RETURNING id so cur.lastrowid stays meaningful.
             # We consume the RETURNING row here (callers never fetchall after
             # a plain INSERT, so this matches the sqlite3 contract).
-            sql = sql.rstrip().rstrip(";").rstrip() + " RETURNING id"
-            cur = self._c.execute(sql, params or ())
-            row = cur.fetchone()
-            if row is not None:
-                lastrowid = row["id"]
-            return _Cursor(cur, lastrowid)
+            # Skipped for tables that have no `id` column (events, kv).
+            tbl = _insert_table(sql)
+            if tbl is None or _has_id_column(self._c, tbl):
+                sql = sql.rstrip().rstrip(";").rstrip() + " RETURNING id"
+                cur = self._c.execute(sql, params or ())
+                row = cur.fetchone()
+                if row is not None:
+                    # row_factory is dict_row, so row["id"]; fall back to
+                    # positional access only if a caller reverted the factory.
+                    try:
+                        lastrowid = row["id"]
+                    except (KeyError, TypeError):
+                        lastrowid = row[0]
+                return _Cursor(cur, lastrowid)
         cur = self._c.execute(sql, params or ())
         return _Cursor(cur, None)
 
     def executemany(self, sql: str, seq):
         sql = _q2s(sql)
-        cur = self._c.executemany(sql, seq)
-        return cur
+        try:
+            return self._c.executemany(sql, seq)
+        except Exception:
+            self._recover_if_aborted()
+            raise
 
     def commit(self):
         self._c.commit()
@@ -198,10 +255,13 @@ def _connect():
     from psycopg.rows import dict_row
     from pgvector.psycopg import register_vector
     dsn = _resolve_dsn()
-    # dict_row keeps the sqlite3.Row-style `row["col"]` access the whole
-    # codebase relies on (the SQLite era set row_factory=Row; the PG migration
-    # initially dropped it, breaking every dict-style row read on non-empty
-    # tables).
+    # The whole codebase reads rows by column name (row["c"], r["name"], ...).
+    # psycopg3 only supports that with an explicit row_factory; without it
+    # fetchone() hands back a plain tuple and every such lookup dies with
+    # "TypeError: tuple indices must be integers or slices, not str".
+    # (sqlite3 used to expose that via sqlite3.Row; the PG migration has to
+    # explicitly set dict_row to keep the sqlite3.Row-style row["col"]
+    # access the whole codebase relies on.)
     pg = psycopg.connect(dsn, autocommit=False, connect_timeout=8,
                          row_factory=dict_row)
     register_vector(pg)  # enables list[float] <-> vector and Python list <-> TEXT[]

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Loaders: markdown + pdf + text + excel + csv -> plain text + chunks.
+"""Loaders: markdown + pdf + text + excel + csv + docx -> plain text + chunks.
 
 Each loader returns the same shape:
 
@@ -8,7 +8,7 @@ Each loader returns the same shape:
     "path": <absolute path>,
     "text": <concatenated text (for content-hash dedupe)>,
     "note": <None | str> ,
-    "file_type": <"md" | "pdf" | "txt" | "xlsx" | "csv">,
+    "file_type": <"md" | "pdf" | "txt" | "xlsx" | "csv" | "docx">,
     "chunks": [
       {"index": int, "text": str, "source_meta": {...}},
       ...
@@ -16,11 +16,11 @@ Each loader returns the same shape:
   }
 
 `chunks` carries the FINAL chunk list that `ingest.py` will persist to the
-`chunks` table. For md/pdf/txt the list is a single whole-text chunk today
-(so the original chunking.chunk_text slice split still works); for tabular
-formats (xlsx/csv) each spreadsheet region (sheet + header + row range)
-becomes its own chunk, so the chunk->source provenance can be rendered back
-to the user as "which sheet/rows".
+`chunks` table. For md/pdf/txt/docx the list is a single whole-text chunk
+today (so the original chunking.chunk_text slice split still works); for
+tabular formats (xlsx/csv) each spreadsheet region (sheet + header + row
+range) becomes its own chunk, so the chunk->source provenance can be
+rendered back to the user as "which sheet/rows".
 """
 from pathlib import Path
 from typing import Iterable
@@ -30,7 +30,8 @@ import pypdf
 
 # ---- supported extensions & file_type mapping --------------------------------
 
-SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".xlsx", ".xls", ".csv"}
+SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".xlsx", ".xls",
+                  ".csv", ".docx"}
 
 
 def _ext_of(p: Path) -> str:
@@ -46,6 +47,8 @@ def _file_type_of(ext: str) -> str:
         return "csv"
     if ext == ".pdf":
         return "pdf"
+    if ext == ".docx":
+        return "docx"
     if ext == ".txt":
         return "txt"
     return ext.lstrip(".")
@@ -65,6 +68,8 @@ def load_text(path: str | Path) -> dict:
         return _load_excel(p)
     if ext == ".csv":
         return _load_csv(p)
+    if ext == ".docx":
+        return _load_docx(p)
     raise ValueError(f"unsupported file type: {p.name}")
 
 
@@ -141,6 +146,61 @@ def _load_csv(p: Path) -> dict:
             "file_type": "csv", "chunks": chunks}
 
 
+# ---- Word (.docx) ------------------------------------------------------------
+
+def _load_docx(p: Path) -> dict:
+    """Extract text from a .docx: paragraphs AND tables, kept in document
+    order (tables stay at their position among paragraphs). Table rows are
+    rendered as 'cell | cell' lines so tabular content survives."""
+
+    def _para_text(p_el, doc):
+        from docx.text.paragraph import Paragraph
+        return Paragraph(p_el, doc).text
+
+    def _table_lines(t_el, doc):
+        from docx.table import Table
+        tbl = Table(t_el, doc)
+        out = []
+        for row in tbl.rows:
+            cells = []
+            for c in row.cells:
+                t = (c.text or "").strip().replace("\n", " ")
+                if t and (not cells or cells[-1] != t):
+                    cells.append(t)  # dedupe merged-cell repeats
+            if cells:
+                out.append(" | ".join(cells))
+        return out
+
+    try:
+        from docx import Document
+        from docx.oxml.ns import qn
+        doc = Document(str(p))
+    except Exception as e:
+        return {"name": p.name, "path": str(p), "text": "",
+                "note": f"docx open error: {e}", "file_type": "docx",
+                "chunks": []}
+
+    parts: list[str] = []
+    for child in doc.element.body.iterchildren():
+        try:
+            if child.tag == qn("w:p"):
+                t = _para_text(child, doc).strip()
+                if t:
+                    parts.append(t)
+            elif child.tag == qn("w:tbl"):
+                parts.extend(_table_lines(child, doc))
+        except Exception:
+            continue  # one bad block must not kill the whole document
+
+    text = "\n".join(parts)
+    note = None
+    if not text.strip():
+        note = "docx has no extractable text (empty or image-only?)"
+    chunks = [_make_chunk(0, text, "docx", p.name, start=0, end=len(text))]
+    return {"name": p.name, "path": str(p), "text": text, "note": note,
+            "file_type": "docx", "chunks": chunks}
+
+
 # ---- Excel (xlsx/xls) --------------------------------------------------------
 
 # `text` for the whole doc is the concatenation of every sheet (kept for the
@@ -149,10 +209,68 @@ def _load_csv(p: Path) -> dict:
 EXCEL_CHUNK_MAX_ROWS = 80   # split huge sheets into N-row windows
 
 
+def _excel_sheet_rows(p: Path) -> list[tuple[str, list[list]]]:
+    """[(sheet_name, rows)] for an Excel file.
+
+    .xlsx goes through openpyxl; legacy binary .xls (BIFF) is not supported
+    by openpyxl and must use xlrd 2.x. Cell values are normalized to the same
+    python types (str / int / float / bool / None / ISO date str) so the two
+    sources share one chunking pipeline."""
+    if _ext_of(p) == ".xls":
+        import xlrd
+        from xlrd import xldate_as_datetime
+        book = xlrd.open_workbook(str(p))
+        out: list[tuple[str, list[list]]] = []
+        for sh in book.sheets():
+            rows: list[list] = []
+            for rx in range(sh.nrows):
+                row: list = []
+                for cx in range(sh.ncols):
+                    cell = sh.cell(rx, cx)
+                    ctype, val = cell.ctype, cell.value
+                    if ctype == xlrd.XL_CELL_EMPTY:
+                        v = None
+                    elif ctype == xlrd.XL_CELL_TEXT:
+                        v = val
+                    elif ctype == xlrd.XL_CELL_NUMBER:
+                        v = int(val) if float(val).is_integer() else val
+                    elif ctype == xlrd.XL_CELL_DATE:
+                        try:
+                            v = xldate_as_datetime(val, book.datemode).isoformat()
+                        except Exception:
+                            v = val
+                    elif ctype == xlrd.XL_CELL_BOOLEAN:
+                        v = bool(val)
+                    else:  # XL_CELL_ERROR / unknown -> keep text form
+                        v = str(val)
+                    row.append(v)
+                rows.append(row)
+            if rows:
+                out.append((sh.name, rows))
+        return out
+
+    # .xlsx (openpyxl)
+    from openpyxl import load_workbook
+    wb = load_workbook(filename=str(p), read_only=True, data_only=True)
+    out = []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = [list(r) if r is not None else []
+                    for r in ws.iter_rows(values_only=True)]
+            if rows:
+                out.append((sheet_name, rows))
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    return out
+
+
 def _load_excel(p: Path) -> dict:
     try:
-        from openpyxl import load_workbook
-        wb = load_workbook(filename=str(p), read_only=True, data_only=True)
+        sheets = _excel_sheet_rows(p)
     except Exception as e:
         return {"name": p.name, "path": str(p), "text": "",
                 "note": f"excel open error: {e}", "file_type": "xlsx",
@@ -163,14 +281,7 @@ def _load_excel(p: Path) -> dict:
     idx = 0
 
     try:
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            rows: list[list] = []
-            for r in ws.iter_rows(values_only=True):
-                if r is None:
-                    rows.append([])
-                else:
-                    rows.append(list(r))
+        for sheet_name, rows in sheets:
             if not rows:
                 continue
             # decide header: if row 0 has any non-empty cell, use it as the
@@ -210,10 +321,7 @@ def _load_excel(p: Path) -> dict:
                 })
                 idx += 1
     finally:
-        try:
-            wb.close()
-        except Exception:
-            pass
+        pass
 
     if not chunks:
         return {"name": p.name, "path": str(p), "text": "",

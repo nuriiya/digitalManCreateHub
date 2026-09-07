@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react'
-import { uploadFiles, type UploadResult, type UploadConflict } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { getSettings, triggerIngest, uploadFiles, type UploadResult, type UploadConflict } from '../api'
 import { useToast } from '../Toast'
 
 interface Props {
   onClose: () => void
   /** Notify parent when upload completes so it can refresh job/stats. */
-  onDone?: (res: UploadResult) => void
+  onDone?: (res?: UploadResult) => void
   /** Disable the dialog (a mutex-jammed task is running). */
   disabled?: boolean
 }
@@ -43,9 +43,15 @@ export default function IngestDialog({ onClose, onDone, disabled }: Props) {
   const [log, setLog] = useState<LogRow[]>([])
   const [pendingConflicts, setPendingConflicts] = useState<UploadConflict[]>([])
   const [selectedOverwrites, setSelectedOverwrites] = useState<Set<string>>(new Set())
+  // Current work_dir from settings, shown on the "train work_dir" action.
+  const [workDir, setWorkDir] = useState('')
   // Cache the File[] from the most recent pick / drop so the user can confirm
   // overwrites without having to re-pick the folder / re-drag.
   const lastFilesRef = useRef<File[]>([])
+
+  useEffect(() => {
+    getSettings().then((r) => setWorkDir(r.settings?.work_dir || '')).catch(() => {})
+  }, [])
 
   const submit = async (files: File[], overwriteNames: string[]) => {
     if (disabled) return
@@ -86,6 +92,26 @@ export default function IngestDialog({ onClose, onDone, disabled }: Props) {
       onDone?.(res)
     } catch (e: any) {
       toast(e.message || '上传失败', 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---- option C: scan & ingest the configured work_dir on the server ----
+  const runWorkDirScan = async () => {
+    if (busy || disabled || !workDir) return
+    setBusy(true)
+    try {
+      const r = await triggerIngest()
+      setLog((prev) => [...prev, {
+        kind: 'added',
+        name: `工作目录：${workDir}`,
+        detail: `训练任务 #${r.job_id} 已启动 · 后台扫描入库`,
+      }])
+      toast(`训练任务 #${r.job_id} 已启动，正在扫描工作目录`, 'ok')
+      onDone?.()   // refresh jobs/stats so the new background job shows up
+    } catch (e: any) {
+      toast(e.message || '启动失败', 'err')
     } finally {
       setBusy(false)
     }
@@ -153,7 +179,7 @@ export default function IngestDialog({ onClose, onDone, disabled }: Props) {
           <button className="btn ghost small" onClick={onClose} disabled={busy}>关闭</button>
         </div>
         <div className="dlg-tip">
-          支持 md / pdf / xlsx / xls / csv · 增量入库 · 按 content_hash 自动判重 · 同名文件需确认后才会覆盖
+          支持 md / pdf / docx / xlsx / xls / csv · 增量入库 · 按 content_hash 自动判重 · 同名文件需确认后才会覆盖
         </div>
 
         <div className="dlg-grid">
@@ -178,6 +204,23 @@ export default function IngestDialog({ onClose, onDone, disabled }: Props) {
             <div className="dlg-opt-lbl">选项 B · 拖拽上传</div>
             <div className="dlg-opt-hint">把文件拖到这里<br/>可同时拖入多个</div>
           </div>
+        </div>
+
+        <div className={`dlg-scan${busy || disabled ? ' busy' : ''}`}
+             title={!workDir ? '请先在「设置」页配置工作目录' : (busy || disabled ? '有任务运行中' : '')}>
+          <div>
+            <div className="dlg-opt-lbl">选项 C · 训练当前工作目录</div>
+            <div className="dlg-opt-hint" style={{ wordBreak: 'break-all' }}>
+              {workDir
+                ? <>{workDir}<br/>扫描该目录全部文档 → 增量入库（同名文件自动更新）</>
+                : '尚未配置工作目录，请先到「设置」页填写'}
+            </div>
+          </div>
+          <button className="btn primary small"
+                  onClick={runWorkDirScan}
+                  disabled={busy || disabled || !workDir}>
+            {busy ? '启动中…' : '开始训练'}
+          </button>
         </div>
 
         {pendingConflicts.length > 0 && (

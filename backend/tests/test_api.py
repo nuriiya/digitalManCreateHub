@@ -8,6 +8,17 @@ from app import jobs, ingest, settings_store
 
 
 def _client(env, workdir, fake_llm):
+    """Build an authenticated TestClient.
+
+    The login middleware (added in commit 2e56847) rejects every endpoint
+    except /api/auth/login unless a Bearer token is presented. The default
+    admin user seeded by `env` is `admin/123456`, so we login once and inject
+    the token into every subsequent request.
+
+    The lifespan handler seeds the admin user in the default PG schema
+    (TestClient doesn't see the per-test `env` schema). We use the
+    `with` form to ensure it runs.
+    """
     from app.main import app
     settings_store.save_settings({"work_dir": str(workdir)})
     # run pipelines synchronously instead of via background threads
@@ -20,7 +31,45 @@ def _client(env, workdir, fake_llm):
     oid = jobs.create_job(env, "ontology", 0, "EDC")
     from app import ontology
     ontology.run_extraction(env, oid)
-    return TestClient(app)
+
+    class _AuthedClient:
+        """TestClient wrapper: triggers lifespan (which seeds admin), logs in
+        and stamps the bearer token on every subsequent request, and cleans
+        up via __exit__ on garbage collection / explicit close()."""
+        def __init__(self, app):
+            self._client = TestClient(app)
+            self._client.__enter__()
+            r = self._client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"})
+            assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
+            self._token = r.json()["token"]
+        def request(self, *a, **kw):
+            kw.setdefault("headers", {})
+            kw["headers"]["Authorization"] = f"Bearer {self._token}"
+            return self._client.request(*a, **kw)
+        def get(self, *a, **kw):
+            kw.setdefault("headers", {})
+            kw["headers"]["Authorization"] = f"Bearer {self._token}"
+            return self._client.get(*a, **kw)
+        def post(self, *a, **kw):
+            kw.setdefault("headers", {})
+            kw["headers"]["Authorization"] = f"Bearer {self._token}"
+            return self._client.post(*a, **kw)
+        def put(self, *a, **kw):
+            kw.setdefault("headers", {})
+            kw["headers"]["Authorization"] = f"Bearer {self._token}"
+            return self._client.put(*a, **kw)
+        def delete(self, *a, **kw):
+            kw.setdefault("headers", {})
+            kw["headers"]["Authorization"] = f"Bearer {self._token}"
+            return self._client.delete(*a, **kw)
+        def close(self):
+            try:
+                self._client.__exit__(None, None, None)
+            except Exception:
+                pass
+    return _AuthedClient(app)
 
 
 def test_health_and_settings_flow(env, workdir, fake_llm):
@@ -95,7 +144,12 @@ def test_ingest_requires_workdir(env, tmp_path, fake_llm):
     from app import settings_store
     settings_store.save_settings({"work_dir": ""})
     client = TestClient(app)
-    r = client.post("/api/rag/ingest")
+    with client:
+        token = client.post("/api/auth/login",
+                            json={"username": "admin",
+                                  "password": "123456"}).json()["token"]
+        r = client.post("/api/rag/ingest",
+                        headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 400
 
 

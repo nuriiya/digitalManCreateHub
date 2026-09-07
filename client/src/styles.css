@@ -847,6 +847,17 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 }
 .dlg-opt-lbl { font-weight: 600; font-size: 14px; }
 .dlg-opt-hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* Option C: full-width row to scan & train the configured work_dir */
+.dlg-scan {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 10px; padding: 12px 14px;
+  background: var(--panel); border: 1px dashed var(--border);
+  border-radius: 8px; text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.dlg-scan:hover { border-style: solid; border-color: var(--accent); }
+.dlg-scan .dlg-opt-lbl { font-size: 13px; }
+.dlg-scan.busy { opacity: .6; }
 .dlg-conflict {
   margin-top: 6px; padding: 10px 12px;
   background: rgba(245, 196, 107, .08);

@@ -10,6 +10,9 @@
 # redirected native stderr (2>$null) throw NativeCommandError and kill the script
 # (e.g. the deps check traceback below). All real failures are guarded by explicit
 # $LASTEXITCODE checks + throw.
+param(
+    [switch]$Lan   # bind 0.0.0.0 so other machines on the LAN/VPN can reach :8000
+)
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DataDir = Join-Path $Root "data"
@@ -234,10 +237,17 @@ if ($OllamaReady) {
 $PgReady = $false
 
 function Test-PgLocal {
-    $env:PGPASSWORD = 'postgres'
+    # TCP probe (not psql): the Windows box usually has NO psql binary, and
+    # WSL's PostgreSQL is reachable at 127.0.0.1:5432 through wslrelay. A port
+    # connect is the only reliable "is PG up" check across both setups.
     try {
-        $x = & psql -h localhost -p 5432 -U postgres -d postgres -tAc "SELECT 1" 2>$null
-        return ($x -and $x.Trim() -eq '1')
+        $c = New-Object System.Net.Sockets.TcpClient
+        $iar = $c.BeginConnect("127.0.0.1", 5432, $null, $null)
+        $ok = $iar.AsyncWaitHandle.WaitOne(1500)
+        if ($ok) { $c.EndConnect($iar) }
+        $res = $c.Connected
+        $c.Close()
+        return $res
     } catch { return $false }
 }
 
@@ -371,11 +381,16 @@ if ($PgReady) {
 }
 
 # ---------- 5. Start backend ----------
-Write-Step "starting backend on http://localhost:8000 (Ctrl+C to stop)..."
+$listenHost = if ($Lan) { "0.0.0.0" } else { "localhost" }
+Write-Step "starting backend on http://$listenHost`:8000 (Ctrl+C to stop)..."
+if ($Lan) {
+    Write-Host "  [start] LAN mode: colleagues can open http://<this-pc-ip>:8000"
+    Write-Host "  [start] firewall: ensure TCP 8000 inbound is allowed (see README/notes)"
+}
 $env:PYTHONIOENCODING = "utf-8"
 Push-Location (Join-Path $Root "backend")
 try {
-    & $VenvPython -m uvicorn app.main:app --host localhost --port 8000
+    & $VenvPython -m uvicorn app.main:app --host $listenHost --port 8000
 } finally {
     Pop-Location
 }

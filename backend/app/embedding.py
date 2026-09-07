@@ -61,7 +61,13 @@ def active_provider() -> str:
 
 
 def embed(text: str) -> list[float]:
-    """Unified entry. Ollama failure falls back to hash (chain stays alive)."""
+    """Unified entry. Ollama failure falls back to hash (chain stays alive).
+
+    The hash fallback MUST use the same configured dim as the primary
+    provider (settings `dim`, e.g. 1024 for bge-m3), NOT the fixed 512
+    default: pgvector columns are dimension-free here, so mixing a 512-dim
+    fallback vector into a store of 1024-dim vectors breaks every `<=>`
+    query with "different vector dimensions 512 and 1024"."""
     if _fake_embed is not None:
         return _fake_embed(text)
     s = settings_store.load_settings()["embedding"]
@@ -70,7 +76,8 @@ def embed(text: str) -> list[float]:
             return _ollama_embed(text, s["base_url"], s["model"])
         except Exception:
             pass
-    return _hash_embed(text)
+    dim = int(s.get("dim") or HASH_DIM)
+    return _hash_embed(text, dim)
 
 
 def check_ollama(base_url: str, model: str) -> dict:

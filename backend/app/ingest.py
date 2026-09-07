@@ -30,6 +30,8 @@ Dedup policy (user-decided 2026-09-04):
 import hashlib
 import json
 
+from pgvector import Vector
+
 from . import db, jobs, loaders, llm, embedding
 from .jsonb import maybe_jsonb
 
@@ -154,7 +156,8 @@ def _ingest_one_file(conn, job_id: int, doc: dict, start_chunk_index: int
                 (doc_id, c["index"], c["text"], meta["summary"],
                  meta["tags"] or [], emb,
                  _content_hash(c["text"]),
-                 json.dumps(c.get("source_meta") or {}, ensure_ascii=False)))
+                 json.dumps(c.get("source_meta") or {},
+                            ensure_ascii=False)))
             # atomic unit: data + progress in one tx
             done_local += 1
             jobs.update_progress(conn, job_id, start_chunk_index + done_local)
@@ -341,7 +344,8 @@ def search(conn, query: str, top_k: int = 5, tag: str | None = None) -> list[dic
     given we restrict to chunks whose `tags` array contains that token
     (TEXT[] @> ?-array containment or `? = ANY(tags)` - we use the `ANY`
     form because it is one parameter, not an array literal)."""
-    q_emb = embedding.embed(query)
+    q_emb = Vector(embedding.embed(query))  # Vector -> '[...]' text so the
+    # `<=> ?` operator sees a vector literal, not an untyped double[] array.
     if tag:
         rows = conn.execute(
             "SELECT id, doc_id, seq, text, summary, tags, source_meta,"

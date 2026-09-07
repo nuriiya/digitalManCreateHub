@@ -145,11 +145,18 @@ def chat_ollama(messages: list[dict], temperature: float = 0.5,
     ollama = {
         "base_url": base + "/v1",
         "api_key": "ollama",  # Ollama does not authenticate
-        # default responder is the 32k variant (num_ctx pinned to the model max);
-        # bare qwen2.5:7b defaults to num_ctx 2048 and silently truncates.
-        "model": model or "qwen2.5:7b-32k",
+        # default responder is the CPU-friendly 4k variant (qwen2.5:7b-cpu);
+        # pure-CPU hosts (no NVIDIA GPU) cannot afford the 32k prefill on
+        # every chat. Benchmark / long-context jobs should pass an explicit
+        # 32k model instead of relying on the default.
+        "model": model or "qwen2.5:7b-cpu",
         "timeout": 300,          # local 7B is slower; generous idle tier
         "hard_timeout": 1800,
+        # keep_alive prevents Ollama's 5-min idle unload (which would cost
+        # ~60s of cold-start reload on the next chat). num_ctx must come
+        # from the model's Modelfile — Ollama's OpenAI-compat endpoint
+        # does not honour per-request num_ctx.
+        "keep_alive": "10m",
     }
     _notify({"model": ollama["model"], "channel": "ollama",
              "prompt_len": sum(len(m.get("content") or "") for m in messages),
@@ -247,8 +254,20 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
                             **kwargs_client)
             kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
                           stream=True, stream_options={"include_usage": True})
-            if extra_body:
-                kwargs["extra_body"] = extra_body
+            # Ollama-specific knobs. NOTE: Ollama's OpenAI-compat endpoint
+            # only honours `keep_alive` and `format` as top-level body fields
+            # (num_ctx is NOT accepted per-request — it must be set in the
+            # Modelfile at model build time). extra_body is the SDK's
+            # blessed mechanism for smuggling non-OpenAI fields into the
+            # request body without tripping the SDK's argument validator.
+            # CPU-only hosts (no NVIDIA GPU) cannot afford the 32k default
+            # prefill on every chat — see ollama/qwen2.5:7b-cpu model variant.
+            extra = dict(extra_body or {})
+            keep_alive = s.get("keep_alive")
+            if keep_alive is not None:
+                extra["keep_alive"] = keep_alive
+            if extra:
+                kwargs["extra_body"] = extra
             resp = client.chat.completions.create(**kwargs)
             parts: list[str] = []
             for chunk in resp:
