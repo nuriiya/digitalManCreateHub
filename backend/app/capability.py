@@ -125,26 +125,74 @@ def _extract_code(reply: str) -> str:
     return reply.strip()
 
 
+def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
+                         provider="llm") -> str:
+    """能力题解题专用：全量注入数字人本体 + 身份，直接生成代码。
+
+    与 chat._generate 的「字面匹配检索」不同——能力题的 prompt 是函数签名
+    +docstring，本体名（如「去重应返回规范化标签」）不会字面命中，检索注入
+    会漏掉。能力题的本体是「编程规范/技能」，应全量注入（技能不是按 query
+    检索的知识）。返回数字人生成的代码原文（可能带解释/markdown）。
+    """
+    from . import llm, chat as chat_mod
+    ident = chat_mod._identity(conn, identity_id)
+    if not ident:
+        return ""
+    ontology = chat_mod._persona_ontology(conn, identity_id)
+    anchors = chat_mod._approved_anchors(conn, identity_id)
+
+    lines = [
+        f"你是数字人「{ident['name']}」。",
+        f"使命：{ident['mission'] or '（未填写）'}",
+        "",
+        "你要完成一道编程题：根据函数签名和 docstring，写出完整、正确的函数实现。",
+        "",
+        "【必须遵守的输出铁律】",
+        "1. 只输出纯 Python 代码，不要任何解释、不要 markdown 代码块标记（不要 ```）。",
+        "2. 代码必须是完整可运行的定义（def/import 齐全），语法正确、引号括号成对闭合。",
+        "3. 严格按 docstring 的约定实现，注意边界条件（空输入/单元素/去重/截断等）。",
+    ]
+    if anchors:
+        lines.append("")
+        lines.append("【锚点本体 · 核心能力】")
+        for a in anchors:
+            lines.append(chat_mod._fmt_anchor(a))
+    if ontology:
+        lines.append("")
+        lines.append("【你的编程规范本体（必须遵守）】")
+        for o in ontology:
+            defn = (o.get("definition") or "").strip()
+            lines.append(f"- {o['name']}" + (f"：{defn}" if defn else ""))
+    prompt_text = (ident.get("prompt") or "").strip()
+    if prompt_text:
+        lines.append("")
+        lines.append("【你的补充规范】")
+        lines.append(prompt_text)
+    system = "\n".join(lines)
+
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": task_prompt}]
+    if provider == "llm":
+        return llm.chat(messages, temperature=0.0)
+    return llm.chat2(messages)
+
+
 def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
     """让数字人（identity）针对能力题生成代码，再可执行验证。
 
-    数字人解题 = 用它的本体+prompt 生成代码（闭卷作答），判定 = 跑 assert
-    （可执行验证，开卷裁决）——对应考核双 LLM 的能力型版本。
+    数字人解题 = 全量注入它的本体+prompt 生成代码（闭卷作答），判定 = 跑
+    assert（可执行验证，开卷裁决）——对应考核双 LLM 的能力型版本。
     """
     task = get_task(conn, task_id)
     if not task:
         return {"error": "task not found"}
-    from . import chat
     try:
-        result = chat._generate(
-            conn, identity_id, task["prompt"], use_ontology=True,
-            provider=provider, ollama_model=None,
-            concept_fallback=False, use_rag=False, session_id=None)
+        reply = _solve_with_ontology(conn, identity_id, task["prompt"], provider)
     except Exception as e:  # noqa: BLE001
         return {"error": f"generation failed: {e}"}
-    if not result.get("ok"):
-        return {"error": result.get("error") or "generation failed"}
-    code = _extract_code(result["reply"])
+    if not reply:
+        return {"error": "generation failed: empty reply"}
+    code = _extract_code(reply)
     r = run_task(conn, task_id, code, identity_id=identity_id)
     r["reply"] = code[:2000]
     return r
