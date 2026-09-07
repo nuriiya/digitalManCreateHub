@@ -1,7 +1,17 @@
+# Base compose: PG (pgvector) + Ollama + backend. Dev/prod differences live in
+# docker-compose.dev.yml / docker-compose.prod.yml (loaded via -f override).
+#
+# Image names use ${REGISTRY_PREFIX:-} so a CN mirror prefix can be set in .env
+# (e.g. REGISTRY_PREFIX=docker.1ms.run/) without editing this file; leaving it
+# empty pulls straight from Docker Hub.
+#
+# Run:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   or:  ./start.sh dev   /   .\start1.ps1 dev   (scripts handle the -f flags)
+
 services:
-  db:
-    image: pgvector/pgvector:pg16
-    container_name: rag_pgvector
+  pg:
+    image: ${REGISTRY_PREFIX:-}pgvector/pgvector:pg17
+    container_name: rag_pg
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -9,7 +19,49 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - rag_pgdata:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  ollama:
+    image: ${REGISTRY_PREFIX:-}ollama/ollama:latest
+    container_name: rag_ollama
+    # prod-only: dev reuses the host's Ollama (already has bge-m3) and skips
+    # this 3.5GB image. Start prod with --profile ollama.
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:11434/api/tags >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  backend:
+    build:
+      context: .
+      args:
+        REGISTRY_LIBRARY_PREFIX: ${REGISTRY_LIBRARY_PREFIX:-}
+    image: rag-backend:latest
+    container_name: rag_backend
+    environment:
+      RAG_DATABASE_URL: postgresql://postgres:postgres@pg:5432/rag
+      EMBEDDING_BASE_URL: http://ollama:11434
+      RAG_WORK_DIR: /data
+    ports:
+      - "8000:8000"
+    depends_on:
+      pg:
+        condition: service_healthy
 
 volumes:
-  rag_pgdata:
+  pg_data:
+  ollama_data:
+  backend_data:
+  rag_docs:

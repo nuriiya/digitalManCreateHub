@@ -1,0 +1,20 @@
+# Prod override: no source mount (uses the built image), persistent named
+# volumes for runtime data + docs, restart-on-failure and a healthcheck. Load
+# after docker-compose.yml.
+services:
+  backend:
+    restart: unless-stopped
+    volumes:
+      - backend_data:/app/backend/data
+      - rag_docs:/data
+    environment:
+      ENV: prod
+    depends_on:
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

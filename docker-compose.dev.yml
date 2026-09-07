@@ -1,0 +1,14 @@
+# Dev override: mount live source into the backend for --reload hot reload,
+# and bind the docs dir straight off the host. Load after docker-compose.yml.
+# Dev reuses the host's Ollama (host.docker.internal) instead of the 3.5GB
+# ollama container, so no huge image pull is needed for local dev.
+services:
+  backend:
+    volumes:
+      - ./backend:/app/backend
+      - ./client/dist:/app/client/dist
+      - ./docs:/data
+    environment:
+      ENV: dev
+      EMBEDDING_BASE_URL: http://host.docker.internal:11434
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

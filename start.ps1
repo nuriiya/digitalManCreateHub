@@ -235,6 +235,51 @@ if ($OllamaReady) {
     } catch { } finally { Pop-Location }
 }
 
+# ---------- 3.5 WSL keepalive (hidden-window sleep infinity) ----------
+# WSL shuts the instance down ~15s after the last active process exits (hardcoded,
+# NOT configurable via .wslconfig; vmIdleTimeout only governs the VM layer). PG runs
+# inside WSL (docker), so we MUST wake + keep WSL alive BEFORE checking/starting PG -
+# otherwise a slept WSL instance cannot start the PG container and start.ps1 fails with
+# "PostgreSQL still not reachable". stop.ps1 kills this keepalive by PID file.
+$KeepaliveFile = Join-Path $DataDir "wsl_keepalive.pid"
+$WslAvailable = $false
+try {
+    $null = & wsl --status 2>$null
+    if ($LASTEXITCODE -eq 0) { $WslAvailable = $true }
+} catch { }
+
+if ($WslAvailable) {
+    # clear any stale keepalive (PID file may be left over if stop.ps1 was never run)
+    if (Test-Path $KeepaliveFile) {
+        $oldPid = Get-Content $KeepaliveFile -Raw
+        if ($oldPid -match '^\d+$') {
+            Stop-Process -Id ([int]$oldPid) -Force -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        Remove-Item $KeepaliveFile -Force
+    }
+    Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
+    # Detect the WSL human user dynamically (don't hardcode jiauya/yifengxue or
+    # the distro name - a wrong -d/-u makes wsl.exe exit immediately and the
+    # keepalive silently dies). $WslUser above is only set inside the Ollama-WSL
+    # branch, so re-detect here to also cover the host-Ollama path.
+    $keepUsers = @()
+    try {
+        $rawKeep = & wsl -e bash -c "getent passwd | awk -F: '`$3>=1000 && `$3<65534 {print `$1}'" 2>$null
+        if ($rawKeep) { $keepUsers = @($rawKeep | Where-Object { $_ -and $_ -ne "nobody" }) }
+    } catch { }
+    if ($keepUsers.Count -eq 0) { $keepUsers = @("root") }
+    $keepUser = $keepUsers[0]
+    # PS 5.1 Start-Process joins ArgumentList with spaces WITHOUT quoting, so the
+    # bash command must carry its own quotes or wsl.exe sees broken args.
+    $KeepaliveArgs = @('-u', $keepUser, '-e', 'bash', '-c', '"exec sleep infinity"')
+    $KeepaliveProc = Start-Process -FilePath "wsl.exe" -ArgumentList $KeepaliveArgs -WindowStyle Hidden -PassThru
+    $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
+    Write-Step "keepalive PID $($KeepaliveProc.Id) saved to $KeepaliveFile"
+    # let the WSL instance finish waking (systemd + dockerd cold start) before
+    # the PG check below; the step-4 poll loop waits the rest of the way
+    Start-Sleep -Seconds 5
+}
+
 # ---------- 4. PostgreSQL + pgvector (the new task+data store) ----------
 # Priority:
 #   (1) PG already reachable on 5432 (host or WSL forwarded -> same DSN)
@@ -248,17 +293,13 @@ if ($OllamaReady) {
 $PgReady = $false
 
 function Test-PgLocal {
-    # TCP probe (not psql): the Windows box usually has NO psql binary, and
-    # WSL's PostgreSQL is reachable at 127.0.0.1:5432 through wslrelay. A port
-    # connect is the only reliable "is PG up" check across both setups.
+    # Real connection probe via the backend venv's psycopg (psql is NOT installed
+    # on Windows, so the old `psql -tAc` probe always failed and start.ps1 wrongly
+    # reported "PostgreSQL still not reachable" even when the container was up).
+    $probe = "import psycopg; psycopg.connect('postgresql://postgres:postgres@localhost:5432/postgres', connect_timeout=2).close(); print('OK')"
     try {
-        $c = New-Object System.Net.Sockets.TcpClient
-        $iar = $c.BeginConnect("127.0.0.1", 5432, $null, $null)
-        $ok = $iar.AsyncWaitHandle.WaitOne(1500)
-        if ($ok) { $c.EndConnect($iar) }
-        $res = $c.Connected
-        $c.Close()
-        return $res
+        $x = & $VenvPython -c $probe 2>$null
+        return ($x -and ($x -join '').Trim() -eq 'OK')
     } catch { return $false }
 }
 
@@ -358,45 +399,6 @@ if ($PgReady) {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     Set-Content -Path (Join-Path $DataDir "pg_dsn") -Value "postgresql://postgres:postgres@localhost:5432/rag" -NoNewline
     Write-Step "wrote DSN file: data\pg_dsn"
-}
-
-# ---------- 4.5 WSL keepalive (隐藏窗口 sleep infinity) ----------
-# WSL 实例在无活跃进程 ~15 秒后自动终止（硬编码，.wslconfig 无法配置；vmIdleTimeout
-# 只控制 VM 层）。WSL 里只要有一个常驻进程就阻止实例关停。这里挂一个 sleep infinity
-# （永不结束），用隐藏窗口，不抢焦点。stop.ps1 会按 PID 文件杀掉它。
-$KeepaliveFile = Join-Path $DataDir "wsl_keepalive.pid"
-if ($PgReady) {
-    try {
-        $status = & wsl --status 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            # 清理旧 keepalive（如果上次 stop.ps1 没跑，PID 文件可能残留）
-            if (Test-Path $KeepaliveFile) {
-                $oldPid = Get-Content $KeepaliveFile -Raw
-                if ($oldPid -match '^\d+$') {
-                    try { Get-Process -Id ([int]$oldPid) -ErrorAction SilentlyContinue |
-                          Stop-Process -Force -Confirm:$false } catch { }
-                }
-                Remove-Item $KeepaliveFile -Force
-            }
-            Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
-            # NOTE: do NOT hardcode the distro name/user. Registrations vary
-            # ("Ubuntu" vs "Ubuntu-22.04", user "jiauya" vs "yifengxue"); a wrong
-            # -d makes wsl.exe exit immediately and the keepalive silently dies.
-            # Omitting -d uses the default distro; -u comes from Get-WslUser.
-            $wslKeepUser = Get-WslUser
-            # PS 5.1 Start-Process joins ArgumentList with spaces WITHOUT quoting,
-            # so the "exec sleep infinity" element must carry its own quotes or
-            # wsl.exe sees broken args (bash -c exec sleep infinity) and exits.
-            $KeepaliveProc = Start-Process -FilePath "wsl.exe" `
-                -ArgumentList @("-u", $wslKeepUser,
-                                "-e", "bash", "-c", '"exec sleep infinity"') `
-                -WindowStyle Hidden -PassThru
-            $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
-            Write-Step "keepalive PID $($KeepaliveProc.Id) -> $KeepaliveFile"
-        }
-    } catch {
-        Write-Warn2 "WSL keepalive 启动失败：$($_.Exception.Message)"
-    }
 }
 
 # ---------- 5. Start backend ----------
