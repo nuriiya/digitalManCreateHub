@@ -477,7 +477,8 @@ export interface PipelineChange {
 
 export const getPipelines = () => api<{ pipelines: Pipeline[] }>('/api/pipelines')
 export const createPipeline = (name: string, description = '', tags: string[] = []) =>
-  api<{ ok: boolean; id: number }>('/api/pipelines', { method: 'POST', body: JSON.stringify({ name, description, tags }) })
+  api<{ ok: boolean; id: number; note?: string }>('/api/pipelines',
+    { method: 'POST', body: JSON.stringify({ name, description, tags }) })
 export const getPipeline = (id: number) => api<{ pipeline: Pipeline }>(`/api/pipelines/${id}`)
 export const updatePipeline = (id: number, patch: object) =>
   api<{ ok: boolean }>(`/api/pipelines/${id}`, { method: 'PUT', body: JSON.stringify(patch) })

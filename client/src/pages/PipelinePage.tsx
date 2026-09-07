@@ -64,6 +64,8 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   const [creating, setCreating] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createTags, setCreateTags] = useState('')
+  const [createDesc, setCreateDesc] = useState('')
+  const [createBusy, setCreateBusy] = useState(false)
   const [nodeDraft, setNodeDraft] = useState({ node_key: '', persona_id: '', kind: 'nominate', step_name: '' })
   const [relDraft, setRelDraft] = useState({ from_node_id: '', to_node_id: '', relation_type: 'handoff', handoff_type: '', handoff_schema: '' })
   const [chatMsg, setChatMsg] = useState('')
@@ -87,12 +89,20 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   const doCreate = async () => {
     const name = createName.trim()
     if (!name) { toast('请填写名称', 'err'); return }
+    setCreateBusy(true)
     try {
-      const r = await createPipeline(name, '', createTags.split(/[,，\s]+/).filter(Boolean))
-      toast(`pipeline「${name}」已创建`, 'ok')
-      setCreateName(''); setCreateTags(''); setCreating(false)
+      const desc = createDesc.trim()
+      const r = await createPipeline(name, desc,
+        createTags.split(/[,，\s]+/).filter(Boolean))
+      if (r.note) { toast(r.note, 'err'); setCreateBusy(false); return }
+      toast(desc
+        ? `pipeline「${name}」已创建，Pipeline 创建工程师已生成节点/关系`
+        : `pipeline「${name}」已创建`, 'ok')
+      setCreateName(''); setCreateTags(''); setCreateDesc('')
+      setCreating(false)
       reload(); setSel(r.id)
     } catch (e: any) { toast(e.message, 'err') }
+    setCreateBusy(false)
   }
 
   const doDelete = async (id: number) => {
@@ -180,9 +190,16 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
                 <input autoFocus placeholder="如：调研X领域并写demo" value={createName} onChange={(e) => setCreateName(e.target.value)} /></label>
               <label className="dlg-field"><span>标签（逗号分隔，批准后入本体库）</span>
                 <input placeholder="调研, demo" value={createTags} onChange={(e) => setCreateTags(e.target.value)} /></label>
+              <label className="dlg-field"><span>
+                需求描述（选填 · 填写后由 <b>Pipeline 创建工程师</b> 生成节点与关系）
+              </span>
+                <textarea rows={4} placeholder="如：先调研 FMEA 方法论文献 → 建一个 FMEA 工程师 → 复核生成的报告"
+                  value={createDesc} onChange={(e) => setCreateDesc(e.target.value)} /></label>
               <div className="dlg-actions">
                 <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
-                <button className="btn green small" onClick={doCreate}>创建</button>
+                <button className="btn green small" disabled={createBusy} onClick={doCreate}>
+                  {createBusy ? '生成中…' : '创建'}
+                </button>
               </div>
             </div>
           </div>

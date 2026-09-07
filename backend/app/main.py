@@ -1583,6 +1583,74 @@ def _design_changes_via_llm(pipeline_dict: dict, user_message: str) -> list:
     return data
 
 
+def _design_pipeline_via_llm(name: str, user_desc: str, hint_tags: list[str],
+                             identities: list[dict]) -> dict | None:
+    """「Pipeline 创建工程师」数字人调用：接收需求描述，输出完整 pipeline 设计草案。
+
+    返回 dict 形如 {name, tags, description, nodes:[...], relations:[...]}；
+    解析失败返回 None（端点会创建空 pipeline 并返回 note）。"""
+    persona_lines = "\n".join(
+        f"  - id={i['id']} name={i['name']} category={i.get('category','-')}"
+        for i in identities
+    ) or "  (暂无已批准数字人)"
+    system = (
+        "你是平台通用数字人「Pipeline 创建工程师」（category=general）。\n"
+        "你的职责：接收用户对编排图的需求描述，输出结构化 pipeline 设计草案，"
+        "供用户在前端审批后再生成最终 pipeline。你只提名不裁决——具体 persona_id 由用户后续手动绑定。\n"
+        "\n"
+        f"关系类型闭集：{', '.join(pipeline.RELATION_TYPES)}\n"
+        f"节点 kind 闭集：{', '.join(pipeline.NODE_KINDS)}（nominate=数字人 LLM 提名节点，deterministic=确定性 Function 节点）\n"
+        "\n"
+        "已批准数字人列表（persona_query 中只描述能力需求，不要捏造 persona_id）：\n"
+        + persona_lines +
+        "\n"
+        "\n"
+        "约束：\n"
+        "1. 只输出一个 JSON 对象，不要任何解释文字、不要 markdown 围栏。\n"
+        "2. JSON 固定结构：{name, tags, description, nodes:[...], relations:[...]}。\n"
+        "3. nodes 每项必须含 node_key(以 'n' 开头的短名)/kind/step_name(中文动宾短语)/persona_query。"
+        "   2~6 个节点为宜。\n"
+        "4. relations 每项必须含 from/to/关系类型。handoff_type/handoff_schema 可选。"
+        "   必须为 DAG（无环），下游方向是「产出给下一节点」。\n"
+        "5. persona_query 只描述能力需求（如「需要学术调研能力的数字人」），不要写具体 ID。\n"
+        "6. 不知道的事实宁可不写，不要补造节点或关系。\n"
+        "7. 输出语言：中文。"
+    )
+    user = (
+        f"用户填写的 pipeline 名称：{name}\n"
+        f"用户填写的需求描述：{user_desc}\n"
+        f"用户填写的标签（可选）：{', '.join(hint_tags) or '(无)'}\n"
+        "请输出 JSON 设计草案。"
+    )
+    try:
+        reply = llm.chat(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user}],
+            temperature=0.0,
+        )
+    except Exception:
+        return None
+    text = (reply or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
+    try:
+        data = json.loads(text)
+    except Exception:
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e == -1:
+            return None
+        try:
+            data = json.loads(text[s:e + 1])
+        except Exception:
+            return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
 @app.get("/api/pipelines")
 def list_pipelines():
     return {"pipelines": pipeline.list_pipelines(db.get_conn())}
@@ -1594,9 +1662,52 @@ def create_pipeline(body: PipelineCreateBody):
                                    body.tags)
     if pid is None:
         return JSONResponse({"error": "名字不能为空或过长"}, status_code=400)
+    note = ""
+    desc = (body.description or "").strip()
+    # 描述非空 → 调「Pipeline 创建工程师」数字人生成节点 + 关系草案
+    if desc:
+        idents = [dict(r) for r in db.get_conn().execute(
+            "SELECT id, name, category FROM identities"
+            " WHERE status='approved' ORDER BY id").fetchall()]
+        design = _design_pipeline_via_llm(body.name, desc, body.tags or [], idents)
+        nodes_added = 0
+        rels_added = 0
+        if design and isinstance(design.get("nodes"), list):
+            for nd in design["nodes"]:
+                if not isinstance(nd, dict):
+                    continue
+                nk = (nd.get("node_key") or "").strip()
+                if not nk:
+                    continue
+                kind = nd.get("kind") or "nominate"
+                step = nd.get("step_name") or nk
+                pipeline.add_node(db.get_conn(), pid, nk, None, kind, step, None)
+                nodes_added += 1
+            # 关系需要 from/to 的 node_id，按 node_key 反查
+            cur_p = pipeline.get_pipeline(db.get_conn(), pid)
+            key2id = {n["node_key"]: n["id"] for n in (cur_p or {}).get("nodes", [])}
+            for rd in design.get("relations", []) or []:
+                if not isinstance(rd, dict):
+                    continue
+                fid = key2id.get((rd.get("from") or "").strip())
+                tid = key2id.get((rd.get("to") or "").strip())
+                if not fid or not tid:
+                    continue
+                rt = rd.get("relation_type") or "handoff"
+                ht = rd.get("handoff_type") or ""
+                hs = rd.get("handoff_schema") or ""
+                pipeline.add_relation(db.get_conn(), pid, fid, tid, rt, ht, hs)
+                rels_added += 1
+            jobs.emit(db.get_conn(), None, "pipeline.designed_by_llm",
+                      {"id": pid, "by": "Pipeline 创建工程师",
+                       "nodes": nodes_added, "relations": rels_added})
+        else:
+            note = "Pipeline 创建工程师未能解析出有效设计草案，请手动编辑节点与关系。"
+            jobs.emit(db.get_conn(), None, "pipeline.design_failed",
+                      {"id": pid, "by": "Pipeline 创建工程师"})
     jobs.emit(db.get_conn(), None, "pipeline.created",
               {"id": pid, "name": body.name})
-    return {"ok": True, "id": pid}
+    return {"ok": True, "id": pid, "note": note}
 
 
 @app.get("/api/pipelines/{pipeline_id}")
