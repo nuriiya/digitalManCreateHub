@@ -113,7 +113,8 @@ if ($EnvName -eq "prod") {
 # hit registry-1.docker.io. This works even when the daemon's registry-mirrors
 # config has not been applied (no daemon restart needed).
 $mirrorPrefixes = @("docker.1ms.run", "dockerproxy.net")
-$baseImages = @("pgvector/pgvector:pg17", "ollama/ollama:latest")
+$baseImages = @("pgvector/pgvector:pg17")
+if ($EnvName -eq "prod") { $baseImages += @("ollama/ollama:latest") }
 foreach ($img in $baseImages) {
     & docker image inspect $img *> $null 2>$null
     if ($LASTEXITCODE -eq 0) { continue }
@@ -123,7 +124,9 @@ foreach ($img in $baseImages) {
         # connection on a large image (ollama ~3.5GB) just continues
         for ($attempt = 1; $attempt -le 4 -and -not $pulled; $attempt++) {
             Write-Step "pulling $img via $prefix (attempt $attempt)..."
-            & docker pull "$prefix/$img" *> $null 2>$null
+            # --progress=plain prints per-layer download progress to stderr
+            # (real-time, no ANSI animation) so the user can watch the pull
+            & docker pull --progress=plain "$prefix/$img"
             if ($LASTEXITCODE -eq 0) {
                 & docker tag "$prefix/$img" $img
                 $pulled = $true
@@ -138,7 +141,11 @@ foreach ($img in $baseImages) {
 
 # ---------- 4. Build + up ----------
 Write-Step "building + starting containers (env=$EnvName)..."
-& docker compose @composeFiles up -d --build
+if ($EnvName -eq "prod") {
+    & docker compose @composeFiles --profile ollama up -d --build
+} else {
+    & docker compose @composeFiles up -d --build
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Warn "docker compose up failed - see the error above"
     exit 1

@@ -29,6 +29,9 @@ services:
   ollama:
     image: ${REGISTRY_PREFIX:-}ollama/ollama:latest
     container_name: rag_ollama
+    # prod-only: dev reuses the host's Ollama (already has bge-m3) and skips
+    # this 3.5GB image. Start prod with --profile ollama.
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:

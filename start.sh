@@ -61,8 +61,11 @@ fi
 # ---------- 2.5 Pre-pull base images (CN network: Docker Hub is blocked) ----------
 # Pull via mirror prefixes then re-tag to standard names so compose does not hit
 # registry-1.docker.io directly. Override the mirrors via REGISTRY_MIRRORS env.
+# Dev skips the ollama image (reuses host Ollama via host.docker.internal).
 MIRRORS="${REGISTRY_MIRRORS:-docker.1ms.run dockerproxy.net}"
-for img in pgvector/pgvector:pg17 ollama/ollama:latest; do
+IMAGES="pgvector/pgvector:pg17"
+[ "$ENV" = "prod" ] && IMAGES="$IMAGES ollama/ollama:latest"
+for img in $IMAGES; do
     if docker image inspect "$img" >/dev/null 2>&1; then continue; fi
     pulled=0
     for m in $MIRRORS; do
@@ -86,7 +89,11 @@ done
 
 # ---------- 3. Build + up ----------
 log "building + starting containers (env=$ENV)..."
-docker compose "${COMPOSE[@]}" up -d --build
+if [ "$ENV" = "prod" ]; then
+    docker compose "${COMPOSE[@]}" --profile ollama up -d --build
+else
+    docker compose "${COMPOSE[@]}" up -d --build
+fi
 
 # ---------- 4. Ollama + bge-m3 ----------
 log "waiting for Ollama..."
