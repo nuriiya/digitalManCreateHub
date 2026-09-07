@@ -6,10 +6,13 @@
 # python) through a mirror (set in .env). Leave empty for direct Docker Hub.
 
 ARG REGISTRY_LIBRARY_PREFIX=
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # ---- stage 1: frontend build ----
 FROM ${REGISTRY_LIBRARY_PREFIX}node:22-slim AS frontend
 WORKDIR /app/client
+RUN npm config set registry ${NPM_REGISTRY}
 COPY client/package.json client/package-lock.json ./
 RUN npm install --no-fund --no-audit
 COPY client/ ./
@@ -22,7 +25,7 @@ WORKDIR /app
 
 # Dependencies first (layer cache on rebuilds).
 COPY backend/requirements.txt ./backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r backend/requirements.txt
 
 # Backend source + the built frontend dist (main.py serves <repo>/client/dist).
 COPY backend/ ./backend/
