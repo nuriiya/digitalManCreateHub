@@ -339,34 +339,28 @@ if ($PgReady) {
     Write-Step "wrote DSN file: data\pg_dsn"
 }
 
-# ---------- 4.5 WSL keepalive (隐藏窗口 sleep infinity) ----------
-# WSL 实例在无活跃进程 ~15 秒后自动终止（硬编码，.wslconfig 无法配置；vmIdleTimeout
-# 只控制 VM 层）。WSL 里只要有一个常驻进程就阻止实例关停。这里挂一个 sleep infinity
-# （永不结束），用隐藏窗口，不抢焦点。stop.ps1 会按 PID 文件杀掉它。
+# ---------- 4.5 WSL keepalive (hidden-window sleep infinity) ----------
+# WSL shuts the instance down ~15s after the last active process exits (hardcoded,
+# NOT configurable via .wslconfig; vmIdleTimeout only governs the VM layer). A single
+# resident process keeps the instance alive, so we hang a `sleep infinity` in a hidden
+# window. stop.ps1 kills it by PID file.
 $KeepaliveFile = Join-Path $DataDir "wsl_keepalive.pid"
 if ($PgReady) {
-    try {
-        $status = & wsl --status 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            # 清理旧 keepalive（如果上次 stop.ps1 没跑，PID 文件可能残留）
-            if (Test-Path $KeepaliveFile) {
-                $oldPid = Get-Content $KeepaliveFile -Raw
-                if ($oldPid -match '^\d+$') {
-                    try { Get-Process -Id ([int]$oldPid) -ErrorAction SilentlyContinue |
-                          Stop-Process -Force -Confirm:$false } catch { }
-                }
-                Remove-Item $KeepaliveFile -Force
+    $status = & wsl --status 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        # clear any stale keepalive (PID file may be left over if stop.ps1 was never run)
+        if (Test-Path $KeepaliveFile) {
+            $oldPid = Get-Content $KeepaliveFile -Raw
+            if ($oldPid -match '^\d+$') {
+                Stop-Process -Id ([int]$oldPid) -Force -Confirm:$false -ErrorAction SilentlyContinue
             }
-            Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
-            $KeepaliveProc = Start-Process -FilePath "wsl.exe" `
-                -ArgumentList @("-d", "Ubuntu-22.04", "-u", "jiauya",
-                                "-e", "bash", "-c", "exec sleep infinity") `
-                -WindowStyle Hidden -PassThru
-            $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
-            Write-Step "keepalive PID $($KeepaliveProc.Id) -> $KeepaliveFile"
+            Remove-Item $KeepaliveFile -Force
         }
-    } catch {
-        Write-Warn2 "WSL keepalive 启动失败：$($_.Exception.Message)"
+        Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
+        $KeepaliveArgs = @('-d','Ubuntu-22.04','-u','jiauya','-e','bash','-c','exec sleep infinity')
+        $KeepaliveProc = Start-Process -FilePath "wsl.exe" -ArgumentList $KeepaliveArgs -WindowStyle Hidden -PassThru
+        $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
+        Write-Step "keepalive PID $($KeepaliveProc.Id) saved to $KeepaliveFile"
     }
 }
 
