@@ -1,0 +1,25 @@
+# Docker build context exclusions
+.git
+.gitignore
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.log
+
+# backend runtime data + tests (kept out of the image)
+backend/data
+backend/tests
+backend/.pytest_cache
+
+# frontend deps are reinstalled inside the build (stage 1); keep the source
+client/node_modules
+client/dist
+
+# local convenience scripts / docs (not needed in the image)
+start.ps1
+stop.ps1
+start1.ps1
+start.sh
+ops
+*.md

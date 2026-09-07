@@ -14,6 +14,7 @@ llm = 生成器（V4-Flash，闭卷作答/提名）；llm2 = 判别器（GLM 5.2
 开卷判别）——异源交叉核验，判别结果仍只是提名，确定性代码终审。
 """
 import json
+import os
 import re
 import threading
 from pathlib import Path
@@ -47,12 +48,22 @@ def _deep_merge(base: dict, patch: dict) -> dict:
 def load_settings() -> dict:
     with _lock:
         if not SETTINGS_PATH.exists():
-            return json.loads(json.dumps(DEFAULTS))
-        try:
-            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return json.loads(json.dumps(DEFAULTS))
-        return _deep_merge(DEFAULTS, data)
+            data = json.loads(json.dumps(DEFAULTS))
+        else:
+            try:
+                data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                data = json.loads(json.dumps(DEFAULTS))
+            data = _deep_merge(DEFAULTS, data)
+    # Environment overrides (containerized deploy: backend talks to the `ollama`
+    # / `pg` service names instead of localhost; work_dir points at a mounted volume)
+    env_embed = os.environ.get("EMBEDDING_BASE_URL", "").strip()
+    if env_embed:
+        data.setdefault("embedding", {})["base_url"] = env_embed
+    env_work = os.environ.get("RAG_WORK_DIR", "").strip()
+    if env_work:
+        data["work_dir"] = env_work
+    return data
 
 
 def save_settings(patch: dict) -> dict:

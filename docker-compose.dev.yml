@@ -1,0 +1,13 @@
+# Dev override: mount live source into the backend for --reload hot reload,
+# and bind the docs dir straight off the host. Load after docker-compose.yml.
+services:
+  backend:
+    build:
+      context: .
+    volumes:
+      - ./backend:/app/backend
+      - ./client/dist:/app/client/dist
+      - ./docs:/data
+    environment:
+      ENV: dev
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
