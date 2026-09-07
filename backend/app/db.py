@@ -789,6 +789,22 @@ CREATE TABLE IF NOT EXISTS capability_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_caprun_task ON capability_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_caprun_identity ON capability_runs(identity_id);
+
+-- capability tools（能力沉淀：测试通过的能力 → git 工具库 → 三关审批 → 可调用）
+CREATE TABLE IF NOT EXISTS capability_tools (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT REFERENCES capability_runs(id) ON DELETE SET NULL,
+    task_id BIGINT REFERENCES capability_tasks(id) ON DELETE SET NULL,
+    tool_name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    entry_point TEXT NOT NULL DEFAULT '',
+    input_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    code TEXT NOT NULL,
+    git_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_captool_status ON capability_tools(status);
 """
 
 

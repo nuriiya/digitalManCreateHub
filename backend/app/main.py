@@ -1884,9 +1884,55 @@ def capability_run(task_id: int, body: CapabilityRunBody):
     return capability.run_task(db.get_conn(), task_id, body.code, body.identity_id)
 
 
+@app.post("/api/capability/run_for_identity")
+def capability_run_identity(body: dict):
+    """数字人解题 + 可执行验证：数字人生成代码，跑 assert 判定。"""
+    return capability.run_for_identity(
+        db.get_conn(), int(body.get("identity_id") or 0),
+        int(body.get("task_id") or 0), body.get("provider", "llm2"))
+
+
 @app.get("/api/capability/stats")
 def capability_stats(identity_id: int = None):
     return capability.run_stats(db.get_conn(), identity_id)
+
+
+# ---------------- 能力沉淀（测试通过 → git 工具库 → 审批） ----------------
+
+@app.post("/api/capability/runs/{run_id}/promote")
+def capability_promote(run_id: int, body: dict = None):
+    """把测试通过的 run 沉淀为工具：git commit + 落库 pending。"""
+    body = body or {}
+    return capability.promote_to_tool(
+        db.get_conn(), run_id,
+        tool_name=body.get("tool_name", ""),
+        description=body.get("description", ""),
+        input_schema=body.get("input_schema"))
+
+
+@app.get("/api/capability/tools")
+def capability_tools(status: str = None):
+    return {"tools": capability.list_tools(db.get_conn(), status)}
+
+
+@app.post("/api/capability/tools/{tool_id}/approve")
+def capability_approve(tool_id: int):
+    return capability.set_tool_status(db.get_conn(), tool_id, "approved")
+
+
+@app.post("/api/capability/tools/{tool_id}/reject")
+def capability_reject(tool_id: int):
+    return capability.set_tool_status(db.get_conn(), tool_id, "rejected")
+
+
+@app.get("/api/capability/repo/log")
+def capability_repo_log():
+    return capability.repo_log()
+
+
+@app.post("/api/capability/repo/rollback")
+def capability_repo_rollback(body: dict):
+    return capability.repo_rollback((body or {}).get("hash", ""))
 
 
 # ---------------- static frontend (dist) ----------------

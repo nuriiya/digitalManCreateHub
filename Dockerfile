@@ -23,6 +23,10 @@ ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 WORKDIR /app
 
+# git: MCP 工具库的版本管理（能力沉淀 = git commit）
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies first (layer cache on rebuilds).
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r backend/requirements.txt
