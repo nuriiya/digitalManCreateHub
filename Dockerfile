@@ -1,9 +1,14 @@
 # Multi-stage build: frontend (vite) -> backend (FastAPI). The image is fully
 # self-contained: `docker build` produces the frontend dist inside the image,
 # so no local node/npm or pre-built dist is required.
+#
+# REGISTRY_LIBRARY_PREFIX lets CN builds pull the official base images (node /
+# python) through a mirror (set in .env). Leave empty for direct Docker Hub.
+
+ARG REGISTRY_LIBRARY_PREFIX=
 
 # ---- stage 1: frontend build ----
-FROM node:22-slim AS frontend
+FROM ${REGISTRY_LIBRARY_PREFIX}node:22-slim AS frontend
 WORKDIR /app/client
 COPY client/package.json client/package-lock.json ./
 RUN npm install --no-fund --no-audit
@@ -11,7 +16,7 @@ COPY client/ ./
 RUN npm run build
 
 # ---- stage 2: backend ----
-FROM python:3.13-slim
+FROM ${REGISTRY_LIBRARY_PREFIX}python:3.13-slim
 
 WORKDIR /app
 

@@ -4,8 +4,6 @@
 # ollama container, so no huge image pull is needed for local dev.
 services:
   backend:
-    build:
-      context: .
     volumes:
       - ./backend:/app/backend
       - ./client/dist:/app/client/dist
