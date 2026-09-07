@@ -223,6 +223,12 @@ def _connect():
     # tables).
     pg = psycopg.connect(dsn, autocommit=False, connect_timeout=8,
                          row_factory=dict_row)
+    # Ensure the pgvector extension exists BEFORE register_vector (which needs
+    # the `vector` type). On a fresh container the extension is only created by
+    # _init_schema — but _init_schema runs AFTER _connect, so a brand-new DB
+    # would fail here with "vector type not found in the database".
+    pg.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    pg.commit()
     register_vector(pg)  # enables list[float] <-> vector and Python list <-> TEXT[]
     pg.execute("SET application_name = 'rag_mvp'")
     pg.execute("SET statement_timeout = 0")  # long LLM/blocking jobs OK
