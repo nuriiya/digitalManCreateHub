@@ -29,6 +29,16 @@ _STOP_LATIN = {"the", "and", "for", "with", "this", "that", "from", "are", "was"
 
 MAX_PROMPT_LEN = 4000   # 用户可编辑的附加指令上限（与 chat.py 注入上限一致）
 
+# 数字人分类（axis = 本体从哪来，见 doc/顶层架构.md §0）：
+#   general       通用数字人（基础数字人，本体来自平台通用本体库）
+#   domain_expert 执行领域专家（专业数字人，本体来自部门文档 RAG）
+# 现状：代码里所有数字人都走 RAG 路径，故默认 domain_expert；general 待
+# Spec 编译路径建成后由平台方写入。
+CATEGORY_GENERAL = "general"
+CATEGORY_DOMAIN_EXPERT = "domain_expert"
+IDENTITY_CATEGORIES = (CATEGORY_GENERAL, CATEGORY_DOMAIN_EXPERT)
+DEFAULT_CATEGORY = CATEGORY_DOMAIN_EXPERT
+
 
 # ---------------- step 1: deterministic high-freq stats (0 LLM) ----------------
 
@@ -261,7 +271,8 @@ def delete_identity(conn, identity_id: int) -> bool:
 def create_identity(conn, name: str, mission: str,
                     description: str = "",
                     seed_candidate_ids: list[int] | None = None,
-                    prompt: str = "") -> int | None:
+                    prompt: str = "",
+                    category: str = DEFAULT_CATEGORY) -> int | None:
     """Create a digital person from the ontology graph (user-defined).
 
     The user picks candidate nodes on the graph as SEED ontology; their pick
@@ -274,6 +285,9 @@ def create_identity(conn, name: str, mission: str,
 
     `prompt` is the user's optional ADDITIVE system-instruction tail (iron
     laws stay hard-coded ABOVE the tail in chat._system_prompt).
+
+    `category` ∈ IDENTITY_CATEGORIES ('general' | 'domain_expert'); invalid
+    values fall back to the default.
     """
     name = str(name or "").strip()
     mission = str(mission or "").strip()
@@ -282,11 +296,12 @@ def create_identity(conn, name: str, mission: str,
     if len(mission) > 500:
         return None
     user_prompt = str(prompt or "").strip()[:MAX_PROMPT_LEN]
+    cat = category if category in IDENTITY_CATEGORIES else DEFAULT_CATEGORY
     cur = conn.execute(
         "INSERT INTO identities(name, mission, description, keywords, prompt,"
-        " status, created_at) VALUES(?,?,?,?, ?, ?, ?)",
+        " status, category, created_at) VALUES(?,?,?,?, ?, ?, ?, ?)",
         (name, mission, str(description or "").strip()[:MAX_DEFINITION_LEN],
-         "[]", user_prompt, "approved", db.now()))
+         "[]", user_prompt, "approved", cat, db.now()))
     identity_id = cur.lastrowid
     for cid in (seed_candidate_ids or []):
         cand = conn.execute(
@@ -342,6 +357,11 @@ def update_identity(conn, identity_id: int, patch: dict) -> bool:
         else:
             user_prompt = str(p_raw).strip()[:MAX_PROMPT_LEN]
             sets.append("prompt=?"); vals.append(user_prompt)
+    if "category" in patch:
+        cat = patch.get("category")
+        if cat is not None and cat not in IDENTITY_CATEGORIES:
+            return False
+        sets.append("category=?"); vals.append(cat)
     if not sets:
         return False
     vals.append(identity_id)

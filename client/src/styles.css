@@ -99,6 +99,7 @@ table.tbl tr:hover td { background: var(--panel2); }
 .status-pill.cancelled { background: rgba(139,143,152,.2); color: var(--muted); }
 .status-pill.autopaused { background: rgba(217,131,36,.25); color: var(--orange); }
 .status-pill.interrupted { background: rgba(139,143,152,.2); color: var(--muted); }
+.status-pill.cat { background: rgba(162,119,224,.18); color: var(--purple); font-weight: 600; }
 
 button.btn.small { padding: 3px 10px; font-size: 12px; }
 /* small ghost buttons keep panel2 bg; colored text + matching border.
@@ -298,6 +299,10 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .id-block-title {
   font-size: 12px; font-weight: 700; color: var(--muted);
   letter-spacing: 0.3px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.id-cat-title {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  margin-top: 6px; padding-left: 2px;
 }
 .asm-sub, .ont-sub {
   margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 10px;

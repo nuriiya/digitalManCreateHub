@@ -29,6 +29,12 @@ DEFAULTS = {
              "model": "glm-5.2", "timeout": 90, "hard_timeout": 1800},
     "embedding": {"provider": "hash", "base_url": "http://localhost:11434",
                   "model": "bge-m3", "dim": 1024},
+    # 主 LLM 提供方: "cloud"=走 V4-Flash(云), "local"=走 WSL2 Ollama 本地。
+    # 切换后 /api/chat 不显式传 provider 时按此 mode 解析 (main.persona_chat)。
+    "llm_mode": "cloud",
+    # 本地 LLM 配置（仅在 llm_mode == "local" 时生效）
+    "local_llm": {"base_url": "http://localhost:11434",
+                  "model": "qwen2.5:7b-32k"},
 }
 
 _lock = threading.RLock()
@@ -105,3 +111,34 @@ def validate_llm_config(llm: dict) -> list[str]:
     if not (llm or {}).get("api_key"):
         errors.append("api_key is required")
     return errors
+
+
+def validate_local_llm_config(local: dict) -> list[str]:
+    """Structure gate for the local_llm block (WSL2 Ollama)."""
+    errors = []
+    base_url = (local or {}).get("base_url", "")
+    if not base_url:
+        errors.append("base_url is required")
+    elif not re.match(r"^https?://", base_url):
+        errors.append("base_url must start with http:// or https://")
+    model = (local or {}).get("model", "")
+    if not model:
+        errors.append("model is required")
+    return errors
+
+
+def resolve_provider(settings: dict | None = None) -> tuple[str, str | None]:
+    """Decide (provider, ollama_model) when the caller doesn't specify them
+    explicitly. Pure data — no LLM / no network.
+
+    "local" mode → ("ollama", settings.local_llm.model)
+    "cloud" mode (default) → ("llm2", None)
+    Always returns a tuple; never raises.
+    """
+    s = settings if settings is not None else load_settings()
+    if s.get("llm_mode") == "local":
+        local = s.get("local_llm") or {}
+        m = (local.get("model") or "").strip()
+        if m:
+            return "ollama", m
+    return "llm2", None

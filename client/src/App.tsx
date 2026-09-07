@@ -13,10 +13,11 @@ import ChatPage from './pages/ChatPage'
 import ConversationPage from './pages/ConversationPage'
 import LoginPage from './pages/LoginPage'
 import McpPage from './pages/McpPage'
+import PipelinePage from './pages/PipelinePage'
 import IngestDialog from './components/IngestDialog'
 import type { EventItem } from './api'
 
-type Tab = 'ingest' | 'rag' | 'ontology' | 'conversation' | 'chat' | 'settings' | 'mcp'
+type Tab = 'ingest' | 'rag' | 'ontology' | 'conversation' | 'chat' | 'settings' | 'mcp' | 'pipeline'
 
 const REFRESH_ON: string[] = [
   'job.finished', 'job.failed', 'job.paused', 'job.resumed', 'job.deleted',
@@ -328,6 +329,7 @@ const doRepair = async () => {
     { id: 'ingest', label: '数字人创建台' },
     { id: 'rag', label: 'RAG 预览' },
     { id: 'ontology', label: '本体图谱' },
+    { id: 'pipeline', label: '编排' },
     { id: 'chat', label: '测试' },
     { id: 'mcp', label: 'MCP 沙盒' },
     { id: 'settings', label: '设置' },
@@ -429,6 +431,7 @@ const doRepair = async () => {
         {tab === 'ontology' && <OntologyPage refreshKey={refreshKey} events={events} focusChunkId={focusChunk} chunks={stats.chunks ?? 0} />}
         {tab === 'conversation' && <ConversationPage refreshKey={refreshKey} />}
         {tab === 'chat' && <ChatPage refreshKey={refreshKey} />}
+        {tab === 'pipeline' && <PipelinePage refreshKey={refreshKey} />}
         {tab === 'mcp' && <McpPage />}
         {tab === 'settings' && <SettingsPage onChanged={bump} />}
       </div>

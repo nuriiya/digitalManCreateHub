@@ -59,6 +59,36 @@ export const testLlm = () => api('/api/settings/test-llm', { method: 'POST' })
 export const testLlm2 = () => api('/api/settings/test-llm2', { method: 'POST' })
 export const testEmbedding = () => api('/api/settings/test-embedding', { method: 'POST' })
 
+// --- Local LLM (WSL2 Ollama) ---
+export interface OllamaModelsResp {
+  ok: boolean
+  base_url: string
+  models: string[]
+  selected: string
+  selected_installed: boolean
+  error?: string
+}
+export interface OllamaPullStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  model: string
+  received: number
+  total: number
+  error: string | null
+  started_at: number
+  finished_at: number
+}
+export const listOllamaModels   = () => api<OllamaModelsResp>('/api/ollama/models')
+export const pullOllamaModel    = (model: string) =>
+  api<{ ok: boolean; model: string; state: string; error?: string }>(
+    '/api/ollama/pull', { method: 'POST', body: JSON.stringify({ model }) })
+export const getOllamaPullStatus = () => api<OllamaPullStatus>('/api/ollama/pull-status')
+export const setLocalLlm = (cfg: { base_url: string; model: string }) =>
+  api<{ ok: boolean }>('/api/settings/local-llm',
+    { method: 'PUT', body: JSON.stringify(cfg) })
+export const setLlmMode = (mode: 'cloud' | 'local') =>
+  api<{ ok: boolean; mode: string }>('/api/settings/llm-mode',
+    { method: 'PUT', body: JSON.stringify({ mode }) })
+
 export const triggerIngest = () => api<{ job_id: number }>('/api/rag/ingest', { method: 'POST' })
 export const triggerRepair = () => api('/api/rag/repair-summaries', { method: 'POST' })
 export const triggerOntology = () => api<{ job_id: number; resumed?: boolean }>(
@@ -127,6 +157,7 @@ export interface Identity {
   id: number; name: string; mission: string | null
   description: string | null; keywords: string[]; status: string
   prompt: string
+  category: string    // 'general' 通用数字人 | 'domain_expert' 执行领域专家
   anchors: IdentityAnchor[]
 }
 export const getIdentities = () => api<{ identities: Identity[] }>('/api/ontology/identities')
@@ -146,11 +177,11 @@ export const addAnchor = (identityId: number, patch: object) =>
   api<{ id: number }>('/api/ontology/anchors', { method: 'POST', body: JSON.stringify({ identity_id: identityId, ...patch }) })
 export const createIdentity = (
   name: string, mission: string, seedCandidateIds: number[],
-  description = '', prompt = '',
+  description = '', prompt = '', category = 'domain_expert',
 ) =>
   api<{ ok: boolean; id: number }>('/api/ontology/identities', {
     method: 'POST',
-    body: JSON.stringify({ name, mission, description, seed_candidate_ids: seedCandidateIds, prompt }),
+    body: JSON.stringify({ name, mission, description, seed_candidate_ids: seedCandidateIds, prompt, category }),
   })
 export const updateIdentity = (id: number, patch: object) =>
   api<{ ok: boolean }>(`/api/ontology/identities/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
@@ -421,3 +452,61 @@ export interface EventItem {
   payload: Record<string, any>
   ts: number
 }
+
+// ---------------- pipeline 编排 ----------------
+
+export interface PipelineNode {
+  id: number; pipeline_id: number; node_key: string
+  persona_id: number | null; kind: string; step_name: string | null
+  position_x: number | null; position_y: number | null
+}
+export interface PipelineRelation {
+  id: number; pipeline_id: number; from_node_id: number; to_node_id: number
+  relation_type: string; handoff_type: string | null; handoff_schema: string | null
+}
+export interface Pipeline {
+  id: number; name: string; description: string | null
+  version: number; status: string; tags: string[]
+  entry_node_id: number | null; exit_node_id: number | null
+  nodes: PipelineNode[]; relations: PipelineRelation[]
+}
+export interface PipelineChange {
+  id: number; pipeline_id: number; action: string
+  payload: Record<string, any>; status: string; reason: string | null
+}
+
+export const getPipelines = () => api<{ pipelines: Pipeline[] }>('/api/pipelines')
+export const createPipeline = (name: string, description = '', tags: string[] = []) =>
+  api<{ ok: boolean; id: number }>('/api/pipelines', { method: 'POST', body: JSON.stringify({ name, description, tags }) })
+export const getPipeline = (id: number) => api<{ pipeline: Pipeline }>(`/api/pipelines/${id}`)
+export const updatePipeline = (id: number, patch: object) =>
+  api<{ ok: boolean }>(`/api/pipelines/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
+export const deletePipeline = (id: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${id}`, { method: 'DELETE' })
+
+export const addPipelineNode = (pipelineId: number, node: object) =>
+  api<{ ok: boolean; id: number }>(`/api/pipelines/${pipelineId}/nodes`, { method: 'POST', body: JSON.stringify(node) })
+export const updatePipelineNode = (pipelineId: number, nodeId: number, patch: object) =>
+  api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/nodes/${nodeId}`, { method: 'PUT', body: JSON.stringify(patch) })
+export const removePipelineNode = (pipelineId: number, nodeId: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/nodes/${nodeId}`, { method: 'DELETE' })
+export const addPipelineRelation = (pipelineId: number, rel: object) =>
+  api<{ ok: boolean; id: number }>(`/api/pipelines/${pipelineId}/relations`, { method: 'POST', body: JSON.stringify(rel) })
+export const removePipelineRelation = (pipelineId: number, relationId: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/relations/${relationId}`, { method: 'DELETE' })
+
+export const validatePipeline = (id: number) =>
+  api<{ ok: boolean; errors: string[] }>(`/api/pipelines/${id}/validate`, { method: 'POST' })
+export const approvePipeline = (id: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${id}/approve`, { method: 'POST' })
+export const runPipeline = (id: number) =>
+  api<{ job_id: number }>(`/api/pipelines/${id}/run`, { method: 'POST' })
+
+export const getPipelineChanges = (id: number) =>
+  api<{ changes: PipelineChange[] }>(`/api/pipelines/${id}/changes`)
+export const approvePipelineChange = (pipelineId: number, changeId: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/changes/${changeId}/approve`, { method: 'POST' })
+export const rejectPipelineChange = (pipelineId: number, changeId: number) =>
+  api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/changes/${changeId}/reject`, { method: 'POST' })
+export const chatPipeline = (id: number, message: string) =>
+  api<{ ok: boolean; change_id?: number; changes: any[]; note?: string }>(`/api/pipelines/${id}/chat`, { method: 'POST', body: JSON.stringify({ message }) })

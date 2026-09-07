@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import {
   getSettings, saveSettings, testLlm, testLlm2, testEmbedding, getStats, getCandidate,
-  changePassword,
+  changePassword, listOllamaModels, pullOllamaModel, getOllamaPullStatus,
+  setLocalLlm, setLlmMode,
+  OllamaModelsResp, OllamaPullStatus,
 } from '../api'
 import { useToast } from '../Toast'
 
@@ -17,13 +19,24 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [pwBusy, setPwBusy] = useState(false)
+  // Local LLM (WSL2 Ollama): independent state so toggles don't churn the rest.
+  const [localLlm, setLocalLlmState] = useState({ base_url: 'http://localhost:11434', model: 'qwen2.5:7b-32k' })
+  const [llmMode, setLlmModeState] = useState<'cloud' | 'local'>('cloud')
+  const [ollamaModels, setOllamaModels] = useState<OllamaModelsResp | null>(null)
+  const [pullStatus, setPullStatus] = useState<OllamaPullStatus | null>(null)
+  const [pullBusy, setPullBusy] = useState(false)
+  const [ollamaCustom, setOllamaCustom] = useState('')  // when dropdown has no match
   const { toast } = useToast()
 
   useEffect(() => {
     getSettings().then((r) => {
       const s = r.settings
       setLlm(s.llm); setLlm2(s.llm2 || llm2); setEmb(s.embedding); setWorkDir(s.work_dir || '')
+      const ll = s.local_llm || {}
+      if (ll.base_url || ll.model) setLocalLlmState({ base_url: ll.base_url || 'http://localhost:11434', model: ll.model || 'qwen2.5:7b-32k' })
+      if (s.llm_mode === 'local' || s.llm_mode === 'cloud') setLlmModeState(s.llm_mode)
     })
+    listOllamaModels().then(setOllamaModels).catch(() => setOllamaModels(null))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -64,6 +77,66 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
       setOldPw(''); setNewPw('')
     } catch (e: any) { toast(e.message, 'err') }
     setPwBusy(false)
+  }
+
+  // ---- Local LLM (WSL2 Ollama) handlers ----
+
+  const doDetectOllama = async () => {
+    try {
+      const r = await listOllamaModels()
+      setOllamaModels(r)
+      toast(r.ok ? `✓ Ollama 可达，已装 ${r.models.length} 个模型` : `✗ ${r.error || '不可达'}`, r.ok ? 'ok' : 'err')
+    } catch (e: any) { setOllamaModels(null); toast(e.message, 'err') }
+  }
+
+  const doSaveLocalLlm = async () => {
+    try {
+      await setLocalLlm(localLlm)
+      toast('本地 LLM 配置已保存', 'ok')
+      // 重新探测以反映最新 selected_installed
+      listOllamaModels().then(setOllamaModels).catch(() => {})
+      onChanged?.()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  const doSetLlmMode = async (mode: 'cloud' | 'local') => {
+    try {
+      await setLlmMode(mode)
+      setLlmModeState(mode)
+      toast(mode === 'local' ? '主 LLM 提供方已切到本地 Ollama' : '主 LLM 提供方已切回云端 V4-Flash', 'ok')
+      onChanged?.()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  // Pull progress polling: tick every 2s while state==running, stop when done.
+  useEffect(() => {
+    if (!pullStatus || pullStatus.state !== 'running') return
+    const t = setInterval(async () => {
+      try {
+        const s = await getOllamaPullStatus()
+        setPullStatus(s)
+        if (s.state !== 'running') {
+          if (s.state === 'done') { toast(`✓ ${s.model} 拉取完成`, 'ok'); listOllamaModels().then(setOllamaModels).catch(()=>{}) }
+          else if (s.state === 'error') { toast(`✗ 拉取失败：${s.error}`, 'err') }
+        }
+      } catch {}
+    }, 2000)
+    return () => clearInterval(t)
+  }, [pullStatus?.state, pullStatus?.model])
+
+  const doPullModel = async (modelName?: string) => {
+    const target = (modelName || ollamaCustom || localLlm.model || '').trim()
+    if (!target) { toast('请输入或选择要拉取的模型名', 'err'); return }
+    setPullBusy(true)
+    try {
+      const r = await pullOllamaModel(target)
+      if (!r.ok) { toast(r.error || '拉取启动失败', 'err'); setPullBusy(false); return }
+      // 立刻拉一次状态作为初始 UI
+      const s = await getOllamaPullStatus()
+      setPullStatus(s)
+      toast(`已开始拉取 ${target}`, 'ok')
+    } catch (e: any) { toast(e.message, 'err') }
+    setPullBusy(false)
   }
 
   return (
@@ -157,6 +230,72 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
                   : `✗ ${embTest.error}`}
               </span>
             )}
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>本地 LLM · WSL2 Ollama</h3>
+          <div className="desc">
+            把数字人对话切到本地 Ollama（典型 qwen2.5 系列）以离线 / 私有化推理。保存后端持久化到 settings.local_llm，主 LLM 提供方切换在下方生效。
+          </div>
+          <label className="field"><span>Ollama 端点（WSL2 端口转发到 localhost）</span>
+            <input value={localLlm.base_url}
+              onChange={(e) => setLocalLlmState({ ...localLlm, base_url: e.target.value })} />
+          </label>
+          <div className="grid cols2">
+            <label className="field"><span>已装模型</span>
+              <select value={localLlm.model}
+                onChange={(e) => setLocalLlmState({ ...localLlm, model: e.target.value })}>
+                {(ollamaModels?.models || []).map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                {(!ollamaModels?.models || ollamaModels.models.length === 0) && (
+                  <option value={localLlm.model}>{localLlm.model}</option>
+                )}
+              </select>
+            </label>
+            <label className="field"><span>自定义（不在列表时输入）</span>
+              <input value={ollamaCustom} placeholder="如 qwen2.5:32k"
+                onChange={(e) => setOllamaCustom(e.target.value)} />
+            </label>
+          </div>
+          {ollamaModels && (
+            <div className="hint">
+              {ollamaModels.ok
+                ? <>✓ Ollama 可达·已装 {ollamaModels.models.length} 个模型·
+                    当前选定 <b>{localLlm.model}</b> · {ollamaModels.selected_installed ? '已装 ✓' : '未装 ✗'}</>
+                : <>✗ 不可达: {ollamaModels.error}</>}
+            </div>
+          )}
+          <div className="btnrow">
+            <button className="btn ghost" onClick={doDetectOllama}>检测 Ollama</button>
+            <button className="btn" onClick={doSaveLocalLlm} disabled={busy}>保存选定</button>
+            <button className="btn ghost" onClick={() => doPullModel()} disabled={pullBusy}>拉取模型</button>
+            {pullStatus && pullStatus.state === 'running' && (
+              <span className="note">拉取中… {pullStatus.received}/{pullStatus.total || '?'}</span>
+            )}
+            {pullStatus && pullStatus.state === 'done' && (
+              <span className="note">✓ {pullStatus.model} 已就位</span>
+            )}
+            {pullStatus && pullStatus.state === 'error' && (
+              <span className="warn">✗ {pullStatus.error}</span>
+            )}
+          </div>
+          <div className="hint">拉取进度走 <code>/api/ollama/pull-status</code>，每 2s 轮询；后台线程跑 NDJSON 流，断电也能续。</div>
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '0.5px solid var(--color-border-tertiary)' }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>主 LLM 提供方</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <input type="radio" name="llm-mode" checked={llmMode === 'cloud'}
+                onChange={() => doSetLlmMode('cloud')} />
+              <span>V4-Flash（云）</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="radio" name="llm-mode" checked={llmMode === 'local'}
+                onChange={() => doSetLlmMode('local')} />
+              <span>Ollama（本地，当前 <b>{localLlm.model || '（未选）'}</b>）</span>
+            </label>
+            <div className="hint">选定后,数字人对话不带 provider 参数时会按上方选择路由。V4-Flash 仍可手动覆盖。</div>
           </div>
         </div>
 

@@ -73,8 +73,19 @@ if ($NeedBuild) {
     Write-Step "building frontend (src newer than dist)..."
     $nodeDir = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $nodeDir) {
-        $managed = "C:\Users\12030\.workbuddy\binaries\node\versions\22.22.2"
-        if (Test-Path $managed) { $env:PATH = "$managed;$env:PATH" }
+        # WorkBuddy ships a managed Node under $env:USERPROFILE\.workbuddy\binaries\node.
+        # Discover the newest installed version that ships npm.cmd (writes stay local;
+        # never pollutes the user's PATH globally). The previous hardcoded path
+        # "C:\Users\12030\...22.22.2" silently broke for every other user.
+        $managed = $null
+        $managedRoot = Join-Path $env:USERPROFILE ".workbuddy\binaries\node"
+        if (Test-Path $managedRoot) {
+            $candidates = Get-ChildItem -Path (Join-Path $managedRoot "versions") -Directory -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path (Join-Path $_.FullName "npm.cmd") } |
+                Sort-Object Name -Descending
+            if ($candidates) { $managed = $candidates[0].FullName }
+        }
+        if ($managed) { $env:PATH = "$managed;$env:PATH" }
     }
     Push-Location (Join-Path $Root "client")
     if (-not (Test-Path "node_modules")) { npm install --no-fund --no-audit | Out-Null }
@@ -368,9 +379,17 @@ if ($PgReady) {
                 Remove-Item $KeepaliveFile -Force
             }
             Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
+            # NOTE: do NOT hardcode the distro name/user. Registrations vary
+            # ("Ubuntu" vs "Ubuntu-22.04", user "jiauya" vs "yifengxue"); a wrong
+            # -d makes wsl.exe exit immediately and the keepalive silently dies.
+            # Omitting -d uses the default distro; -u comes from Get-WslUser.
+            $wslKeepUser = Get-WslUser
+            # PS 5.1 Start-Process joins ArgumentList with spaces WITHOUT quoting,
+            # so the "exec sleep infinity" element must carry its own quotes or
+            # wsl.exe sees broken args (bash -c exec sleep infinity) and exits.
             $KeepaliveProc = Start-Process -FilePath "wsl.exe" `
-                -ArgumentList @("-d", "Ubuntu-22.04", "-u", "jiauya",
-                                "-e", "bash", "-c", "exec sleep infinity") `
+                -ArgumentList @("-u", $wslKeepUser,
+                                "-e", "bash", "-c", '"exec sleep infinity"') `
                 -WindowStyle Hidden -PassThru
             $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
             Write-Step "keepalive PID $($KeepaliveProc.Id) -> $KeepaliveFile"

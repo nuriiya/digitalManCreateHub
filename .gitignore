@@ -27,3 +27,4 @@ Thumbs.db
 
 # Build artifacts
 client/tsconfig.tsbuildinfo
+.venv*/

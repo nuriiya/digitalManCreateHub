@@ -456,6 +456,7 @@ CREATE TABLE IF NOT EXISTS identities (
     keywords JSONB NOT NULL DEFAULT '[]'::jsonb,
     prompt TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending',
+    category TEXT NOT NULL DEFAULT 'domain_expert',
     created_at DOUBLE PRECISION NOT NULL
 );
 
@@ -667,6 +668,75 @@ CREATE TABLE IF NOT EXISTS persona_ontology_versions (
     created_at DOUBLE PRECISION NOT NULL,
     UNIQUE(identity_id, version)
 );
+
+-- pipeline 编排（一等公民实体，对称于数字人本体库）
+CREATE TABLE IF NOT EXISTS pipelines (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    version BIGINT NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'draft',
+    tags TEXT[] NOT NULL DEFAULT '{}'::text[],
+    entry_node_id BIGINT,
+    exit_node_id BIGINT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_nodes (
+    id BIGSERIAL PRIMARY KEY,
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    node_key TEXT NOT NULL,
+    persona_id BIGINT REFERENCES identities(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL DEFAULT 'nominate',
+    step_name TEXT,
+    position_x DOUBLE PRECISION,
+    position_y DOUBLE PRECISION,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pnode_pipeline ON pipeline_nodes(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_relations (
+    id BIGSERIAL PRIMARY KEY,
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    from_node_id BIGINT NOT NULL REFERENCES pipeline_nodes(id) ON DELETE CASCADE,
+    to_node_id BIGINT NOT NULL REFERENCES pipeline_nodes(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL,
+    handoff_type TEXT,
+    handoff_schema TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prel_pipeline ON pipeline_relations(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_changes (
+    id BIGSERIAL PRIMARY KEY,
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reason TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pchg_pipeline ON pipeline_changes(pipeline_id, status);
+
+-- pipeline 执行实例 + 交接物（执行引擎）
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id BIGSERIAL PRIMARY KEY,
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    job_id BIGINT,
+    status TEXT NOT NULL DEFAULT 'running',
+    current_node_id BIGINT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prun_pipeline ON pipeline_runs(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_handoffs (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    node_id BIGINT NOT NULL REFERENCES pipeline_nodes(id) ON DELETE CASCADE,
+    handoff TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phand_run ON pipeline_run_handoffs(run_id);
 """
 
 
@@ -693,6 +763,11 @@ def _init_schema(conn: _Conn) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_kind_norm ON candidates(kind, name_norm)")
         # jobs parent_id (2026-09-05): pipeline sub-jobs nest under their parent.
         cur.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parent_id BIGINT")
+        # identities category (2026-09-07): 数字人分类 axis — 'general' 通用数字人
+        # (基础, 平台通用本体) vs 'domain_expert' 执行领域专家 (部门 RAG). Existing
+        # rows default to 'domain_expert' (they were all RAG-derived specialists).
+        cur.execute("ALTER TABLE identities ADD COLUMN IF NOT EXISTS"
+                    " category TEXT NOT NULL DEFAULT 'domain_expert'")
     conn.commit()
 
 

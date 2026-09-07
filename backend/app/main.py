@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import json
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline
 
 
 def _sha256(text: str) -> str:
@@ -812,6 +814,7 @@ class IdentityCreateBody(BaseModel):
     description: str = ""
     seed_candidate_ids: list[int] = []
     prompt: str = ""            # 附加指令（创建时直接设定；铁律由代码硬保证不被绕过）
+    category: str = identity.DEFAULT_CATEGORY   # general | domain_expert
 
 
 @app.post("/api/ontology/identities")
@@ -821,7 +824,7 @@ def create_identity(body: IdentityCreateBody):
     段 (their explicit pick = final adjudication)."""
     iid = identity.create_identity(db.get_conn(), body.name, body.mission,
                                    body.description, body.seed_candidate_ids,
-                                   body.prompt)
+                                   body.prompt, body.category)
     if iid is None:
         return JSONResponse({"error": "名字不能为空或过长"}, status_code=400)
     jobs.emit(db.get_conn(), None, "identity.created",
@@ -834,6 +837,7 @@ class IdentityUpdateBody(BaseModel):
     mission: str | None = None
     description: str | None = None
     prompt: str | None = None          # 附加指令（铁律由代码硬保证不被绕过）
+    category: str | None = None        # general | domain_expert
 
 
 @app.put("/api/ontology/identities/{identity_id}")
@@ -1143,12 +1147,21 @@ def chat_route(body: RouteBody):
 def persona_chat(body: ChatBody):
     """One turn of conversation with a digital person, answered by the chosen
     responder (GLM 5.2 default / DeepSeek / local Ollama 7B), grounded by the
-    persona's ontology constraint when use_ontology is on."""
+    persona's ontology constraint when use_ontology is on.
+
+    Provider fallback: when the caller keeps the literal default "llm2" but
+    settings.llm_mode == "local", resolve to ("ollama", local_llm.model).
+    Backend logic only — explicit provider="llm"/"llm2"/"ollama" wins.
+    """
+    prov, omodel = body.provider, body.ollama_model
+    if prov in ("llm2", "", None):
+        prov, omodel = settings_store.resolve_provider()
+        omodel = omodel or body.ollama_model
     try:
         result = chat.answer(db.get_conn(), body.identity_id, body.message,
                              use_ontology=body.use_ontology,
-                             provider=body.provider,
-                             ollama_model=body.ollama_model,
+                             provider=prov,
+                             ollama_model=omodel,
                              use_rag=body.use_rag,
                              session_id=body.session_id)
     except llm.LLMError as e:
@@ -1314,6 +1327,422 @@ def rollback_benchmark_version(body: BenchmarkRollbackBody):
 @app.get("/api/health")
 def health():
     return {"ok": True, "version": app.version}
+
+
+# ---------------- local LLM (WSL2 Ollama) ----------------
+# settings.llm_mode ∈ {"cloud","local"}  ·  settings.local_llm = {base_url, model}
+# Frontend SettingsPage 使用这一节完成 "测试连通 / 选定模型 / 拉取模型 / 切换主 provider"。
+# 旧 settings.json 无这俩键 → settings_store 的 _deep_merge + DEFAULTS 自动填空, 向后兼容。
+
+_OLLAMA_PULL_STATE: dict = {
+    "state": "idle",          # idle | running | done | error
+    "model": "",
+    "received": 0,
+    "total": 0,
+    "error": None,
+    "started_at": 0.0,
+    "finished_at": 0.0,
+}
+_PULL_LOCK = threading.Lock()
+
+
+def _set_pull_state(**patch):
+    with _PULL_LOCK:
+        _OLLAMA_PULL_STATE.update(patch)
+
+
+def _get_pull_state() -> dict:
+    with _PULL_LOCK:
+        return dict(_OLLAMA_PULL_STATE)
+
+
+def _do_ollama_pull(base: str, model: str) -> None:
+    """Background thread: stream NDJSON from {base}/api/pull, update pull state.
+
+    Reuses netutil.local_urlopen so it works against host- and WSL2-forwarded
+    Ollama (which both listen on localhost:11434). Long timeout because model
+    pulls often run into the minutes; heartbeat every layer keeps the UI live.
+    """
+    _set_pull_state(state="running", model=model, received=0, total=0,
+                    error=None, started_at=time.time(), finished_at=0.0)
+    try:
+        from . import netutil  # local import (top-level would import-test pin)
+        body = json.dumps({"model": model, "stream": True}).encode("utf-8")
+        with netutil.local_urlopen(base.rstrip("/") + "/api/pull", data=body,
+                                   method="POST", headers={"Content-Type": "application/json"},
+                                   timeout=7200) as resp:
+            for raw in resp:
+                try:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    continue
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(evt, dict):
+                    continue
+                err = evt.get("error")
+                if err and not _get_pull_state().get("error"):
+                    _set_pull_state(error=str(err))
+                if "completed" in evt or "total" in evt:
+                    _set_pull_state(
+                        received=int(evt.get("completed", 0) or 0),
+                        total=int(evt.get("total", 0) or 0),
+                    )
+                if evt.get("status") == "success":
+                    _set_pull_state(state="done", finished_at=time.time())
+                    return
+        # Stream ended without explicit success event — treat as done if no error
+        with _PULL_LOCK:
+            if _OLLAMA_PULL_STATE["state"] == "running":
+                _OLLAMA_PULL_STATE["state"] = "done"
+                _OLLAMA_PULL_STATE["finished_at"] = time.time()
+    except Exception as e:
+        _set_pull_state(state="error",
+                        error=f"{type(e).__name__}: {e}",
+                        finished_at=time.time())
+
+
+@app.get("/api/ollama/models")
+def list_ollama_models():
+    """List installed models at the configured local Ollama endpoint, plus
+    whether the user-selected chat model is currently installed."""
+    s = settings_store.load_settings()
+    local = (s.get("local_llm") or {})
+    base = (local.get("base_url") or "http://localhost:11434").rstrip("/")
+    selected = (local.get("model") or "").strip()
+    probe = embedding.check_ollama(base, "")
+    models = probe.get("models") or []
+    return {
+        "ok": bool(probe.get("ok")),
+        "base_url": base,
+        "models": models,
+        "selected": selected,
+        "selected_installed": bool(selected) and (selected in models),
+        "error": probe.get("error"),
+    }
+
+
+class OllamaPullBody(BaseModel):
+    model: str
+
+
+@app.post("/api/ollama/pull")
+def ollama_pull(body: OllamaPullBody):
+    """Kick off a background Ollama model pull. Frontend polls
+    /api/ollama/pull-status for progress. One concurrent pull at a time."""
+    model = (body.model or "").strip()
+    if not model:
+        return JSONResponse({"ok": False, "error": "model required"}, status_code=400)
+    with _PULL_LOCK:
+        st = _OLLAMA_PULL_STATE.get("state")
+        cur_model = _OLLAMA_PULL_STATE.get("model", "")
+        if st == "running":
+            return JSONResponse({"ok": False, "error": f"已有一个拉取任务在进行（{cur_model}）"},
+                                status_code=409)
+    s = settings_store.load_settings()
+    local = s.get("local_llm") or {}
+    base = (local.get("base_url") or "http://localhost:11434").rstrip("/")
+    t = threading.Thread(target=_do_ollama_pull, args=(base, model), daemon=True)
+    t.start()
+    return {"ok": True, "model": model, "state": "started"}
+
+
+@app.get("/api/ollama/pull-status")
+def ollama_pull_status():
+    """Snapshot of the in-flight (or last-completed) pull. Frontend polls this."""
+    return _get_pull_state()
+
+
+class LocalLlmPatch(BaseModel):
+    base_url: str = ""
+    model: str = ""
+
+
+@app.put("/api/settings/local-llm")
+def put_local_llm(body: LocalLlmPatch):
+    """Persist the WSL2-Ollama chat LLM endpoint & model selection.
+
+    Structure validation only (no LLM call); the user clicks "检测 Ollama"
+    separately via GET /api/ollama/models for live reachability feedback.
+    """
+    payload = body.model_dump()
+    errs = settings_store.validate_local_llm_config(payload)
+    if errs:
+        return JSONResponse({"ok": False, "error": "; ".join(errs)}, status_code=400)
+    merged = settings_store.save_settings({"local_llm": payload})
+    return {"ok": True, "settings": settings_store.mask_settings(merged),
+            "local_llm": merged.get("local_llm")}
+
+
+class LlmModeBody(BaseModel):
+    mode: str                       # "cloud" | "local"
+
+
+@app.put("/api/settings/llm-mode")
+def put_llm_mode(body: LlmModeBody):
+    """Set the main-LLM provider mode. Persists into settings.llm_mode;
+    subsequent /api/chat calls without explicit provider fall back to local
+    Ollama when mode == "local"."""
+    if body.mode not in ("cloud", "local"):
+        return JSONResponse({"ok": False, "error": 'mode 必须是 "cloud" 或 "local"'},
+                            status_code=400)
+    merged = settings_store.save_settings({"llm_mode": body.mode})
+    return {"ok": True, "settings": settings_store.mask_settings(merged),
+            "mode": body.mode}
+
+
+# ---------------- pipeline 编排（一等公民实体） ----------------
+
+class PipelineCreateBody(BaseModel):
+    name: str
+    description: str = ""
+    tags: list[str] = []
+
+
+class PipelineUpdateBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    entry_node_id: int | None = None
+    exit_node_id: int | None = None
+
+
+class PipelineNodeBody(BaseModel):
+    node_key: str = ""
+    persona_id: int | None = None
+    kind: str = pipeline.KIND_NOMINATE
+    step_name: str = ""
+    position: dict | None = None
+
+
+class PipelineNodePatch(BaseModel):
+    node_key: str | None = None
+    persona_id: int | None = None
+    kind: str | None = None
+    step_name: str | None = None
+    position: dict | None = None
+
+
+class PipelineRelationBody(BaseModel):
+    from_node_id: int
+    to_node_id: int
+    relation_type: str
+    handoff_type: str = ""
+    handoff_schema: str = ""
+
+
+class PipelineChatBody(BaseModel):
+    message: str
+
+
+def _design_changes_via_llm(pipeline_dict: dict, user_message: str) -> list:
+    """流程设计师 LLM 提名：把 pipeline 结构 + 用户需求交给 LLM，产出 changes JSON 数组。
+
+    只提名不裁决；解析失败返回空列表（前端可提示用户手动编辑）。"""
+    system = (
+        "你是流程设计师，根据用户需求修改数字人编排图（pipeline）。\n"
+        "pipeline 由数字人节点（nodes）和数字人关系（relations）组成。\n"
+        f"关系类型闭集：{', '.join(pipeline.RELATION_TYPES)}\n"
+        f"节点 kind：{', '.join(pipeline.NODE_KINDS)}（nominate=数字人LLM提名节点，deterministic=确定性Function节点）\n"
+        f"修改动作闭集：{', '.join(pipeline.CHANGE_ACTIONS)}\n"
+        "你只提名修改，不裁决。只输出一个 JSON 数组，每项形如 "
+        "{\"action\":\"add_node\",\"payload\":{\"node_key\":\"n6\",\"persona_id\":3,"
+        "\"kind\":\"nominate\",\"step_name\":\"代码复核\"},\"reason\":\"...\"}。"
+    )
+    user = (f"当前 pipeline：{json.dumps(pipeline_dict, ensure_ascii=False)}\n"
+            f"用户需求：{user_message}\n请输出修改提名 JSON 数组（不要任何解释文字）。")
+    try:
+        reply = llm.chat([{"role": "system", "content": system},
+                          {"role": "user", "content": user}], temperature=0.0)
+    except Exception:
+        return []
+    text = (reply or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
+    try:
+        data = json.loads(text)
+    except Exception:
+        s, e = text.find("["), text.rfind("]")
+        if s == -1 or e == -1:
+            return []
+        try:
+            data = json.loads(text[s:e + 1])
+        except Exception:
+            return []
+    if isinstance(data, dict):
+        data = data.get("changes", data.get("modifications", []))
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+@app.get("/api/pipelines")
+def list_pipelines():
+    return {"pipelines": pipeline.list_pipelines(db.get_conn())}
+
+
+@app.post("/api/pipelines")
+def create_pipeline(body: PipelineCreateBody):
+    pid = pipeline.create_pipeline(db.get_conn(), body.name, body.description,
+                                   body.tags)
+    if pid is None:
+        return JSONResponse({"error": "名字不能为空或过长"}, status_code=400)
+    jobs.emit(db.get_conn(), None, "pipeline.created",
+              {"id": pid, "name": body.name})
+    return {"ok": True, "id": pid}
+
+
+@app.get("/api/pipelines/{pipeline_id}")
+def get_pipeline(pipeline_id: int):
+    p = pipeline.get_pipeline(db.get_conn(), pipeline_id)
+    if p is None:
+        return JSONResponse({"error": "pipeline not found"}, status_code=404)
+    return {"pipeline": p}
+
+
+@app.put("/api/pipelines/{pipeline_id}")
+def update_pipeline(pipeline_id: int, body: PipelineUpdateBody):
+    if not pipeline.update_pipeline(db.get_conn(), pipeline_id,
+                                    body.model_dump(exclude_none=True)):
+        return JSONResponse({"error": "nothing to update or invalid values"},
+                            status_code=400)
+    jobs.emit(db.get_conn(), None, "pipeline.updated", {"id": pipeline_id})
+    return {"ok": True}
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+def delete_pipeline(pipeline_id: int):
+    if not pipeline.delete_pipeline(db.get_conn(), pipeline_id):
+        return JSONResponse({"error": "pipeline not found"}, status_code=404)
+    jobs.emit(db.get_conn(), None, "pipeline.deleted", {"id": pipeline_id})
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/nodes")
+def add_pipeline_node(pipeline_id: int, body: PipelineNodeBody):
+    nid = pipeline.add_node(db.get_conn(), pipeline_id, body.node_key,
+                            body.persona_id, body.kind, body.step_name,
+                            body.position)
+    if nid is None:
+        return JSONResponse({"error": "invalid node (empty key or bad kind)"},
+                            status_code=400)
+    return {"ok": True, "id": nid}
+
+
+@app.put("/api/pipelines/{pipeline_id}/nodes/{node_id}")
+def update_pipeline_node(pipeline_id: int, node_id: int, body: PipelineNodePatch):
+    if not pipeline.update_node(db.get_conn(), node_id,
+                                body.model_dump(exclude_none=True)):
+        return JSONResponse({"error": "nothing to update or invalid values"},
+                            status_code=400)
+    return {"ok": True}
+
+
+@app.delete("/api/pipelines/{pipeline_id}/nodes/{node_id}")
+def remove_pipeline_node(pipeline_id: int, node_id: int):
+    if not pipeline.remove_node(db.get_conn(), node_id):
+        return JSONResponse({"error": "node not found"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/relations")
+def add_pipeline_relation(pipeline_id: int, body: PipelineRelationBody):
+    rid = pipeline.add_relation(db.get_conn(), pipeline_id, body.from_node_id,
+                                body.to_node_id, body.relation_type,
+                                body.handoff_type, body.handoff_schema)
+    if rid is None:
+        return JSONResponse({"error": "invalid relation (bad type or self-loop)"},
+                            status_code=400)
+    return {"ok": True, "id": rid}
+
+
+@app.delete("/api/pipelines/{pipeline_id}/relations/{relation_id}")
+def remove_pipeline_relation(pipeline_id: int, relation_id: int):
+    if not pipeline.remove_relation(db.get_conn(), relation_id):
+        return JSONResponse({"error": "relation not found"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/validate")
+def validate_pipeline(pipeline_id: int):
+    errors = pipeline.validate_pipeline(db.get_conn(), pipeline_id)
+    return {"ok": len(errors) == 0, "errors": errors}
+
+
+@app.post("/api/pipelines/{pipeline_id}/approve")
+def approve_pipeline(pipeline_id: int):
+    errors = pipeline.validate_pipeline(db.get_conn(), pipeline_id)
+    if errors:
+        return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+    if not pipeline.approve_pipeline(db.get_conn(), pipeline_id):
+        return JSONResponse({"error": "pipeline not found"}, status_code=404)
+    jobs.emit(db.get_conn(), None, "pipeline.approved", {"id": pipeline_id})
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/run")
+def run_pipeline(pipeline_id: int):
+    """运行 pipeline：创建父 job（kind=pipeline_run），后台执行引擎按拓扑调度。
+
+    deterministic 节点走内置映射表（建数字人），nominate 节点走数字人 tool-use
+    loop。与「一键流水线」的 kind=pipeline 区分开，避免互斥误伤。"""
+    conn = db.get_conn()
+    p = pipeline.get_pipeline(conn, pipeline_id)
+    if p is None:
+        return JSONResponse({"error": "pipeline not found"}, status_code=404)
+    if p["status"] != pipeline.STATUS_APPROVED:
+        return JSONResponse({"error": "pipeline 未批准，请先校验并批准"},
+                            status_code=400)
+    active = jobs.active_job(conn, "pipeline_run")
+    if active:
+        return JSONResponse({"error": f"已有 pipeline 运行任务 #{active['id']}"},
+                            status_code=409)
+    job_id = jobs.create_job(conn, "pipeline_run", len(p["nodes"]),
+                             detail=f"运行 pipeline：{p['name']}",
+                             ref_id=pipeline_id)
+    jobs.run_in_background(job_id, pipeline.run_pipeline_execution, pipeline_id)
+    return {"job_id": job_id}
+
+
+@app.get("/api/pipelines/{pipeline_id}/changes")
+def list_pipeline_changes(pipeline_id: int):
+    return {"changes": pipeline.list_changes(db.get_conn(), pipeline_id)}
+
+
+@app.post("/api/pipelines/{pipeline_id}/changes/{change_id}/approve")
+def approve_pipeline_change(pipeline_id: int, change_id: int):
+    if not pipeline.apply_change(db.get_conn(), change_id):
+        return JSONResponse({"error": "change not found or not pending"},
+                            status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/changes/{change_id}/reject")
+def reject_pipeline_change(pipeline_id: int, change_id: int):
+    if not pipeline.reject_change(db.get_conn(), change_id):
+        return JSONResponse({"error": "change not found"}, status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/pipelines/{pipeline_id}/chat")
+def chat_pipeline(pipeline_id: int, body: PipelineChatBody):
+    """对话改 pipeline：流程设计师(LLM)根据用户消息产出修改提名，落库 pending。
+    用户在 changes 里审批后应用。LLM 只提名，不裁决。"""
+    p = pipeline.get_pipeline(db.get_conn(), pipeline_id)
+    if p is None:
+        return JSONResponse({"error": "pipeline not found"}, status_code=404)
+    changes = _design_changes_via_llm(p, body.message)
+    if not changes:
+        return {"ok": True, "changes": [], "note": "未能解析出有效修改提名"}
+    cid = pipeline.nominate_changes(db.get_conn(), pipeline_id, changes)
+    return {"ok": True, "change_id": cid, "changes": changes}
 
 
 # ---------------- static frontend (dist) ----------------

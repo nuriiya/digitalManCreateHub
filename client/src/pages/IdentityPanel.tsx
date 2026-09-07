@@ -14,6 +14,13 @@ interface Props {
   chunks: number
 }
 
+// 数字人分类（axis = 本体从哪来，见 doc/顶层架构.md §0）
+const CATEGORY_LABEL: Record<string, string> = {
+  general: '通用数字人',
+  domain_expert: '执行领域专家',
+}
+const CATEGORY_ORDER = ['general', 'domain_expert']
+
 /** 数字人管理中心：三块（已有 / 备选 / 创造·删除·修改）。已有数字人卡片内嵌
  * 「本体段」与「本体装配」子模块。多数字人并存，各自独立装配与迭代。 */
 export default function IdentityPanel({ refreshKey, chunks }: Props) {
@@ -24,9 +31,9 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const [adding, setAdding] = useState<number | null>(null) // identity id being extended
   const [newAnchor, setNewAnchor] = useState({ name: '', type: '概念', definition: '' })
   const [editingId, setEditingId] = useState<number | null>(null) // identity being edited
-  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '' })
+  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert' })
   const [creating, setCreating] = useState(false)
-  const [createDraft, setCreateDraft] = useState({ name: '', mission: '', prompt: '' })
+  const [createDraft, setCreateDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert' })
   // assembly per persona
   const [asm, setAsm] = useState<Record<number, AsmSummary>>({})
   const [personaOnt, setPersonaOnt] = useState<Record<number, PersonaOntItem[]>>({})
@@ -43,6 +50,9 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
   const alternates = useMemo(() => idents.filter((i) => i.status !== 'approved'), [idents])
+  // 已有数字人按分类分组：通用数字人（general）在前，执行领域专家（domain_expert）在后
+  const general = useMemo(() => approved.filter((i) => i.category === 'general'), [approved])
+  const experts = useMemo(() => approved.filter((i) => i.category !== 'general'), [approved])
 
   const reload = useCallback(() => {
     getIdentities().then((r) => setIdents(r.identities ?? [])).catch(() => { })
@@ -100,13 +110,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const startEditId = (it: Identity) => {
     setEditingId(it.id)
-    setIdDraft({ name: it.name, mission: it.mission || '', prompt: it.prompt || '' })
+    setIdDraft({ name: it.name, mission: it.mission || '', prompt: it.prompt || '', category: it.category || 'domain_expert' })
   }
   const saveEditId = async () => {
     if (!editingId) return
     try {
       await updateIdentity(editingId, {
         name: idDraft.name, mission: idDraft.mission, prompt: idDraft.prompt,
+        category: idDraft.category,
       })
       toast('数字人已更新', 'ok')
       setEditingId(null)
@@ -124,14 +135,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
         toast(`已启动自主创建：身份提名任务 #${r.job_id}（高频词统计 → LLM 提名）。完成后在「备选数字人」中审批。`, 'ok')
       } catch (e: any) { toast(e.message, 'err') }
       setCreating(false)
-      setCreateDraft({ name: '', mission: '', prompt: '' })
+      setCreateDraft({ name: '', mission: '', prompt: '', category: 'domain_expert' })
       return
     }
     if (!name) { toast('请填写数字人名称（或两栏都留空走「自主创建」）', 'err'); return }
     try {
-      const r = await createIdentity(name, defn, [], '', createDraft.prompt)
+      const r = await createIdentity(name, defn, [], '', createDraft.prompt, createDraft.category)
       toast(`数字人「${name}」已创建`, 'ok')
-      setCreateDraft({ name: '', mission: '', prompt: '' })
+      setCreateDraft({ name: '', mission: '', prompt: '', category: 'domain_expert' })
       setCreating(false)
       reload()
     } catch (e: any) { toast(e.message, 'err') }
@@ -486,6 +497,67 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const approvedAnchors = approved.reduce((n, i) => n + i.anchors.filter((a) => a.status === 'approved').length, 0)
 
+  // 已有数字人卡片渲染（通用数字人 / 执行领域专家两组共用）
+  const renderApprovedCard = (it: Identity) => (
+    <div key={it.id} className={`id-card st-${it.status}`}>
+      <div className="id-head">
+        <b>{it.name}</b>
+        <span className={`status-pill ${it.status}`} style={{ marginLeft: 0 }}>{it.status}</span>
+        <span className="status-pill cat" style={{ marginLeft: 0 }}>{CATEGORY_LABEL[it.category] || '执行领域专家'}</span>
+        <span className="ops" style={{ marginLeft: 'auto' }}>
+          <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
+          <button className="btn red small" onClick={() => identityDelete(it.id)}>删除</button>
+        </span>
+      </div>
+      {editingId === it.id ? (
+        <div className="id-anchor-edit" style={{ margin: '8px 0', flexDirection: 'column' }}>
+          <label className="dlg-field">
+            <span>名称</span>
+            <input value={idDraft.name} placeholder="名称" onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} />
+          </label>
+          <label className="dlg-field">
+            <span>使命</span>
+            <textarea value={idDraft.mission} placeholder="一句话定义这个数字人负责什么" rows={2}
+              onChange={(e) => setIdDraft({ ...idDraft, mission: e.target.value })} />
+          </label>
+          <label className="dlg-field">
+            <span>分类</span>
+            <select value={idDraft.category} onChange={(e) => setIdDraft({ ...idDraft, category: e.target.value })}>
+              {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+            </select>
+          </label>
+          <label className="dlg-field">
+            <span>附加指令（prompt · 对话/装配时注入 · 铁律由系统硬保证不可被覆盖）</span>
+            <textarea value={idDraft.prompt} placeholder="如：回答前先给出结论再展开；一律引用本体术语…" rows={4}
+              maxLength={4000}
+              onChange={(e) => setIdDraft({ ...idDraft, prompt: e.target.value })} />
+          </label>
+          <div className="dlg-actions">
+            <button className="btn ghost small" onClick={() => setEditingId(null)}>取消</button>
+            <button className="btn green small" onClick={saveEditId}>保存</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {it.mission && <div className="id-mission">{it.mission}</div>}
+          {it.prompt ? (
+            <div className="id-prompt">
+              <span className="id-prompt-lbl" title="可复制；对话与装配时作为附加指令注入，铁律不可被覆盖">附加指令</span>
+              <span className="id-prompt-txt">{it.prompt}</span>
+            </div>
+          ) : null}
+        </>
+      )}
+      {it.keywords.length > 0 && (
+        <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
+      )}
+      {anchorBlock(it)}
+      {ontologyBlock(it)}
+      {assemblyBlock(it)}
+      {benchmarkBlock(it)}
+    </div>
+  )
+
   return (
     <div className="card">
       <h3>
@@ -503,62 +575,22 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
         从本体图谱点选节点自定义数字人，请用下方「本体图谱」工具栏的「从图谱创建数字人」。
       </div>
 
-      {/* 块1：已有数字人 */}
+      {/* 块1：已有数字人（按分类分组：通用数字人 / 执行领域专家） */}
       <div className="id-block">
         <div className="id-block-title">已有数字人（已批准 · 正在使用）</div>
         {approved.length === 0 && <div className="note" style={{ padding: '8px 0' }}>尚无已批准的数字人。批准一个备选，或从图谱/手动创建。</div>}
-        {approved.map((it) => (
-          <div key={it.id} className={`id-card st-${it.status}`}>
-            <div className="id-head">
-              <b>{it.name}</b>
-              <span className={`status-pill ${it.status}`}>{it.status}</span>
-              <span className="ops" style={{ marginLeft: 'auto' }}>
-                <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
-                <button className="btn red small" onClick={() => identityDelete(it.id)}>删除</button>
-              </span>
-            </div>
-            {editingId === it.id ? (
-              <div className="id-anchor-edit" style={{ margin: '8px 0', flexDirection: 'column' }}>
-                <label className="dlg-field">
-                  <span>名称</span>
-                  <input value={idDraft.name} placeholder="名称" onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} />
-                </label>
-                <label className="dlg-field">
-                  <span>使命</span>
-                  <textarea value={idDraft.mission} placeholder="一句话定义这个数字人负责什么" rows={2}
-                    onChange={(e) => setIdDraft({ ...idDraft, mission: e.target.value })} />
-                </label>
-                <label className="dlg-field">
-                  <span>附加指令（prompt · 对话/装配时注入 · 铁律由系统硬保证不可被覆盖）</span>
-                  <textarea value={idDraft.prompt} placeholder="如：回答前先给出结论再展开；一律引用本体术语…" rows={4}
-                    maxLength={4000}
-                    onChange={(e) => setIdDraft({ ...idDraft, prompt: e.target.value })} />
-                </label>
-                <div className="dlg-actions">
-                  <button className="btn ghost small" onClick={() => setEditingId(null)}>取消</button>
-                  <button className="btn green small" onClick={saveEditId}>保存</button>
-                </div>
-              </div>
-            ) : (
-              <>
-                {it.mission && <div className="id-mission">{it.mission}</div>}
-                {it.prompt ? (
-                  <div className="id-prompt">
-                    <span className="id-prompt-lbl" title="可复制；对话与装配时作为附加指令注入，铁律不可被覆盖">附加指令</span>
-                    <span className="id-prompt-txt">{it.prompt}</span>
-                  </div>
-                ) : null}
-              </>
-            )}
-            {it.keywords.length > 0 && (
-              <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
-            )}
-            {anchorBlock(it)}
-            {ontologyBlock(it)}
-            {assemblyBlock(it)}
-            {benchmarkBlock(it)}
-          </div>
-        ))}
+        {general.length > 0 && (
+          <>
+            <div className="id-cat-title">通用数字人 · {general.length}</div>
+            {general.map(renderApprovedCard)}
+          </>
+        )}
+        {experts.length > 0 && (
+          <>
+            <div className="id-cat-title">执行领域专家 · {experts.length}</div>
+            {experts.map(renderApprovedCard)}
+          </>
+        )}
       </div>
 
       {/* 块2：备选数字人 */}
@@ -600,7 +632,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       <div className="id-block">
         <div className="id-block-title">创造 · 删除 · 修改数字人</div>
         <div className="btnrow">
-          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '', prompt: '' }); setCreating(true) }}>
+          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '', prompt: '', category: 'domain_expert' }); setCreating(true) }}>
             创建数字人（可预输入 · 留空=自主创建）
           </button>
           <span className="note">从本体图谱点选种子创建 → 用下方图谱工具栏「从图谱创建数字人」</span>
@@ -625,6 +657,13 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
                 <span>初始定义（使命）</span>
                 <textarea rows={2} placeholder="一句话定义这个数字人负责什么（可留空）" value={createDraft.mission}
                   onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
+              </label>
+              <label className="dlg-field">
+                <span>分类</span>
+                <select value={createDraft.category} onChange={(e) => setCreateDraft({ ...createDraft, category: e.target.value })}>
+                  {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+                </select>
+                <div className="hint">通用数字人 = 平台通用本体（跨部门复用）；执行领域专家 = 部门文档 RAG 归纳（当前默认）。</div>
               </label>
               <label className="dlg-field">
                 <span>附加指令（prompt · 可留空 · 最长 4000 字）</span>
