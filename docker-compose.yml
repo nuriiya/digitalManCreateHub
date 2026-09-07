@@ -1,12 +1,16 @@
 # Base compose: PG (pgvector) + Ollama + backend. Dev/prod differences live in
 # docker-compose.dev.yml / docker-compose.prod.yml (loaded via -f override).
 #
+# Image names use ${REGISTRY_PREFIX:-} so a CN mirror prefix can be set in .env
+# (e.g. REGISTRY_PREFIX=docker.1ms.run/) without editing this file; leaving it
+# empty pulls straight from Docker Hub.
+#
 # Run:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #   or:  ./start.sh dev   /   .\start1.ps1 dev   (scripts handle the -f flags)
 
 services:
   pg:
-    image: pgvector/pgvector:pg17
+    image: ${REGISTRY_PREFIX:-}pgvector/pgvector:pg17
     container_name: rag_pg
     environment:
       POSTGRES_USER: postgres
@@ -23,7 +27,7 @@ services:
       retries: 12
 
   ollama:
-    image: ollama/ollama:latest
+    image: ${REGISTRY_PREFIX:-}ollama/ollama:latest
     container_name: rag_ollama
     ports:
       - "11434:11434"
