@@ -6,11 +6,10 @@
 # python) through a mirror (set in .env). Leave empty for direct Docker Hub.
 
 ARG REGISTRY_LIBRARY_PREFIX=
-ARG NPM_REGISTRY=https://registry.npmmirror.com
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # ---- stage 1: frontend build ----
 FROM ${REGISTRY_LIBRARY_PREFIX}node:22-slim AS frontend
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /app/client
 RUN npm config set registry ${NPM_REGISTRY}
 COPY client/package.json client/package-lock.json ./
@@ -20,6 +19,7 @@ RUN npm run build
 
 # ---- stage 2: backend ----
 FROM ${REGISTRY_LIBRARY_PREFIX}python:3.13-slim
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 WORKDIR /app
 
