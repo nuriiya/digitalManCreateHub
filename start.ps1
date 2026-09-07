@@ -221,6 +221,38 @@ if ($OllamaReady) {
     } catch { } finally { Pop-Location }
 }
 
+# ---------- 3.5 WSL keepalive (hidden-window sleep infinity) ----------
+# WSL shuts the instance down ~15s after the last active process exits (hardcoded,
+# NOT configurable via .wslconfig; vmIdleTimeout only governs the VM layer). PG runs
+# inside WSL (docker), so we MUST wake + keep WSL alive BEFORE checking/starting PG -
+# otherwise a slept WSL instance cannot start the PG container and start.ps1 fails with
+# "PostgreSQL still not reachable". stop.ps1 kills this keepalive by PID file.
+$KeepaliveFile = Join-Path $DataDir "wsl_keepalive.pid"
+$WslAvailable = $false
+try {
+    $null = & wsl --status 2>$null
+    if ($LASTEXITCODE -eq 0) { $WslAvailable = $true }
+} catch { }
+
+if ($WslAvailable) {
+    # clear any stale keepalive (PID file may be left over if stop.ps1 was never run)
+    if (Test-Path $KeepaliveFile) {
+        $oldPid = Get-Content $KeepaliveFile -Raw
+        if ($oldPid -match '^\d+$') {
+            Stop-Process -Id ([int]$oldPid) -Force -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        Remove-Item $KeepaliveFile -Force
+    }
+    Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
+    $KeepaliveArgs = @('-d','Ubuntu-22.04','-u','jiauya','-e','bash','-c','exec sleep infinity')
+    $KeepaliveProc = Start-Process -FilePath "wsl.exe" -ArgumentList $KeepaliveArgs -WindowStyle Hidden -PassThru
+    $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
+    Write-Step "keepalive PID $($KeepaliveProc.Id) saved to $KeepaliveFile"
+    # let the WSL instance finish waking (systemd + dockerd cold start) before
+    # the PG check below; the step-4 poll loop waits the rest of the way
+    Start-Sleep -Seconds 5
+}
+
 # ---------- 4. PostgreSQL + pgvector (the new task+data store) ----------
 # Priority:
 #   (1) PG already reachable on 5432 (host or WSL forwarded -> same DSN)
@@ -234,10 +266,13 @@ if ($OllamaReady) {
 $PgReady = $false
 
 function Test-PgLocal {
-    $env:PGPASSWORD = 'postgres'
+    # Real connection probe via the backend venv's psycopg (psql is NOT installed
+    # on Windows, so the old `psql -tAc` probe always failed and start.ps1 wrongly
+    # reported "PostgreSQL still not reachable" even when the container was up).
+    $probe = "import psycopg; psycopg.connect('postgresql://postgres:postgres@localhost:5432/postgres', connect_timeout=2).close(); print('OK')"
     try {
-        $x = & psql -h localhost -p 5432 -U postgres -d postgres -tAc "SELECT 1" 2>$null
-        return ($x -and $x.Trim() -eq '1')
+        $x = & $VenvPython -c $probe 2>$null
+        return ($x -and ($x -join '').Trim() -eq 'OK')
     } catch { return $false }
 }
 
@@ -337,31 +372,6 @@ if ($PgReady) {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     Set-Content -Path (Join-Path $DataDir "pg_dsn") -Value "postgresql://postgres:postgres@localhost:5432/rag" -NoNewline
     Write-Step "wrote DSN file: data\pg_dsn"
-}
-
-# ---------- 4.5 WSL keepalive (hidden-window sleep infinity) ----------
-# WSL shuts the instance down ~15s after the last active process exits (hardcoded,
-# NOT configurable via .wslconfig; vmIdleTimeout only governs the VM layer). A single
-# resident process keeps the instance alive, so we hang a `sleep infinity` in a hidden
-# window. stop.ps1 kills it by PID file.
-$KeepaliveFile = Join-Path $DataDir "wsl_keepalive.pid"
-if ($PgReady) {
-    $status = & wsl --status 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        # clear any stale keepalive (PID file may be left over if stop.ps1 was never run)
-        if (Test-Path $KeepaliveFile) {
-            $oldPid = Get-Content $KeepaliveFile -Raw
-            if ($oldPid -match '^\d+$') {
-                Stop-Process -Id ([int]$oldPid) -Force -Confirm:$false -ErrorAction SilentlyContinue
-            }
-            Remove-Item $KeepaliveFile -Force
-        }
-        Write-Step "starting WSL keepalive (hidden window, sleep infinity)..."
-        $KeepaliveArgs = @('-d','Ubuntu-22.04','-u','jiauya','-e','bash','-c','exec sleep infinity')
-        $KeepaliveProc = Start-Process -FilePath "wsl.exe" -ArgumentList $KeepaliveArgs -WindowStyle Hidden -PassThru
-        $KeepaliveProc.Id | Out-File -FilePath $KeepaliveFile -Encoding ascii
-        Write-Step "keepalive PID $($KeepaliveProc.Id) saved to $KeepaliveFile"
-    }
 }
 
 # ---------- 5. Start backend ----------
