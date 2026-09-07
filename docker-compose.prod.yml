@@ -9,6 +9,9 @@ services:
       - rag_docs:/data
     environment:
       ENV: prod
+    depends_on:
+      ollama:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/', timeout=3)\""]
       interval: 15s

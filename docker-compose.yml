@@ -56,8 +56,6 @@ services:
     depends_on:
       pg:
         condition: service_healthy
-      ollama:
-        condition: service_started
 
 volumes:
   pg_data:
