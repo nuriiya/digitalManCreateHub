@@ -25,8 +25,9 @@ if __name__ == "__main__":
     identity_id = int(sys.argv[1]) if len(sys.argv) > 1 else 3
     start = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+    provider = sys.argv[4] if len(sys.argv) > 4 else "llm"
     task_ids = list(range(start, start + n))
-    print(f"=== 数字人 {identity_id} 跑能力题 {start}..{start + n - 1} ===", flush=True)
-    results = batch_run(identity_id, task_ids)
+    print(f"=== 数字人 {identity_id} 跑能力题 {start}..{start + n - 1} (provider={provider}) ===", flush=True)
+    results = batch_run(identity_id, task_ids, provider=provider)
     passed = sum(1 for _, v in results if v == "pass")
     print(f"=== 通过率: {passed}/{n} = {passed / n:.2%} ===", flush=True)
