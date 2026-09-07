@@ -111,6 +111,20 @@ def run_task(conn, task_id, code: str, identity_id=None, timeout=30) -> dict:
             "output": output[:2000]}
 
 
+def _extract_code(reply: str) -> str:
+    """从数字人回答里提取纯代码（数字人常带解释 + markdown 代码块）。"""
+    import re
+    m = re.search(r"```(?:python|py)?\s*\n(.*?)```", reply, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # 无代码块：从 def / from / import 起始行截断（去掉开头的解释）
+    lines = reply.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(("def ", "from ", "import ", "class ")):
+            return "\n".join(lines[i:]).strip()
+    return reply.strip()
+
+
 def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
     """让数字人（identity）针对能力题生成代码，再可执行验证。
 
@@ -130,7 +144,7 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
         return {"error": f"generation failed: {e}"}
     if not result.get("ok"):
         return {"error": result.get("error") or "generation failed"}
-    code = result["reply"]
+    code = _extract_code(result["reply"])
     r = run_task(conn, task_id, code, identity_id=identity_id)
     r["reply"] = code[:2000]
     return r
