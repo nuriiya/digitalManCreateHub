@@ -119,13 +119,19 @@ foreach ($img in $baseImages) {
     if ($LASTEXITCODE -eq 0) { continue }
     $pulled = $false
     foreach ($prefix in $mirrorPrefixes) {
-        Write-Step "pulling $img via $prefix ..."
-        & docker pull "$prefix/$img" *> $null 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            & docker tag "$prefix/$img" $img
-            $pulled = $true
-            break
+        # retry loop: docker pull resumes from cached layers, so a dropped
+        # connection on a large image (ollama ~3.5GB) just continues
+        for ($attempt = 1; $attempt -le 4 -and -not $pulled; $attempt++) {
+            Write-Step "pulling $img via $prefix (attempt $attempt)..."
+            & docker pull "$prefix/$img" *> $null 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                & docker tag "$prefix/$img" $img
+                $pulled = $true
+            } else {
+                Write-Warn "pull interrupted - retrying (resumes from cached layers)"
+            }
         }
+        if ($pulled) { break }
     }
     if (-not $pulled) { Write-Warn "could not pull $img - compose will try direct (may fail on CN network)" }
 }

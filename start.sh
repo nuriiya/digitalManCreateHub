@@ -66,12 +66,20 @@ for img in pgvector/pgvector:pg17 ollama/ollama:latest; do
     if docker image inspect "$img" >/dev/null 2>&1; then continue; fi
     pulled=0
     for m in $MIRRORS; do
-        log "pulling $img via $m ..."
-        if docker pull "$m/$img"; then
-            docker tag "$m/$img" "$img"
-            pulled=1
-            break
-        fi
+        # retry loop: docker pull resumes from cached layers on a dropped
+        # connection (ollama is ~3.5GB and can drop on slow mirrors)
+        attempt=1
+        while [ "$attempt" -le 4 ] && [ "$pulled" = "0" ]; do
+            log "pulling $img via $m (attempt $attempt)..."
+            if docker pull "$m/$img"; then
+                docker tag "$m/$img" "$img"
+                pulled=1
+            else
+                warn "pull interrupted - retrying (resumes from cached layers)"
+            fi
+            attempt=$((attempt + 1))
+        done
+        [ "$pulled" = "1" ] && break
     done
     [ "$pulled" = "1" ] || warn "could not pull $img - compose will try direct (may fail on CN network)"
 done
