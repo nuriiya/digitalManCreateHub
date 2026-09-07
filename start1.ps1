@@ -25,23 +25,56 @@ if ($EnvName -ne "dev" -and $EnvName -ne "prod") {
 function Write-Step($msg) { Write-Host "[start] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[start] $msg" -ForegroundColor Yellow }
 
-# ---------- 1. Docker (install if missing) ----------
+# ---------- 1. Docker CLI (install if missing) ----------
 $docker = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $docker) {
     Write-Step "docker not found - installing Docker Desktop (winget)..."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        Write-Warn "winget not found. Install Docker Desktop manually:"
-        Write-Warn "  https://www.docker.com/products/docker-desktop/"
-        exit 1
-    }
-    & winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "winget install failed - install Docker Desktop manually and re-run"
-        exit 1
+    if ($winget) {
+        # winget returns non-zero on "already installed, no upgrade" - do NOT
+        # trust its exit code; refresh PATH and re-detect below instead
+        & winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements *> $null
     }
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $ddBin = "C:\Program Files\Docker\Docker\resources\bin"
+    if (Test-Path (Join-Path $ddBin "docker.exe")) { $env:Path = "$env:Path;$ddBin" }
     $docker = Get-Command docker -ErrorAction SilentlyContinue
+}
+if (-not $docker) {
+    Write-Warn "docker still not found. Install Docker Desktop manually and re-run."
+    Write-Warn "  https://www.docker.com/products/docker-desktop/"
+    exit 1
+}
+
+# ---------- 1.5 Registry mirror (Docker Hub is blocked in CN) ----------
+$daemonJson = Join-Path $env:USERPROFILE ".docker\daemon.json"
+$mirror = "https://docker.m.daocloud.io"
+$needMirror = $true
+if (Test-Path $daemonJson) {
+    $existing = Get-Content $daemonJson -Raw -ErrorAction SilentlyContinue
+    if ($existing -match "registry-mirrors") { $needMirror = $false }
+}
+if ($needMirror) {
+    Write-Step "configuring Docker Hub mirror (daocloud)..."
+    New-Item -ItemType Directory -Force -Path (Split-Path $daemonJson) | Out-Null
+    $cfg = $null
+    if (Test-Path $daemonJson) {
+        try { $cfg = Get-Content $daemonJson -Raw | ConvertFrom-Json } catch { $cfg = $null }
+    }
+    if ($cfg) {
+        if ($cfg.PSObject.Properties.Name -notcontains "registry-mirrors") {
+            $cfg | Add-Member -NotePropertyName "registry-mirrors" -NotePropertyValue @($mirror)
+        } else {
+            $cfg."registry-mirrors" = @($mirror)
+        }
+        $cfg | ConvertTo-Json -Depth 5 | Set-Content -Path $daemonJson -Encoding ascii
+    } else {
+        Set-Content -Path $daemonJson -Value ('{"registry-mirrors":["' + $mirror + '"]}') -Encoding ascii
+    }
+    Write-Warn "mirror configured - restarting Docker Desktop to apply"
+    Stop-Process -Name "com.docker.backend" -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name "Docker Desktop" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
 }
 
 # ---------- 2. Ensure the Docker daemon is up ----------
@@ -54,13 +87,11 @@ for ($i = 0; $i -lt 20 -and -not $dockerOk; $i++) {
 if (-not $dockerOk) {
     Write-Step "starting Docker Desktop..."
     $dd = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    if (Test-Path $dd) {
-        Start-Process -FilePath $dd
-        for ($i = 0; $i -lt 60 -and -not $dockerOk; $i++) {
-            & docker info *> $null
-            if ($LASTEXITCODE -eq 0) { $dockerOk = $true; break }
-            Start-Sleep -Seconds 3
-        }
+    if (Test-Path $dd) { Start-Process -FilePath $dd }
+    for ($i = 0; $i -lt 60 -and -not $dockerOk; $i++) {
+        & docker info *> $null
+        if ($LASTEXITCODE -eq 0) { $dockerOk = $true; break }
+        Start-Sleep -Seconds 3
     }
 }
 if (-not $dockerOk) {
@@ -75,6 +106,28 @@ if ($EnvName -eq "prod") {
     $composeFiles += @("-f", "docker-compose.prod.yml")
 } else {
     $composeFiles += @("-f", "docker-compose.dev.yml")
+}
+
+# ---------- 3.5 Pre-pull base images (CN network: Docker Hub is blocked) ----------
+# Pull via mirror prefixes then re-tag to the standard names so compose does not
+# hit registry-1.docker.io. This works even when the daemon's registry-mirrors
+# config has not been applied (no daemon restart needed).
+$mirrorPrefixes = @("docker.1ms.run", "dockerproxy.net")
+$baseImages = @("pgvector/pgvector:pg17", "ollama/ollama:latest")
+foreach ($img in $baseImages) {
+    & docker image inspect $img *> $null 2>$null
+    if ($LASTEXITCODE -eq 0) { continue }
+    $pulled = $false
+    foreach ($prefix in $mirrorPrefixes) {
+        Write-Step "pulling $img via $prefix ..."
+        & docker pull "$prefix/$img" *> $null 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            & docker tag "$prefix/$img" $img
+            $pulled = $true
+            break
+        }
+    }
+    if (-not $pulled) { Write-Warn "could not pull $img - compose will try direct (may fail on CN network)" }
 }
 
 # ---------- 4. Build + up ----------

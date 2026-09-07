@@ -58,6 +58,24 @@ else
     COMPOSE+=(-f docker-compose.dev.yml)
 fi
 
+# ---------- 2.5 Pre-pull base images (CN network: Docker Hub is blocked) ----------
+# Pull via mirror prefixes then re-tag to standard names so compose does not hit
+# registry-1.docker.io directly. Override the mirrors via REGISTRY_MIRRORS env.
+MIRRORS="${REGISTRY_MIRRORS:-docker.1ms.run dockerproxy.net}"
+for img in pgvector/pgvector:pg17 ollama/ollama:latest; do
+    if docker image inspect "$img" >/dev/null 2>&1; then continue; fi
+    pulled=0
+    for m in $MIRRORS; do
+        log "pulling $img via $m ..."
+        if docker pull "$m/$img"; then
+            docker tag "$m/$img" "$img"
+            pulled=1
+            break
+        fi
+    done
+    [ "$pulled" = "1" ] || warn "could not pull $img - compose will try direct (may fail on CN network)"
+done
+
 # ---------- 3. Build + up ----------
 log "building + starting containers (env=$ENV)..."
 docker compose "${COMPOSE[@]}" up -d --build
