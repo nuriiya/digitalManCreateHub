@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 420" width="100%" role="img">
+  <title>沙箱架构与 docker 重合分析</title>
+  <desc>backend 容器通过挂载 docker.sock 统一控制 MCP 沙箱和能力测试沙箱</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect x="40" y="30" width="600" height="360" rx="16" fill="none" stroke="#888780" stroke-width="0.5"/>
+  <text x="60" y="54" font-size="13" font-weight="500" fill="#888780">Docker Desktop（唯一 docker daemon）</text>
+
+  <g>
+    <rect x="60" y="70" width="270" height="70" rx="10" fill="#27500A" stroke="#C0DD97" stroke-width="0.5"/>
+    <text x="195" y="92" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#EAF3DE">backend 容器</text>
+    <text x="195" y="114" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#C0DD97">FastAPI + 挂载 docker.sock</text>
+  </g>
+  <g>
+    <rect x="360" y="70" width="260" height="70" rx="10" fill="#042C53" stroke="#85B7EB" stroke-width="0.5"/>
+    <text x="490" y="92" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#E6F1FB">pg 容器</text>
+    <text x="490" y="114" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#B5D4F4">pgvector（数据层）</text>
+  </g>
+
+  <g>
+    <rect x="60" y="170" width="270" height="90" rx="10" fill="#633806" stroke="#FAC775" stroke-width="0.5"/>
+    <text x="195" y="192" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FAEEDA">MCP 沙箱（真实环境）</text>
+    <text x="195" y="214" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#FAC775">rag_mcp_&lt;id&gt; 容器（工具库）</text>
+    <text x="195" y="234" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#FAC775">测试通过的能力 → 存到这里</text>
+  </g>
+  <g>
+    <rect x="360" y="170" width="260" height="90" rx="10" fill="#791F1F" stroke="#F7C1C1" stroke-width="0.5"/>
+    <text x="490" y="192" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FCEBEB">能力测试沙箱（临时）</text>
+    <text x="490" y="214" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#F7C1C1">跑 pytest 验证代码对不对</text>
+    <text x="490" y="234" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#F7C1C1">用完即弃（一次性容器）</text>
+  </g>
+
+  <line x1="195" y1="140" x2="195" y2="170" stroke="#FAC775" stroke-width="0.5" marker-end="url(#arrow)"/>
+  <line x1="195" y1="140" x2="490" y2="170" stroke="#F7C1C1" stroke-width="0.5" marker-end="url(#arrow)"/>
+  <path d="M490 215 C 350 215, 250 215, 210 215" fill="none" stroke="#EF9F27" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+
+  <text x="340" y="300" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#888780">能力测试沙箱（临时）验证通过 → 沉淀到 MCP 沙箱（真实）→ 过三关 + 审批 → 数字人可调用</text>
+  <text x="340" y="326" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#888780">backend 通过 docker.sock 控制两个沙箱的容器生命周期</text>
+
+  <rect x="40" y="348" width="600" height="34" rx="8" fill="#042C53" stroke="#378ADD" stroke-width="0.5"/>
+  <text x="340" y="365" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#E6F1FB">现状 bug：mcp.py 用 wsl.exe -e docker（WSL2 旧实现）→ 全 docker 化后 backend 容器里无 wsl.exe，需改挂载 docker.sock</text>
+</svg>

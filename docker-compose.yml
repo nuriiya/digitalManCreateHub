@@ -56,6 +56,10 @@ services:
       RAG_WORK_DIR: /data
     ports:
       - "8000:8000"
+    volumes:
+      # host docker daemon: MCP sandbox + capability-test sandbox run/stop
+      # containers through this socket
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       pg:
         condition: service_healthy

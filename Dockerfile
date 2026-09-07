@@ -17,7 +17,11 @@ RUN npm install --no-fund --no-audit
 COPY client/ ./
 RUN npm run build
 
-# ---- stage 2: backend ----
+# ---- stage 2a: docker CLI (talks to host daemon via mounted docker.sock,
+# used by the MCP sandbox + capability-test sandbox to run/stop containers) ----
+FROM ${REGISTRY_LIBRARY_PREFIX}docker:cli AS dockercli
+
+# ---- stage 2b: backend ----
 FROM ${REGISTRY_LIBRARY_PREFIX}python:3.13-slim
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
@@ -30,6 +34,7 @@ RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r backend/requirements.txt
 # Backend source + the built frontend dist (main.py serves <repo>/client/dist).
 COPY backend/ ./backend/
 COPY --from=frontend /app/client/dist ./client/dist
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 # Entrypoint (waits for PG, then execs the command).
 COPY scripts/entrypoint.sh ./entrypoint.sh

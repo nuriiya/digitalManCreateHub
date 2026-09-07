@@ -23,7 +23,21 @@ from . import db
 
 
 def _docker(args, timeout=120):
-    """Run a docker command inside WSL2 (default distro). Returns (ok, text)."""
+    """Run a docker command.
+
+    Containerized backend talks to the host daemon via the mounted
+    /var/run/docker.sock (direct `docker` CLI). On the legacy WSL2 dev setup
+    (no local CLI) it falls back to `wsl.exe -e docker`.
+    """
+    # 1) direct docker CLI (container with docker.sock mount, or host CLI)
+    try:
+        r = subprocess.run(
+            ["docker", *args],
+            capture_output=True, text=True, timeout=timeout)
+        return r.returncode == 0, (r.stdout or r.stderr).strip()
+    except FileNotFoundError:
+        pass  # no docker CLI -> fall back to WSL2
+    # 2) WSL2 docker (legacy dev machine without a local docker CLI)
     try:
         r = subprocess.run(
             ["wsl.exe", "-e", "docker", *args],
