@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "run_id": null,
+    "task_id": 1,
+    "tool_name": "has_close_elements",
+    "description": "Check if in given list of numbers, are any two numbers closer to each other than",
+    "entry_point": "has_close_elements",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "code": "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n\n    for idx, elem in enumerate(numbers):\n        for idx2, elem2 in enumerate(numbers):\n            if idx != idx2:\n                distance = abs(elem - elem2)\n                if distance < threshold:\n                    return True\n\n    return False\n",
+    "git_hash": "e9875c82720404dada279d9a258384c6033c2f4d",
+    "status": "approved",
+    "created_at": 1788791344.2437315
+  }
+]

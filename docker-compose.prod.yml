@@ -7,6 +7,8 @@ services:
     volumes:
       - backend_data:/app/backend/data
       - rag_docs:/data
+      # 数据库导出目录（prod 用命名卷持久化，可挂 NFS/对象存储做大文件）
+      - rag_exports:/app/exports
     environment:
       ENV: prod
     depends_on:

@@ -71,3 +71,4 @@ volumes:
   ollama_data:
   backend_data:
   rag_docs:
+  rag_exports:

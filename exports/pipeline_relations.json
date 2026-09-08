@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "pipeline_id": 1,
+    "from_node_id": 1,
+    "to_node_id": 2,
+    "relation_type": "supply",
+    "handoff_type": "需求规格",
+    "handoff_schema": "",
+    "created_at": 1788784052.781599
+  },
+  {
+    "id": 2,
+    "pipeline_id": 1,
+    "from_node_id": 2,
+    "to_node_id": 3,
+    "relation_type": "supply",
+    "handoff_type": "技术方案",
+    "handoff_schema": "",
+    "created_at": 1788784052.788463
+  },
+  {
+    "id": 3,
+    "pipeline_id": 1,
+    "from_node_id": 3,
+    "to_node_id": 4,
+    "relation_type": "review",
+    "handoff_type": "代码实现",
+    "handoff_schema": "",
+    "created_at": 1788784052.7926753
+  },
+  {
+    "id": 4,
+    "pipeline_id": 1,
+    "from_node_id": 4,
+    "to_node_id": 5,
+    "relation_type": "handoff",
+    "handoff_type": "审查通过代码",
+    "handoff_schema": "",
+    "created_at": 1788784052.7960424
+  },
+  {
+    "id": 5,
+    "pipeline_id": 1,
+    "from_node_id": 5,
+    "to_node_id": 6,
+    "relation_type": "review",
+    "handoff_type": "失败测试报告",
+    "handoff_schema": "",
+    "created_at": 1788784052.8001463
+  }
+]

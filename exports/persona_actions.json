@@ -1,0 +1,188 @@
+[
+  {
+    "id": 1,
+    "identity_id": 3,
+    "name": "运行测试",
+    "description": "在隔离沙箱中运行代码 + 断言测试，返回 pass/fail 和失败堆栈（写→测→改的核心闭环动作）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "code",
+        "test"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "entry_point": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "run_test",
+    "status": "approved",
+    "created_at": 1788832169.2461033
+  },
+  {
+    "id": 2,
+    "identity_id": 3,
+    "name": "运行代码",
+    "description": "在隔离沙箱中执行一段 Python 代码，返回 stdout/stderr（禁网、只读、限资源）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "run_code",
+    "status": "approved",
+    "created_at": 1788832169.2644415
+  },
+  {
+    "id": 3,
+    "identity_id": 3,
+    "name": "读取文件",
+    "description": "读取工作区文件内容（用于调试：读报错相关源码）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "read_file",
+    "status": "approved",
+    "created_at": 1788832169.2696612
+  },
+  {
+    "id": 4,
+    "identity_id": 3,
+    "name": "写入文件",
+    "description": "把代码写入工作区文件（用于写代码：落盘后可被测试/运行引用）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "path",
+        "content"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "write_file",
+    "status": "approved",
+    "created_at": 1788832169.28
+  },
+  {
+    "id": 5,
+    "identity_id": 5,
+    "name": "运行测试",
+    "description": "在隔离沙箱中运行代码 + 断言测试，返回 pass/fail 和失败堆栈（写→测→改的核心闭环动作）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "code",
+        "test"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "entry_point": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "run_test",
+    "status": "approved",
+    "created_at": 1788832169.3103554
+  },
+  {
+    "id": 6,
+    "identity_id": 6,
+    "name": "运行测试",
+    "description": "在隔离沙箱中运行代码 + 断言测试，返回 pass/fail 和失败堆栈（写→测→改的核心闭环动作）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "code",
+        "test"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "entry_point": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "run_test",
+    "status": "approved",
+    "created_at": 1788832169.3346639
+  },
+  {
+    "id": 7,
+    "identity_id": 6,
+    "name": "读取文件",
+    "description": "读取工作区文件内容（用于调试：读报错相关源码）",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "kind": "builtin",
+    "mcp_server_id": null,
+    "mcp_tool_name": null,
+    "builtin_name": "read_file",
+    "status": "approved",
+    "created_at": 1788832169.3393114
+  }
+]

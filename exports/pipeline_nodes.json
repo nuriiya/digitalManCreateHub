@@ -1,0 +1,68 @@
+[
+  {
+    "id": 1,
+    "pipeline_id": 1,
+    "node_key": "requirement_analyst",
+    "persona_id": 1,
+    "kind": "nominate",
+    "step_name": "需求分析",
+    "position_x": 160.0,
+    "position_y": 40.0,
+    "created_at": 1788784052.47887
+  },
+  {
+    "id": 2,
+    "pipeline_id": 1,
+    "node_key": "tech_designer",
+    "persona_id": 2,
+    "kind": "nominate",
+    "step_name": "技术设计",
+    "position_x": 160.0,
+    "position_y": 130.0,
+    "created_at": 1788784052.6142716
+  },
+  {
+    "id": 3,
+    "pipeline_id": 1,
+    "node_key": "code_engineer",
+    "persona_id": 3,
+    "kind": "nominate",
+    "step_name": "编码实现",
+    "position_x": 160.0,
+    "position_y": 220.0,
+    "created_at": 1788784052.7570686
+  },
+  {
+    "id": 4,
+    "pipeline_id": 1,
+    "node_key": "code_reviewer",
+    "persona_id": 4,
+    "kind": "nominate",
+    "step_name": "代码审查",
+    "position_x": 160.0,
+    "position_y": 310.0,
+    "created_at": 1788784052.7689943
+  },
+  {
+    "id": 5,
+    "pipeline_id": 1,
+    "node_key": "test_engineer",
+    "persona_id": 5,
+    "kind": "nominate",
+    "step_name": "测试",
+    "position_x": 160.0,
+    "position_y": 400.0,
+    "created_at": 1788784052.7728856
+  },
+  {
+    "id": 6,
+    "pipeline_id": 1,
+    "node_key": "debug_engineer",
+    "persona_id": 6,
+    "kind": "nominate",
+    "step_name": "调试修复",
+    "position_x": 160.0,
+    "position_y": 490.0,
+    "created_at": 1788784052.777059
+  }
+]

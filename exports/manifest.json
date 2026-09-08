@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "exported_at": "2026-09-08T02:07:02.866497+00:00",
+  "tables": {
+    "identities": {
+      "rows": 7,
+      "large": false,
+      "file": "identities.json"
+    },
+    "anchors": {
+      "rows": 0,
+      "large": false,
+      "file": "anchors.json"
+    },
+    "persona_ontology": {
+      "rows": 16,
+      "large": false,
+      "file": "persona_ontology.json"
+    },
+    "persona_actions": {
+      "rows": 7,
+      "large": false,
+      "file": "persona_actions.json"
+    },
+    "candidates": {
+      "rows": 0,
+      "large": false,
+      "file": "candidates.json"
+    },
+    "relations": {
+      "rows": 0,
+      "large": false,
+      "file": "relations.json"
+    },
+    "mentions": {
+      "rows": 0,
+      "large": false,
+      "file": "mentions.json"
+    },
+    "documents": {
+      "rows": 0,
+      "large": true,
+      "file": "documents.json"
+    },
+    "chunks": {
+      "rows": 0,
+      "large": true,
+      "file": "chunks.json"
+    },
+    "pipelines": {
+      "rows": 1,
+      "large": false,
+      "file": "pipelines.json"
+    },
+    "pipeline_nodes": {
+      "rows": 6,
+      "large": false,
+      "file": "pipeline_nodes.json"
+    },
+    "pipeline_relations": {
+      "rows": 5,
+      "large": false,
+      "file": "pipeline_relations.json"
+    },
+    "pipeline_changes": {
+      "rows": 0,
+      "large": false,
+      "file": "pipeline_changes.json"
+    },
+    "capability_tasks": {
+      "rows": 176,
+      "large": false,
+      "file": "capability_tasks.json"
+    },
+    "capability_tools": {
+      "rows": 1,
+      "large": false,
+      "file": "capability_tools.json"
+    },
+    "mcp_servers": {
+      "rows": 0,
+      "large": false,
+      "file": "mcp_servers.json"
+    }
+  }
+}

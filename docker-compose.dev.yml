@@ -8,6 +8,8 @@ services:
       - ./backend:/app/backend
       - ./client/dist:/app/client/dist
       - ./docs:/data
+      # 数据库导出目录：宿主机 exports/ 映射进容器，导出文件可直接 git 提交
+      - ./exports:/app/exports
     environment:
       ENV: dev
       EMBEDDING_BASE_URL: http://host.docker.internal:11434
