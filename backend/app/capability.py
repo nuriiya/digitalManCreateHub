@@ -160,13 +160,16 @@ def _extract_code(reply: str) -> str:
 
 
 def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
-                         provider="llm") -> str:
+                         provider="llm", feedback: str | None = None) -> str:
     """能力题解题专用：全量注入数字人本体 + 身份，直接生成代码。
 
     与 chat._generate 的「字面匹配检索」不同——能力题的 prompt 是函数签名
     +docstring，本体名（如「去重应返回规范化标签」）不会字面命中，检索注入
     会漏掉。能力题的本体是「编程规范/技能」，应全量注入（技能不是按 query
-    检索的知识）。返回数字人生成的代码原文（可能带解释/markdown）。
+    检索的知识）。
+
+    feedback 非空时（反应式循环的「写→测→改」），把上次测试失败信息注入，
+    要求数字人据此修正。返回数字人生成的代码原文（可能带解释/markdown）。
     """
     from . import llm, chat as chat_mod
     ident = chat_mod._identity(conn, identity_id)
@@ -206,20 +209,87 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
 
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": task_prompt}]
+    if feedback:
+        messages.append({"role": "assistant", "content": "（上一次生成的代码未通过测试）"})
+        messages.append({"role": "user", "content":
+                         "你的代码没有通过测试，失败信息如下：\n\n"
+                         f"{feedback}\n\n"
+                         "请分析失败原因，修正代码。仍然只输出纯 Python 代码，不要解释。"})
     if provider == "llm":
         return llm.chat(messages, temperature=0.0)
     return llm.chat2(messages)
+
+
+# 反应式循环的最大修正轮数（写→测→改）
+MAX_REACTIVE_ROUNDS = 3
+
+
+def _is_reactive(conn, identity_id: int) -> bool:
+    r = conn.execute("SELECT reactive FROM identities WHERE id=?",
+                     (identity_id,)).fetchone()
+    return bool(r and r["reactive"])
+
+
+def _solve_reactively(conn, identity_id: int, task: dict, provider: str) -> dict:
+    """反应式解题（写→测→改）：生成→run_test→观察→红则带堆栈重新生成。
+
+    终止条件确定性化：run_test 绿 = 硬停止信号；跑满 MAX_REACTIVE_ROUNDS 仍红
+    = 判 fail。不靠 LLM 自我宣称完成（会幻觉）。
+    """
+    code = ""
+    rounds = []
+    for rnd in range(1, MAX_REACTIVE_ROUNDS + 1):
+        feedback = rounds[-1]["output"] if rounds else None
+        reply = _solve_with_ontology(conn, identity_id, task["prompt"],
+                                     provider, feedback=feedback)
+        code = _extract_code(reply) if reply else ""
+        if not code.strip():
+            return {"error": "generation failed: empty code"}
+        r = run_test_sandbox(code, task["test"], task["entry_point"])
+        verdict = r["verdict"]
+        output = r["output"]
+        rounds.append({"round": rnd, "verdict": verdict, "output": output})
+        if verdict == "pass":
+            return {"code": code, "verdict": "pass", "rounds": rounds,
+                    "output": output}
+    return {"code": code, "verdict": "fail", "rounds": rounds,
+            "output": rounds[-1]["output"] if rounds else ""}
 
 
 def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
     """让数字人（identity）针对能力题生成代码，再可执行验证。
 
     数字人解题 = 全量注入它的本体+prompt 生成代码（闭卷作答），判定 = 跑
-    assert（可执行验证，开卷裁决）——对应考核双 LLM 的能力型版本。
+    assert（可执行验证，开卷裁决）。
+
+    reactive=True 的数字人走「写→测→改」反应式循环：生成→run_test→观察→
+    红则带失败堆栈重新生成，直到绿或 MAX_REACTIVE_ROUNDS。reactive=False
+    的数字人单次生成（知识型数字人无需执行循环）。
     """
     task = get_task(conn, task_id)
     if not task:
         return {"error": "task not found"}
+
+    if _is_reactive(conn, identity_id):
+        try:
+            sol = _solve_reactively(conn, identity_id, task, provider)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"reactive solve failed: {e}"}
+        if "error" in sol:
+            return sol
+        # 落库（记录最终 run，含轮数）
+        cur = conn.execute(
+            "INSERT INTO capability_runs(task_id, identity_id, code, verdict,"
+            " output, created_at) VALUES(?,?,?,?,?,?)",
+            (task_id, identity_id, sol["code"], sol["verdict"],
+             sol["output"][:4000], db.now()))
+        conn.commit()
+        return {"run_id": cur.lastrowid, "task_id": task_id,
+                "entry_point": task["entry_point"],
+                "verdict": sol["verdict"], "output": sol["output"][:2000],
+                "rounds": sol["rounds"], "reactive": True,
+                "reply": sol["code"][:2000]}
+
     try:
         reply = _solve_with_ontology(conn, identity_id, task["prompt"], provider)
     except Exception as e:  # noqa: BLE001
