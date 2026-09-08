@@ -931,6 +931,18 @@ def update_identity(identity_id: int, body: IdentityUpdateBody):
     return {"ok": True}
 
 
+@app.get("/api/ontology/identities/{identity_id}/mcp")
+def identity_mcp(identity_id: int):
+    """数字人绑定的可调用 MCP 清单。"""
+    return {"mcp": mcp.list_persona_mcp(db.get_conn(), identity_id)}
+
+
+@app.post("/api/ontology/identities/{identity_id}/sync-mcp")
+def identity_sync_mcp(identity_id: int):
+    """把数字人已批准的 MCP 动作同步写入本体（kind='规则'）。"""
+    return mcp.sync_mcp_to_ontology(db.get_conn(), identity_id)
+
+
 @app.post("/api/ontology/anchors")
 def add_anchor(body: AnchorPatch):
     """Manually add an anchor under an identity (user fixes the nomination)."""

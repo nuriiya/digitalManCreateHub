@@ -3,9 +3,9 @@ import {
   getIdentities, nominateIdentities, setIdentityStatus, deleteIdentity,
   updateIdentity, setAnchorStatus, updateAnchor, addAnchor, createIdentity,
   runAssemble, getAssembly, confirmAssembly, discardAssembly, restoreAssembly,
-  dismissAsmItem, getPersonaOntology,
+  dismissAsmItem, getPersonaOntology, getIdentityMcp, syncIdentityMcp,
   runBenchmark, getBenchmark, rejectBenchChange, mergeBenchmark, rollbackBenchmark,
-  type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary,
+  type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
 } from '../api'
 import { useToast } from '../Toast'
 
@@ -46,6 +46,9 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const [bench, setBench] = useState<Record<number, BenchSummary>>({})
   const [bchOpen, setBchOpen] = useState<Record<number, boolean>>({})
   const [bchBusy, setBchBusy] = useState<number | null>(null)
+  // MCP 绑定（可调用 MCP 工具清单 + 同步到本体）per persona
+  const [mcpMap, setMcpMap] = useState<Record<number, PersonaMcp[]>>({})
+  const [mcpOpen, setMcpOpen] = useState<Record<number, boolean>>({})
   const { toast } = useToast()
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
@@ -205,6 +208,20 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const toggleOnt = (id: number) => setOntOpen((m) => ({ ...m, [id]: !m[id] }))
   const toggleAsm = (id: number) => setAsmOpen((m) => ({ ...m, [id]: !m[id] }))
   const toggleBch = (id: number) => setBchOpen((m) => ({ ...m, [id]: !m[id] }))
+  const toggleMcp = async (id: number) => {
+    if (mcpOpen[id]) { setMcpOpen((m) => ({ ...m, [id]: false })); return }
+    setMcpOpen((m) => ({ ...m, [id]: true }))
+    try {
+      const r = await getIdentityMcp(id)
+      setMcpMap((m) => ({ ...m, [id]: r.mcp ?? [] }))
+    } catch { /* ignore */ }
+  }
+  const doSyncMcp = async (id: number) => {
+    try {
+      const r = await syncIdentityMcp(id)
+      toast(`已同步 ${r.synced} 个 MCP 工具到本体规则`, 'ok')
+    } catch (e: any) { toast(e.message, 'err') }
+  }
 
   // ---- benchmark sub-module (四组对照测试 + 归因提名 + 版本管理) ----
   const doRunBench = async (id: number) => {
@@ -497,6 +514,36 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const approvedAnchors = approved.reduce((n, i) => n + i.anchors.filter((a) => a.status === 'approved').length, 0)
 
+  // ---- MCP 绑定子模块（可调用 MCP 工具清单 + 同步到本体规则）----
+  const mcpBlock = (it: Identity) => {
+    const list = mcpMap[it.id] ?? []
+    const open = mcpOpen[it.id]
+    return (
+      <div className="ont-sub">
+        <button className={`id-toggle ${open ? 'on' : ''}`} onClick={() => toggleMcp(it.id)}>
+          <span className="arrow">{open ? '▼' : '▶'}</span>
+          <span>可调用 MCP</span>
+          <span className="note">{open ? `${list.length} 个工具` : ''}</span>
+        </button>
+        {open && (
+          <div className="ont-body">
+            {list.length === 0 && <div className="note">暂无绑定的 MCP 工具</div>}
+            {list.map((m) => (
+              <div key={m.id} className="ont-row">
+                <span className="ont-kind" title="MCP 工具">M</span>
+                <span className="ont-name" title={m.description}>{m.mcp_tool_name}</span>
+                <span className="note">{m.server_name || '?'} · {m.status}</span>
+              </div>
+            ))}
+            <button className="btn ghost small" onClick={() => doSyncMcp(it.id)}>
+              同步到本体规则
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // 已有数字人卡片渲染（通用数字人 / 执行领域专家两组共用）
   const renderApprovedCard = (it: Identity) => (
     <div key={it.id} className={`id-card st-${it.status}`}>
@@ -561,6 +608,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       {ontologyBlock(it)}
       {assemblyBlock(it)}
       {benchmarkBlock(it)}
+      {mcpBlock(it)}
     </div>
   )
 

@@ -12,7 +12,8 @@ import { useToast } from '../Toast'
 import TrainerPanel from '../components/TrainerPanel'
 
 const REL_TYPE_LABEL: Record<string, string> = {
-  design: '设计', supply: '供给知识', review: '复核', handoff: '交接', compose: '组装',
+  design: '设计', supply: '供给知识', review: '审核门', handoff: '交接', compose: '组装',
+  ask: '询问',
 }
 const KIND_LABEL: Record<string, string> = {
   nominate: '提名节点', deterministic: '确定性节点',
@@ -49,7 +50,11 @@ function layoutPipeline(
   const adj: Record<number, number[]> = {}
   const indeg: Record<number, number> = {}
   p.nodes.forEach((n) => { adj[n.id] = []; indeg[n.id] = 0 })
+  // 拓扑分层只走「正向流转」关系（supply/handoff/review/design/compose）；
+  // ask（询问）是下游问上游的反向边，不决定流程顺序，否则会形成双向环导致
+  // 分层失效（图非线性：询问边只绘制、不参与拓扑）。
   p.relations.forEach((r) => {
+    if (r.relation_type === 'ask') return
     if (adj[r.from_node_id] && adj[r.to_node_id] !== undefined) {
       adj[r.from_node_id].push(r.to_node_id)
       indeg[r.to_node_id]++
@@ -420,10 +425,20 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           if (!a || !b) return null
           const ax = a.x + a.w; const bx = b.x
           const mx = (ax + bx) / 2; const my = (a.y + b.y) / 2
+          // 关系样式：审核门(review)=红色粗线+菱形门；询问(ask)=蓝色虚线；其余灰实线
+          const isGate = r.relation_type === 'review'
+          const isAsk = r.relation_type === 'ask'
+          const stroke = isGate ? '#A32D2D' : isAsk ? '#1D5F9E' : '#888780'
+          const sw = isGate ? 2.2 : 1.5
+          const dash = isAsk ? '5,4' : undefined
+          const label = REL_TYPE_LABEL[r.relation_type] || r.relation_type
           return (
             <g key={r.id}>
-              <path d={`M ${ax} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${bx} ${b.y + 30}`} fill="none" stroke="#888780" strokeWidth="1.5" markerEnd="url(#parrow)" />
-              <text x={mx} y={my - 6} textAnchor="middle" fontSize="11" fill="#5F5E5A">{REL_TYPE_LABEL[r.relation_type] || r.relation_type}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
+              <path d={`M ${ax} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${bx} ${b.y + 30}`} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
+              {isGate && (
+                <rect x={mx - 7} y={my - 7} width="14" height="14" transform={`rotate(45 ${mx} ${my})`} fill="#A32D2D" stroke="none" opacity="0.85" />
+              )}
+              <text x={mx} y={my - (isGate ? 12 : 6)} textAnchor="middle" fontSize="11" fill={stroke}>{label}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
             </g>
           )
         })}

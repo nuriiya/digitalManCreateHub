@@ -270,6 +270,15 @@ export const getPersonaOntology = (identityId?: number) =>
   api<PersonaOntItem[]>(
     `/api/ontology/persona-ontology${identityId != null ? `?identity_id=${identityId}` : ''}`)
 
+export interface PersonaMcp {
+  id: number; name: string; description: string; mcp_tool_name: string
+  status: string; server_name: string | null; server_approval: string | null
+}
+export const getIdentityMcp = (identityId: number) =>
+  api<{ mcp: PersonaMcp[] }>(`/api/ontology/identities/${identityId}/mcp`)
+export const syncIdentityMcp = (identityId: number) =>
+  api<{ synced: number; tools: string[] }>(`/api/ontology/identities/${identityId}/sync-mcp`, { method: 'POST' })
+
 // ---------------- persona chat (数字人对话: 多模型 + 本体约束开关) ----------------
 
 export interface ChatMessage {
@@ -347,6 +356,11 @@ export const sendChat = (
   api<ChatReply>('/api/chat', {
     method: 'POST',
     body: JSON.stringify({ identity_id: identityId, message, ...opts }),
+  })
+
+export const generateMcp = (request: string) =>
+  api<{ ok: boolean; name?: string; server_id?: number; tools?: string[]; approval_status?: string; error?: string }>('/api/mcp/generate', {
+    method: 'POST', body: JSON.stringify({ request }),
   })
 
 export interface CompareSide {

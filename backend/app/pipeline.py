@@ -18,11 +18,12 @@ from . import db, jobs
 # ---------------- 关系类型闭集（语义化） ----------------
 RELATION_DESIGN = "design"        # 设计 →（流程设计师设计编排）
 RELATION_SUPPLY = "supply"        # 供给知识 →（专业数字人供给领域知识）
-RELATION_REVIEW = "review"        # 复核 →（复核人复核产出）
+RELATION_REVIEW = "review"        # 复核/审核门 →（复核人复核产出，过了才能流转）
 RELATION_HANDOFF = "handoff"      # 交接 →（通用 A 交给 B）
 RELATION_COMPOSE = "compose"      # 组装 →（建数字人工具组装数字人）
+RELATION_ASK = "ask"              # 询问 →（下游向上游提问细化，层级关系）
 RELATION_TYPES = (RELATION_DESIGN, RELATION_SUPPLY, RELATION_REVIEW,
-                  RELATION_HANDOFF, RELATION_COMPOSE)
+                  RELATION_HANDOFF, RELATION_COMPOSE, RELATION_ASK)
 
 # ---------------- 节点 kind ----------------
 KIND_NOMINATE = "nominate"            # LLM 提名节点（数字人）
@@ -246,6 +247,9 @@ def validate_pipeline(conn, pipeline_id) -> list[str]:
 
     adj = {nid: [] for nid in node_ids}
     for r in rels:
+        # ask（询问）是下游问上游的反向边，不参与流程 DAG 环检测
+        if r["relation_type"] == RELATION_ASK:
+            continue
         if r["from_node_id"] in adj and r["to_node_id"] in adj:
             adj[r["from_node_id"]].append(r["to_node_id"])
     if _has_cycle(adj):
@@ -419,6 +423,9 @@ def topo_sort(nodes: list[dict], relations: list[dict]) -> list[dict]:
     adj = {n["id"]: [] for n in nodes}
     indeg = {n["id"]: 0 for n in nodes}
     for r in relations:
+        # ask（询问）不参与执行顺序（是反向询问边，非流程边）
+        if r["relation_type"] == RELATION_ASK:
+            continue
         if r["from_node_id"] in adj and r["to_node_id"] in adj:
             adj[r["from_node_id"]].append(r["to_node_id"])
             indeg[r["to_node_id"]] += 1

@@ -569,3 +569,42 @@ def call_tool(conn, mcp_id: int, tool_name: str, args: dict,
                 sock.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def sync_mcp_to_ontology(conn, identity_id: int) -> dict:
+    """把数字人已批准的 MCP 动作写入本体（kind='规则'），作为「可调用 MCP」规则。
+
+    每条规则：name = 「可调用MCP工具：<tool>」，definition = 工具名 + 服务器 + 描述。
+    幂等（trainer.add_ontology 按 kind+name 去重）。这样数字人在对话/解题时，
+    全量注入本体就能「知道」自己可调用哪些 MCP 工具。
+    """
+    rows = conn.execute(
+        "SELECT pa.mcp_tool_name, pa.description, ms.name AS server_name"
+        " FROM persona_actions pa LEFT JOIN mcp_servers ms ON ms.id=pa.mcp_server_id"
+        " WHERE pa.identity_id=? AND pa.kind='mcp' AND pa.status='approved'",
+        (identity_id,)).fetchall()
+    from . import trainer
+    added = []
+    for r in rows:
+        tool = (r["mcp_tool_name"] or "").strip()
+        if not tool:
+            continue
+        srv = (r["server_name"] or "").strip()
+        name = f"可调用MCP工具：{tool}"
+        defn = (f"可调用 MCP 工具「{tool}」（服务器 {srv}）。"
+                f"{r['description'] or ''}").strip()
+        trainer.add_ontology(conn, identity_id, "规则", name, defn,
+                             note="MCP 绑定同步")
+        added.append(tool)
+    return {"identity_id": identity_id, "synced": len(added), "tools": added}
+
+
+def list_persona_mcp(conn, identity_id: int) -> list[dict]:
+    """数字人绑定的 MCP 动作清单（供前端「可调用 MCP」界面展示）。"""
+    rows = conn.execute(
+        "SELECT pa.id, pa.name, pa.description, pa.mcp_tool_name,"
+        " pa.status, ms.name AS server_name, ms.approval_status AS server_approval"
+        " FROM persona_actions pa LEFT JOIN mcp_servers ms ON ms.id=pa.mcp_server_id"
+        " WHERE pa.identity_id=? AND pa.kind='mcp' ORDER BY pa.id",
+        (identity_id,)).fetchall()
+    return [dict(r) for r in rows]
