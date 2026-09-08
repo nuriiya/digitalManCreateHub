@@ -238,6 +238,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   const [kindAdds, setKindAdds] = useState<Set<string>>(new Set())
   const [bucketAdds, setBucketAdds] = useState<Set<string>>(new Set())
   const [pinned, setPinned] = useState<Set<number>>(new Set())  // 手动点开的项
+  const [focusRole, setFocusRole] = useState<number | null>(null) // 聚焦某个角色，画布只显示其子树
   const relaid = useRef(false)
   const canvasRef = useRef<HTMLDivElement>(null)
   const { fitView, getNodes } = useReactFlow()
@@ -303,6 +304,35 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
       && (e.dangling || e.target == null || loaded.has(e.target))),
     [edgesRaw, loaded, hidden])
 
+  // 聚焦角色子树：点击角色节点后，画布只显示该角色 + 它 owns 的本体段 +
+  // 与它相关的组织关系（supply/review/handoff 连到的其他角色，仅显示不展开）。
+  const focusScope = useMemo(() => {
+    if (focusRole == null) return null
+    const nodeIds = new Set<number>([focusRole])
+    const edgeIds = new Set<number>()
+    for (const e of edgesRaw) {
+      if (e.relation_type === 'owns' && e.source === focusRole && e.target != null) {
+        nodeIds.add(e.target); edgeIds.add(e.id)
+      } else if (e.relation_type !== 'owns'
+        && (e.source === focusRole || e.target === focusRole)) {
+        if (e.source != null) nodeIds.add(e.source)
+        if (e.target != null) nodeIds.add(e.target)
+        edgeIds.add(e.id)
+      }
+    }
+    return { nodeIds, edgeIds }
+  }, [focusRole, edgesRaw])
+
+  const scopedVisible = useMemo(() => {
+    if (!focusScope) return loadedVisible
+    return visible.filter((c) => focusScope.nodeIds.has(c.id))
+  }, [visible, loadedVisible, focusScope])
+
+  const scopedEdges = useMemo(() => {
+    if (!focusScope) return loadedEdges
+    return edgesRaw.filter((e) => focusScope.edgeIds.has(e.id))
+  }, [edgesRaw, loadedEdges, focusScope])
+
   const toggleKind = (k: string) => {
     setKindAdds((prev) => {
       const next = new Set(prev)
@@ -345,7 +375,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
   // build graph when the LOADED scope changes, but keep user-dragged positions;
   // newly loaded nodes fall back to their fresh dagre spot instead of (0,0)
   useEffect(() => {
-    const built = toFlowData(loadedVisible, loadedEdges)
+    const built = toFlowData(scopedVisible, scopedEdges)
     let laid
     if (relaid.current) {
       // preserve dragged positions: only add/remove, don't reset layout.
@@ -368,7 +398,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
       requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadedVisible, loadedEdges])
+  }, [scopedVisible, scopedEdges])
 
   // one-click auto-arrange: dagre re-layout of ALL nodes (clears drag chaos
   // / overlaps), then fit view
@@ -439,6 +469,11 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
     try {
       const d = await getCandidate(id)
       setDetail(d)
+      // 点击「角色」节点 → 画布聚焦该角色的子树
+      if (d.candidate?.kind === '角色') {
+        setFocusRole(id)
+        relaid.current = false   // 触发一次 dagre 重排 + fitView
+      }
       const need = [...new Set(d.mentions.map((m: any) => m.chunk_id))] as number[]
       const entries = await Promise.all(need.map(async (cid) => {
         try { const c = await getChunk(cid); return [cid, c.text] as const }
@@ -895,6 +930,12 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
         </aside>
 
         <div className="og-canvas" ref={canvasRef}>
+          {focusRole != null && (
+            <div className="og-focusbar">
+              <span className="note">聚焦角色子树</span>
+              <button className="btn ghost small" onClick={() => { setFocusRole(null); relaid.current = false }}>显示全部</button>
+            </div>
+          )}
           <ReactFlow
             nodes={nodes} edges={edges}
             nodeTypes={nodeTypes} edgeTypes={edgeTypes}

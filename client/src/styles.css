@@ -372,6 +372,13 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .evidence.exam-missing { border-left: 2px solid var(--orange); }
 
 .og-canvas { flex: 1; position: relative; min-width: 0; }
+.og-focusbar {
+  position: absolute; left: 12px; top: 12px; z-index: 6;
+  background: rgba(29, 32, 38, 0.94); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 6px 12px; display: flex; align-items: center; gap: 10px;
+  font-size: 12px;
+}
+.og-focusbar .note { color: var(--accent); font-weight: 500; }
 .react-flow__attribution { display: none; }
 .og-legend {
   position: absolute; left: 12px; bottom: 12px; z-index: 5;
