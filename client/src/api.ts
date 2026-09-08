@@ -44,8 +44,14 @@ export const logout = () => api<{ ok: boolean }>('/api/auth/logout', { method: '
 export interface McpServer {
   id: number; name: string; description: string; transport: string
   image: string; command: string; port: number; status: string; created_at: number
-  approval_status?: string; tools?: { name: string; description?: string }[]
+  approval_status?: string; tools?: {
+    name: string; description?: string; input_schema?: Record<string, unknown>
+  }[]
   source_path?: string
+  called_by?: {
+    id: number; name: string; mcp_tool_name: string; status: string
+    persona_id: number; persona_name: string
+  }[]
 }
 export const getMcpServers = () => api<{ servers: McpServer[] }>('/api/mcp/servers')
 export const createMcpServer = (body: object) =>
@@ -272,12 +278,28 @@ export const getPersonaOntology = (identityId?: number) =>
 
 export interface PersonaMcp {
   id: number; name: string; description: string; mcp_tool_name: string
+  mcp_server_id?: number
   status: string; server_name: string | null; server_approval: string | null
 }
 export const getIdentityMcp = (identityId: number) =>
   api<{ mcp: PersonaMcp[] }>(`/api/ontology/identities/${identityId}/mcp`)
 export const syncIdentityMcp = (identityId: number) =>
   api<{ synced: number; tools: string[] }>(`/api/ontology/identities/${identityId}/sync-mcp`, { method: 'POST' })
+export const bindIdentityMcp = (identityId: number, body: {
+  mcp_server_id: number; mcp_tool_name: string; description?: string
+}) =>
+  api<{ ok: boolean; action_id?: number; existed?: boolean; name?: string; error?: string }>(
+    `/api/ontology/identities/${identityId}/bind-mcp`,
+    { method: 'POST', body: JSON.stringify(body) })
+export const unbindIdentityMcp = (identityId: number, action_id: number) =>
+  api<{ ok: boolean }>(`/api/ontology/identities/${identityId}/unbind-mcp`,
+    { method: 'POST', body: JSON.stringify({ action_id }) })
+
+export const getAvailableMcp = () =>
+  api<{ mcp: {
+    id: number; name: string; description: string; transport: string
+    image: string; tools: { name: string; description?: string; input_schema?: Record<string, unknown> }[]
+  }[] }>('/api/mcp/available')
 
 // ---------------- persona chat (数字人对话: 多模型 + 本体约束开关) ----------------
 
@@ -290,8 +312,8 @@ export interface ChatRoute {
   identity_id: number; identity_name: string; score: number; matched: string[]
 }
 export interface ChatSession {
-  id: number; identity_id: number; title: string
-  created_at: number; message_count: number
+  id: number; identity_id: number; identity_name?: string | null
+  title: string; created_at: number; message_count: number
 }
 export interface ChatContext {
   provider: string
@@ -394,8 +416,9 @@ export const clearChat = (identityId: number, sessionId?: number | null) =>
     { method: 'DELETE' })
 
 // ---------------- chat sessions (多会话历史) ----------------
-export const getChatSessions = (identityId: number) =>
-  api<{ sessions: ChatSession[] }>(`/api/chat/sessions?identity_id=${identityId}`)
+export const getChatSessions = (identityId?: number | null) =>
+  api<{ sessions: ChatSession[] }>(
+    `/api/chat/sessions${identityId != null ? `?identity_id=${identityId}` : ''}`)
 export const createChatSession = (identityId: number, title = '') =>
   api<{ ok: boolean; session: ChatSession }>('/api/chat/sessions', {
     method: 'POST', body: JSON.stringify({ identity_id: identityId, title }),

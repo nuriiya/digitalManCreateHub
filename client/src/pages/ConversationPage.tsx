@@ -41,35 +41,45 @@ export default function ConversationPage({ refreshKey }: Props) {
   const { toast } = useToast()
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
-  // 会话宿主：用第一个已批准数字人作为会话分组的宿主（消息可路由到其它数字人）
-  const hostId = approved[0]?.id ?? null
+
+  const refreshSessions = async (): Promise<ChatSession[]> => {
+    try {
+      const r = await getChatSessions()
+      const list = r.sessions ?? []
+      setSessions(list)
+      return list
+    } catch {
+      return []
+    }
+  }
 
   useEffect(() => {
     getIdentities().then((r) => setIdents(r.identities ?? [])).catch(() => { })
   }, [refreshKey])
 
   useEffect(() => {
-    if (hostId == null) { setSessions([]); setSessionId(null); return }
+    if (idents.length === 0) return
     let cancelled = false
-    getChatSessions(hostId).then((r) => {
+    refreshSessions().then((list: ChatSession[]) => {
       if (cancelled) return
-      const list = r.sessions ?? []
-      setSessions(list)
-      setSessionId((cur) => (cur != null && !list.some((s) => s.id === cur)) ? null : cur)
-    }).catch(() => { })
+      setSessionId((cur) => (cur != null && !list.some((s: ChatSession) => s.id === cur)) ? null : cur)
+    })
     return () => { cancelled = true }
-  }, [hostId])
+  }, [idents.length])
 
   useEffect(() => {
     if (sessionId == null) { setMessages([]); return }
+    const sess = sessions.find((s) => s.id === sessionId)
+    const sessIdentityId = sess?.identity_id ?? approved[0]?.id ?? 0
+    if (sessIdentityId === 0) { setMessages([]); return }
     let cancelled = false
     setLoading(true)
-    getChatMessages(hostId ?? 0, sessionId)
+    getChatMessages(sessIdentityId, sessionId)
       .then((r) => { if (!cancelled) setMessages(r.messages ?? []) })
       .catch(() => { })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [sessionId, hostId])
+  }, [sessionId, sessions, approved])
 
   useEffect(() => {
     const el = logRef.current
@@ -135,8 +145,9 @@ export default function ConversationPage({ refreshKey }: Props) {
       setMessages(reply.messages ?? [])
       if (reply.session_id != null && reply.session_id !== sessionId) {
         setSessionId(reply.session_id)
-        if (hostId != null) getChatSessions(hostId).then((s) => setSessions(s.sessions ?? [])).catch(() => { })
       }
+      // 刷新全局会话列表（后端为路由到的数字人建了 session）
+      await refreshSessions()
     } catch (e: any) {
       toast(e.message, 'err')
       setInput(text)
@@ -172,9 +183,12 @@ export default function ConversationPage({ refreshKey }: Props) {
   }
   const doClear = async () => {
     if (sessionId == null) return
+    const sess = sessions.find((s) => s.id === sessionId)
+    const sessIdentityId = sess?.identity_id ?? approved[0]?.id ?? 0
+    if (sessIdentityId === 0) return
     if (!confirm('清空当前对话组的全部消息？')) return
     try {
-      await clearChat(hostId ?? 0, sessionId)
+      await clearChat(sessIdentityId, sessionId)
       setMessages([])
     } catch (e: any) { toast(e.message, 'err') }
   }

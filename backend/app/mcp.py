@@ -52,6 +52,14 @@ def list_servers(conn) -> list[dict]:
     for r in rows:
         d = dict(r)
         d["status"] = get_status(r["id"])  # live status wins
+        # 该 MCP 被哪些数字人通过 actions 绑定调用（每条 action = 一个 tool 绑定）
+        bindings = conn.execute(
+            "SELECT pa.id, pa.name, pa.mcp_tool_name, pa.status, i.id AS persona_id,"
+            " i.name AS persona_name"
+            " FROM persona_actions pa JOIN identities i ON i.id=pa.identity_id"
+            " WHERE pa.kind='mcp' AND pa.mcp_server_id=? ORDER BY pa.id",
+            (r["id"],)).fetchall()
+        d["called_by"] = [dict(b) for b in bindings]
         out.append(d)
     return out
 

@@ -937,6 +937,47 @@ def identity_mcp(identity_id: int):
     return {"mcp": mcp.list_persona_mcp(db.get_conn(), identity_id)}
 
 
+class McpBindBody(BaseModel):
+    mcp_server_id: int
+    mcp_tool_name: str
+    description: str = ""
+
+
+@app.post("/api/ontology/identities/{identity_id}/bind-mcp")
+def identity_bind_mcp(identity_id: int, body: McpBindBody):
+    """用户显式把 MCP 工具绑定到数字人（approved，绕过提名-审批；幂等）。"""
+    return actions.bind_mcp_action(
+        db.get_conn(), identity_id, body.mcp_server_id, body.mcp_tool_name,
+        body.description)
+
+
+class McpUnbindBody(BaseModel):
+    action_id: int
+
+
+@app.post("/api/ontology/identities/{identity_id}/unbind-mcp")
+def identity_unbind_mcp(identity_id: int, body: McpUnbindBody):
+    """解绑 persona action。"""
+    ok = actions.unbind_action(db.get_conn(), identity_id, body.action_id)
+    return {"ok": ok}
+
+
+@app.get("/api/mcp/available")
+def mcp_available():
+    """可绑定的 MCP 列表（已审批 + 全部工具），供数字人选择面板用。"""
+    conn = db.get_conn()
+    items = []
+    for s in mcp.list_servers(conn):
+        if (s.get("approval_status") or "approved") != "approved":
+            continue
+        items.append({
+            "id": s["id"], "name": s["name"], "description": s.get("description") or "",
+            "transport": s["transport"], "image": s.get("image") or "",
+            "tools": s.get("tools") or [],
+        })
+    return {"mcp": items}
+
+
 @app.post("/api/ontology/identities/{identity_id}/sync-mcp")
 def identity_sync_mcp(identity_id: int):
     """把数字人已批准的 MCP 动作同步写入本体（kind='规则'）。"""
@@ -1323,7 +1364,8 @@ class SessionRenameBody(BaseModel):
 
 
 @app.get("/api/chat/sessions")
-def chat_sessions(identity_id: int):
+def chat_sessions(identity_id: int | None = None):
+    """列出对话组（identity_id 缺省=所有数字人的全部 session）。"""
     return {"sessions": chat.list_sessions(db.get_conn(), identity_id)}
 
 

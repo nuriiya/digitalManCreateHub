@@ -4,6 +4,7 @@ import {
   updateIdentity, setAnchorStatus, updateAnchor, addAnchor, createIdentity,
   runAssemble, getAssembly, confirmAssembly, discardAssembly, restoreAssembly,
   dismissAsmItem, getPersonaOntology, getIdentityMcp, syncIdentityMcp,
+  bindIdentityMcp, unbindIdentityMcp, getAvailableMcp,
   runBenchmark, getBenchmark, rejectBenchChange, mergeBenchmark, rollbackBenchmark,
   type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
 } from '../api'
@@ -49,6 +50,9 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   // MCP 绑定（可调用 MCP 工具清单 + 同步到本体）per persona
   const [mcpMap, setMcpMap] = useState<Record<number, PersonaMcp[]>>({})
   const [mcpOpen, setMcpOpen] = useState<Record<number, boolean>>({})
+  // 可用 MCP 列表（所有已审批 MCP 的工具）—— 供数字人选择面板用
+  const [availableMcp, setAvailableMcp] = useState<Awaited<ReturnType<typeof getAvailableMcp>>['mcp']>([])
+  const [mcpBinding, setMcpBinding] = useState<Record<string, boolean>>({})  // 正在绑定的工具 key（`serverId:toolName`）
   const { toast } = useToast()
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
@@ -221,6 +225,29 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       const r = await syncIdentityMcp(id)
       toast(`已同步 ${r.synced} 个 MCP 工具到本体规则`, 'ok')
     } catch (e: any) { toast(e.message, 'err') }
+  }
+  // 首次加载可用 MCP 列表（所有已审批 MCP 的工具，用于勾选面板）
+  useEffect(() => {
+    if (availableMcp.length > 0) return
+    getAvailableMcp().then((r) => setAvailableMcp(r.mcp ?? [])).catch(() => { })
+  }, [availableMcp.length])
+  // 勾选/取消绑定 MCP 工具
+  const doBindMcpTool = async (personaId: number, serverId: number, toolName: string, bind: boolean, actionId?: number) => {
+    const key = `${serverId}:${toolName}`
+    setMcpBinding((m) => ({ ...m, [key]: true }))
+    try {
+      if (bind) {
+        const r = await bindIdentityMcp(personaId, { mcp_server_id: serverId, mcp_tool_name: toolName })
+        if (r.ok) { toast(`已绑定 ${toolName}`, 'ok'); const fresh = await getIdentityMcp(personaId); setMcpMap((m) => ({ ...m, [personaId]: fresh.mcp ?? [] })) }
+        else toast(r.error || '绑定失败', 'err')
+      } else {
+        if (!actionId) { toast('缺少 action_id', 'err'); return }
+        const r = await unbindIdentityMcp(personaId, actionId)
+        if (r.ok) { toast(`已解绑 ${toolName}`, 'ok'); const fresh = await getIdentityMcp(personaId); setMcpMap((m) => ({ ...m, [personaId]: fresh.mcp ?? [] })) }
+        else toast('解绑失败', 'err')
+      }
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setMcpBinding((m) => { const n = { ...m }; delete n[key]; return n }) }
   }
 
   // ---- benchmark sub-module (四组对照测试 + 归因提名 + 版本管理) ----
@@ -518,26 +545,65 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const mcpBlock = (it: Identity) => {
     const list = mcpMap[it.id] ?? []
     const open = mcpOpen[it.id]
+    // 已绑定的工具 key 集合（按 server_id+tool_name），用于勾选面板的禁用/勾选状态
+    const boundKeys = new Set(list.map((m) => `${m.mcp_server_id ?? m.server_name ?? '?'}:${m.mcp_tool_name}`))
     return (
       <div className="ont-sub">
         <button className={`id-toggle ${open ? 'on' : ''}`} onClick={() => toggleMcp(it.id)}>
           <span className="arrow">{open ? '▼' : '▶'}</span>
           <span>可调用 MCP</span>
-          <span className="note">{open ? `${list.length} 个工具` : ''}</span>
+          <span className="note">{open ? `${list.length} 个已绑定` : ''}</span>
         </button>
         {open && (
           <div className="ont-body">
+            <div className="mcp-section">已绑定（{list.length}）</div>
             {list.length === 0 && <div className="note">暂无绑定的 MCP 工具</div>}
-            {list.map((m) => (
-              <div key={m.id} className="ont-row">
-                <span className="ont-kind" title="MCP 工具">M</span>
-                <span className="ont-name" title={m.description}>{m.mcp_tool_name}</span>
-                <span className="note">{m.server_name || '?'} · {m.status}</span>
+            {list.map((m) => {
+              const key = `${m.mcp_server_id ?? m.server_name ?? '?'}:${m.mcp_tool_name}`
+              const busy = !!mcpBinding[key]
+              return (
+                <div key={m.id} className="ont-row">
+                  <input type="checkbox" checked disabled={busy}
+                    onChange={() => doBindMcpTool(it.id, 0, m.mcp_tool_name, false, m.id)} />
+                  <span className="ont-kind" title="MCP 工具">M</span>
+                  <span className="ont-name" title={m.description}>{m.mcp_tool_name}</span>
+                  <span className="note">{m.server_name || '?'} · {m.status}</span>
+                  <span className="ops">
+                    <button className="btn ghost tiny" disabled={busy}
+                      onClick={() => doBindMcpTool(it.id, 0, m.mcp_tool_name, false, m.id)}>解绑</button>
+                  </span>
+                </div>
+              )
+            })}
+            <div className="mcp-section">可用 MCP（勾选绑定）</div>
+            {availableMcp.length === 0 && <div className="note">暂无已审批的 MCP 可绑定</div>}
+            {availableMcp.map((srv) => (
+              <div key={srv.id} className="mcp-server">
+                <div className="mcp-server-head">
+                  <b>{srv.name}</b>
+                  <span className="note">（{srv.transport}）{srv.description && ` — ${srv.description.slice(0, 40)}`}</span>
+                </div>
+                {(srv.tools || []).map((t) => {
+                  const key = `${srv.id}:${t.name}`
+                  const isBound = boundKeys.has(`${srv.id}:${t.name}`) ||
+                    !!list.find((m) => m.mcp_tool_name === t.name && m.mcp_server_id === srv.id)
+                  const busy = !!mcpBinding[key]
+                  return (
+                    <label key={t.name} className="mcp-tool-pick">
+                      <input type="checkbox" checked={isBound} disabled={busy || isBound}
+                        onChange={() => doBindMcpTool(it.id, srv.id, t.name, true)} />
+                      <span className="ont-name">{t.name}</span>
+                      {t.description && <span className="note"> — {t.description.slice(0, 50)}</span>}
+                    </label>
+                  )
+                })}
               </div>
             ))}
-            <button className="btn ghost small" onClick={() => doSyncMcp(it.id)}>
-              同步到本体规则
-            </button>
+            <div className="btnrow">
+              <button className="btn ghost small" onClick={() => doSyncMcp(it.id)}>
+                同步到本体规则
+              </button>
+            </div>
           </div>
         )}
       </div>

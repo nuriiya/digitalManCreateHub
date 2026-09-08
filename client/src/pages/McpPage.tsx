@@ -106,6 +106,7 @@ export default function McpPage() {
         {servers.map((s) => {
           const ap = s.approval_status || 'approved'
           const toolCount = (s.tools || []).length
+          const calledBy = s.called_by || []
           return (
             <div key={s.id} className="mcp-row">
               <div className="mcp-info">
@@ -115,6 +116,30 @@ export default function McpPage() {
                 <span className="note">{s.transport} · {s.image}{s.port ? ` :${s.port}` : ''}{toolCount ? ` · ${toolCount} 工具` : ''}</span>
                 {s.description && <div className="note">{s.description}</div>}
                 {s.source_path && <div className="note">来源：{s.source_path}</div>}
+                {toolCount > 0 && (
+                  <div className="mcp-tools">
+                    <div className="mcp-section-title">工具清单（LLM 调用输入 schema）</div>
+                    {s.tools!.map((t, i) => (
+                      <div key={i} className="mcp-tool">
+                        <div><b>{t.name}</b>{t.description && <span className="note"> — {t.description}</span>}</div>
+                        {t.input_schema && (
+                          <pre className="mcp-schema">{JSON.stringify(t.input_schema, null, 2)}</pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {calledBy.length > 0 && (
+                  <div className="mcp-tools">
+                    <div className="mcp-section-title">被以下数字人调用（{calledBy.length}）</div>
+                    {calledBy.map((b) => (
+                      <div key={b.id} className="mcp-tool">
+                        <b>{b.persona_name}</b>
+                        <span className="note"> · 工具 <code>{b.mcp_tool_name}</code> · {b.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="btnrow">
                 {ap === 'pending' && (

@@ -382,6 +382,50 @@ def set_action_status(conn, action_id: int, status: str) -> bool:
     cur = conn.execute("UPDATE persona_actions SET status=? WHERE id=?",
                        (status, action_id))
     conn.commit()
+
+
+def bind_mcp_action(conn, identity_id: int, mcp_server_id: int,
+                    mcp_tool_name: str, description: str = "") -> dict:
+    """用户显式把 MCP 工具绑定到数字人（status 直接 approved，绕过提名-审批）。幂等。"""
+    from . import mcp as mcp_mod
+    srv = conn.execute("SELECT id, name, approval_status, tools FROM mcp_servers WHERE id=?",
+                       (mcp_server_id,)).fetchone()
+    if not srv:
+        return {"ok": False, "error": "MCP server 不存在"}
+    if (srv["approval_status"] or "approved") != "approved":
+        return {"ok": False, "error": "MCP 未审批，不能绑定"}
+    # 校验工具存在
+    tools = srv["tools"] if isinstance(srv["tools"], list) else []
+    tool_names = {t.get("name") for t in tools if isinstance(t, dict)}
+    if mcp_tool_name not in tool_names:
+        return {"ok": False, "error": f"工具 {mcp_tool_name} 不在该 MCP 中"}
+    name = f"mcp:{srv['name']}:{mcp_tool_name}"
+    exists = conn.execute(
+        "SELECT id, status FROM persona_actions WHERE identity_id=? AND name=?",
+        (identity_id, name)).fetchone()
+    if exists:
+        return {"ok": True, "action_id": exists["id"], "existed": True,
+                "status": exists["status"], "name": name}
+    cur = conn.execute(
+        "INSERT INTO persona_actions(identity_id, name, description,"
+        " input_schema, kind, mcp_server_id, mcp_tool_name, builtin_name,"
+        " status, created_at) VALUES(?,?,?,?,?,?,?,?,'approved',?)",
+        (identity_id, name, description or f"MCP {srv['name']} 工具 {mcp_tool_name}",
+         json.dumps({}, ensure_ascii=False), "mcp", mcp_server_id, mcp_tool_name,
+         None, db.now()))
+    conn.commit()
+    return {"ok": True, "action_id": cur.lastrowid, "existed": False, "name": name}
+
+
+def unbind_action(conn, identity_id: int, action_id: int) -> bool:
+    """解绑 persona action（按 identity_id 校验归属）。"""
+    row = conn.execute("SELECT identity_id FROM persona_actions WHERE id=?",
+                       (action_id,)).fetchone()
+    if not row or row["identity_id"] != identity_id:
+        return False
+    conn.execute("DELETE FROM persona_actions WHERE id=?", (action_id,))
+    conn.commit()
+    return True
     return cur.rowcount > 0
 
 

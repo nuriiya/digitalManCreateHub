@@ -381,12 +381,22 @@ def delete_session(conn, session_id: int) -> int:
     return n
 
 
-def list_sessions(conn, identity_id: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT s.id, s.identity_id, s.title, s.created_at,"
-        " (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count"
-        " FROM chat_sessions s WHERE s.identity_id=? ORDER BY s.id DESC",
-        (identity_id,)).fetchall()
+def list_sessions(conn, identity_id: int | None = None) -> list[dict]:
+    if identity_id is None:
+        rows = conn.execute(
+            "SELECT s.id, s.identity_id, s.title, s.created_at,"
+            " i.name AS identity_name,"
+            " (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count"
+            " FROM chat_sessions s LEFT JOIN identities i ON i.id=s.identity_id"
+            " ORDER BY s.id DESC").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT s.id, s.identity_id, s.title, s.created_at,"
+            " i.name AS identity_name,"
+            " (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count"
+            " FROM chat_sessions s LEFT JOIN identities i ON i.id=s.identity_id"
+            " WHERE s.identity_id=? ORDER BY s.id DESC",
+            (identity_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
