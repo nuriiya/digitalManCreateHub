@@ -682,6 +682,35 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 .chat-input-row textarea:disabled { opacity: 0.5; }
 .chat-input-row .btn { height: 60px; padding: 0 20px; }
 
+/* 对话输入气泡（胶囊样式，参考统一对话输入框） */
+.chat-bubble {
+  display: flex; flex-direction: column; margin-top: 10px;
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 18px;
+  padding: 12px 14px 10px;
+  transition: border-color 0.15s;
+}
+.chat-bubble:focus-within { border-color: var(--accent); }
+.chat-bubble.mcp-on { border-color: var(--green); box-shadow: 0 0 0 1px rgba(76,175,120,.25); }
+.chat-bubble textarea {
+  width: 100%; background: transparent; color: var(--text);
+  border: none; outline: none; padding: 0; font-size: 14px;
+  font-family: inherit; resize: none; height: 44px; line-height: 1.5;
+}
+.chat-bubble textarea:disabled { opacity: 0.5; }
+.chat-bubble-bar {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+}
+.chat-bubble .bubble-op {
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.chat-bubble .bubble-op:hover { color: var(--text); border-color: var(--accent); }
+.chat-bubble .bubble-op.gen.on { color: var(--green); border-color: var(--green); background: rgba(76,175,120,.08); }
+.chat-bubble .bubble-spacer { flex: 1; }
+.chat-bubble .btn { height: 32px; padding: 0 16px; border-radius: 999px; }
+
 /* ---------------- persona benchmark (四组对照测试 + 归因提名 + 版本管理) ---------------- */
 .bch-sub {
   margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 10px;

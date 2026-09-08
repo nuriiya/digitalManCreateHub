@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getIdentities, getChatModels, getChatMessages, sendChat, clearChat, compareChat,
-  getChatSessions, deleteChatSession, renameChatSession, generateMcp,
+  getChatSessions, deleteChatSession, renameChatSession,
   type Identity, type ChatMessage, type ChatContext, type ChatModels,
   type CompareSide, type ChatSession,
 } from '../api'
@@ -49,7 +49,6 @@ export default function ChatPage({ refreshKey }: Props) {
   const [ollamaModel, setOllamaModel] = useState<string | null>(null)
   const [useOntology, setUseOntology] = useState(true)
   const [useRag, setUseRag] = useState(false)
-  const [genMcpMode, setGenMcpMode] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
   // 对比模式左右臂各自独立的开关（本体约束 / RAG 资料）
   const [armLeft, setArmLeft] = useState({ use_ontology: true, use_rag: false })
@@ -166,35 +165,7 @@ export default function ChatPage({ refreshKey }: Props) {
 
   const doSend = async () => {
     const text = input.trim()
-    if (sending || !text) return
-    // 生成 MCP 模式：输入框内容是需求，调 generateMcp（无需绑定数字人）
-    if (genMcpMode) {
-      setSending(true)
-      setInput('')
-      try {
-        const r = await generateMcp(text)
-        if (r.ok) {
-          toast(`已生成 MCP「${r.name}」（${(r.tools || []).length} 工具），待审批`, 'ok')
-          setMessages((m) => [...m, {
-            id: -2, identity_id: selId ?? 0, role: 'user', content: `生成 MCP：${text}`, created_at: Date.now() / 1000,
-          }, {
-            id: -3, identity_id: selId ?? 0, role: 'assistant',
-            content: `已生成 MCP「${r.name}」，工具：${(r.tools || []).join('、')}。已导入待审批，去「MCP 沙盒」页批准后即可启动。`,
-            created_at: Date.now() / 1000,
-          }])
-        } else {
-          toast(r.error || '生成失败', 'err')
-          setInput(text)
-        }
-      } catch (e: any) {
-        toast(e.message, 'err')
-        setInput(text)
-      } finally {
-        setSending(false)
-      }
-      return
-    }
-    if (!selId) return
+    if (!selId || !text || sending) return
     setSending(true)
     setInput('')
     setCtxOpen(false)
@@ -685,20 +656,15 @@ export default function ChatPage({ refreshKey }: Props) {
           )}
 
           <div className="chat-input-row">
-            <label className={`cmp-arm-toggle ${genMcpMode ? 'on' : ''}`} title="打开后，输入框内容作为需求生成一个 MCP（LLM 设计 → 校验 → 导入待审批）">
-              <input type="checkbox" checked={genMcpMode}
-                onChange={(e) => setGenMcpMode(e.target.checked)} />
-              生成 MCP
-            </label>
             <textarea
               value={input}
-              placeholder={genMcpMode ? '描述你要生成的 MCP（如：一个论文搜索工具，返回标题作者摘要）' : sel ? `问「${sel.name}」一个问题（Enter 发送，Shift+Enter 换行）` : '先选择一个数字人'}
+              placeholder={sel ? `问「${sel.name}」一个问题（Enter 发送，Shift+Enter 换行）` : '先选择一个数字人'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
-              disabled={!genMcpMode && !selId}
+              disabled={!selId}
             />
-            <button className="btn green" onClick={doSend} disabled={!input.trim() || sending}>
-              {genMcpMode ? '生成 MCP' : '发送'}
+            <button className="btn green" onClick={doSend} disabled={!selId || !input.trim() || sending}>
+              发送
             </button>
           </div>
         </div>

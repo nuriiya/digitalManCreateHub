@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, getChatSessions,
-  deleteChatSession, renameChatSession, clearChat,
+  deleteChatSession, renameChatSession, clearChat, generateMcp,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -34,6 +34,7 @@ export default function ConversationPage({ refreshKey }: Props) {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [genMcpMode, setGenMcpMode] = useState(false)
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
@@ -91,6 +92,33 @@ export default function ConversationPage({ refreshKey }: Props) {
   const doSend = async () => {
     const text = input.trim()
     if (!text || sending) return
+    // 生成 MCP 模式：输入内容作为需求生成一个 MCP（无需路由数字人）
+    if (genMcpMode) {
+      setSending(true)
+      setInput('')
+      try {
+        const r = await generateMcp(text)
+        if (r.ok) {
+          toast(`已生成 MCP「${r.name}」（${(r.tools || []).length} 工具），待审批`, 'ok')
+          setMessages((m) => [...m, {
+            id: -2, identity_id: 0, role: 'user', content: `生成 MCP：${text}`, created_at: Date.now() / 1000,
+          }, {
+            id: -3, identity_id: 0, role: 'assistant',
+            content: `已生成 MCP「${r.name}」，工具：${(r.tools || []).join('、')}。已导入待审批，去「MCP 沙盒」页批准后即可启动。`,
+            created_at: Date.now() / 1000,
+          }])
+        } else {
+          toast(r.error || '生成失败', 'err')
+          setInput(text)
+        }
+      } catch (e: any) {
+        toast(e.message, 'err')
+        setInput(text)
+      } finally {
+        setSending(false)
+      }
+      return
+    }
     setSending(true)
     setInput('')
     try {
@@ -246,18 +274,27 @@ export default function ConversationPage({ refreshKey }: Props) {
             {sending && <div className="chat-msg assistant chat-typing">正在判断并回答…</div>}
           </div>
 
-          <div className="chat-input-row">
+          <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''}`}>
             <textarea
               value={input}
-              placeholder="输入问题，自动路由到最匹配的数字人（Enter 发送，Shift+Enter 换行）"
+              placeholder={genMcpMode ? '描述你要生成的 MCP（如：一个论文搜索工具，返回标题作者摘要）' : '今天帮你做些什么？（Enter 发送，Shift+Enter 换行）'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
-              disabled={approved.length === 0}
+              disabled={!genMcpMode && approved.length === 0}
             />
-            <button className="btn green" onClick={doSend}
-              disabled={!input.trim() || sending || approved.length === 0}>
-              发送
-            </button>
+            <div className="chat-bubble-bar">
+              <button className="bubble-op" title="上传文件（暂未开放）" disabled>＋</button>
+              <button className={`bubble-op gen ${genMcpMode ? 'on' : ''}`}
+                onClick={() => setGenMcpMode((v) => !v)}
+                title="生成 MCP：把输入内容作为需求生成一个 MCP（LLM 设计 → 校验 → 导入待审批）">
+                ⚙ 生成 MCP
+              </button>
+              <span className="bubble-spacer" />
+              <button className="btn green" onClick={doSend}
+                disabled={!input.trim() || sending || (!genMcpMode && approved.length === 0)}>
+                {genMcpMode ? '生成 MCP' : '发送'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
