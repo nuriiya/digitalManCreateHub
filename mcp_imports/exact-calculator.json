@@ -1,0 +1,35 @@
+{
+  "name": "exact-calculator",
+  "description": "一个根据大语言模型输出的数学表达式计算精确值的 MCP 计算器工具",
+  "transport": "stdio",
+  "image": "mcp/calculator:latest",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "tools": [
+    {
+      "name": "calculate",
+      "description": "根据输入的数学表达式计算出精确结果，支持加(+)、减(-)、乘(*)、除(/)、整除(//)、取模(%)、幂(**)及括号，结果以最简分数或十进制精确表达",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "数学表达式，例如：(1 + 2) * 3 / 4"
+          },
+          "precision": {
+            "type": "integer",
+            "description": "小数精度，默认为 10",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

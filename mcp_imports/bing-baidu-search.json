@@ -1,0 +1,60 @@
+{
+  "name": "bing-baidu-search",
+  "description": "提供搜索 Bing 和百度网页的 MCP 服务器，返回标题、链接和摘要。",
+  "transport": "stdio",
+  "image": "mcp/bing-baidu-search:latest",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "tools": [
+    {
+      "name": "search_bing",
+      "description": "搜索 Bing 网页，返回标题、链接和摘要。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "要搜索的关键词"
+          },
+          "num_results": {
+            "type": "integer",
+            "description": "返回结果数量，默认 5，最大 10",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "search_baidu",
+      "description": "搜索百度网页，返回标题、链接和摘要。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "要搜索的关键词"
+          },
+          "num_results": {
+            "type": "integer",
+            "description": "返回结果数量，默认 5，最大 10",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  ],
+  "server_py": "import os\nimport re\nimport html as html_lib\nfrom typing import Any\n\nimport httpx\nfrom mcp.server.fastmcp import FastMCP\n\nmcp = FastMCP('bing-baidu-search')\n\nPAPER_PROXY = os.environ.get('PAPER_PROXY', '').strip()\n\nHEADERS = {\n    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',\n    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',\n    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',\n}\n\ndef _get(url: str, params: dict[str, Any]) -> str:\n    kwargs: dict[str, Any] = {\n        'verify': False,\n        'follow_redirects': True,\n        'timeout': 20.0,\n        'headers': HEADERS,\n    }\n    if PAPER_PROXY:\n        kwargs['proxy'] = PAPER_PROXY\n    with httpx.Client(**kwargs) as client:\n        response = client.get(url, params=params)\n        response.raise_for_status()\n        return response.text\n\ndef _clean(segment: str) -> str:\n    if not segment:\n        return ''\n    segment = re.sub(r'<script.*?</script>', ' ', segment, flags=re.S | re.I)\n    segment = re.sub(r'<style.*?</style>', ' ', segment, flags=re.S | re.I)\n    segment = re.sub(r'<[^>]+>', ' ', segment)\n    return html_lib.unescape(' '.join(segment.split()))\n\ndef _parse_bing(page: str, limit: int) -> list[dict[str, Any]]:\n    results: list[dict[str, Any]] = []\n    blocks = re.findall(r'<li[^>]*class=[^>]*b_algo[^>]*>(.*?)</li>', page, flags=re.S | re.I)\n    for block in blocks:\n        a = re.search(r'<a[^>]*href=([^ >]+)[^>]*>(.*?)</a>', block, flags=re.S | re.I)\n        if not a:\n            continue\n        title = _clean(a.group(2))\n        link = a.group(1).strip(chr(34) + chr(39))\n        if not title or not link.startswith('http'):\n            continue\n        p = re.search(r'<p[^>]*>(.*?)</p>', block, flags=re.S | re.I)\n        snippet = _clean(p.group(1)) if p else ''\n        results.append({'title': title, 'link': link, 'snippet': snippet, 'engine': 'Bing'})\n        if len(results) >= limit:\n            break\n    return results\n\ndef _parse_baidu(page: str, limit: int) -> list[dict[str, Any]]:\n    results: list[dict[str, Any]] = []\n    pattern = re.compile(r'<h3[^>]*>(.*?)</h3>(.*?)(?=<h3|</body>|</html>|$)', flags=re.S | re.I)\n    for match in pattern.finditer(page):\n        title_block = match.group(1)\n        tail = match.group(2)\n        a = re.search(r'<a[^>]*href=([^ >]+)[^>]*>(.*?)</a>', title_block, flags=re.S | re.I)\n        if not a:\n            continue\n        title = _clean(a.group(2))\n        link = a.group(1).strip(chr(34) + chr(39))\n        if not title or not link.startswith('http'):\n            continue\n        snippet = ''\n        abs_match = re.search(r'class=[^>]*c-abstract[^>]*>(.*?)</div>', tail, flags=re.S | re.I)\n        if abs_match:\n            snippet = _clean(abs_match.group(1))\n        results.append({'title': title, 'link': link, 'snippet': snippet, 'engine': 'Baidu'})\n        if len(results) >= limit:\n            break\n    return results\n\n@mcp.tool\ndef search_bing(query: str, num_results: int = 5) -> list[dict[str, Any]]:\n    '''搜索 Bing 网页并返回结果。'''\n    try:\n        num_results = max(1, min(int(num_results), 10))\n    except (TypeError, ValueError):\n        num_results = 5\n    try:\n        page = _get('https://www.bing.com/search', {'q': query, 'count': str(num_results), 'mkt': 'zh-CN', 'setlang': 'zh-CN'})\n    except httpx.HTTPError as exc:\n        raise RuntimeError(f'Bing search request failed: {exc}') from exc\n    parsed = _parse_bing(page, num_results)\n    if not parsed:\n        return [{'query': query, 'engine': 'Bing', 'warning': 'no result parsed, please refine query'}]\n    return parsed\n\n@mcp.tool\ndef search_baidu(query: str, num_results: int = 5) -> list[dict[str, Any]]:\n    '''搜索百度网页并返回结果。'''\n    try:\n        num_results = max(1, min(int(num_results), 10))\n    except (TypeError, ValueError):\n        num_results = 5\n    try:\n        page = _get('https://www.baidu.com/s', {'wd': query, 'rn': str(num_results), 'ie': 'utf-8'})\n    except httpx.HTTPError as exc:\n        raise RuntimeError(f'Baidu search request failed: {exc}') from exc\n    parsed = _parse_baidu(page, num_results)\n    if not parsed:\n        return [{'query': query, 'engine': 'Baidu', 'warning': 'no result parsed, please refine query'}]\n    return parsed\n\nif __name__ == '__main__':\n    mcp.run(transport='stdio')",
+  "dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nRUN pip install --no-cache-dir mcp httpx\nCOPY server.py .\nCMD [\"python\", \"server.py\"]"
+}
