@@ -103,6 +103,7 @@ def main():
     print("\n=== 2. 数字人本体沉淀到本体库（candidates）===")
     cand_count = 0
     id_to_cand = {}  # identity_id -> candidate_id（用于组织关系映射）
+    id_to_ont_cands = {}  # identity_id -> [本体段 candidate_id]
     for iid in range(1, 8):
         ident = conn.execute(
             "SELECT name, mission FROM identities WHERE id=?", (iid,)).fetchone()
@@ -113,15 +114,37 @@ def main():
                                 ident["mission"] or "数字人")
         id_to_cand[iid] = cid
         cand_count += 1
-        # 该数字人的本体段入库
+        # 该数字人的本体段入库（记录 candidate id，用于挂载关系）
+        id_to_ont_cands[iid] = []
         for o in conn.execute(
                 "SELECT kind, name, definition FROM persona_ontology"
                 " WHERE identity_id=? AND status='active'", (iid,)).fetchall():
             kind = o["kind"] if o["kind"] in ("组织架构", "角色", "规则", "系统",
                                               "流程", "概念", "对象", "其他") else "概念"
-            _upsert_candidate(conn, kind, o["name"], o["definition"] or "")
+            ocid = _upsert_candidate(conn, kind, o["name"], o["definition"] or "")
+            id_to_ont_cands[iid].append(ocid)
             cand_count += 1
     print(f"  入库 {cand_count} 个本体（含数字人角色实体）")
+
+    print("\n=== 2.5 本体段挂载到所属数字人（role --owns--> ontology）===")
+    owns_count = 0
+    for iid, ocids in id_to_ont_cands.items():
+        role_cid = id_to_cand[iid]
+        role_name = conn.execute("SELECT name FROM candidates WHERE id=?",
+                                 (role_cid,)).fetchone()["name"]
+        for ocid in ocids:
+            ont_name = conn.execute("SELECT name FROM candidates WHERE id=?",
+                                    (ocid,)).fetchone()["name"]
+            exists = conn.execute(
+                "SELECT id FROM relations WHERE source_id=? AND target_name=?"
+                " AND relation_type='owns'", (role_cid, ont_name)).fetchone()
+            if not exists:
+                conn.execute(
+                    "INSERT INTO relations(source_id, target_name, relation_type)"
+                    " VALUES(?,?, 'owns')", (role_cid, ont_name))
+                owns_count += 1
+    conn.commit()
+    print(f"  挂载 {owns_count} 条 owns 关系（角色 → 本体段）")
 
     print("\n=== 3. 数字人组织关系入库（type=组织架构）===")
     name_to_cand = {}

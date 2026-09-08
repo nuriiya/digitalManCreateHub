@@ -69,6 +69,16 @@ const KIND_COLOR: Record<string, string> = {
   其他: 'var(--muted)',
 }
 
+// 关系类型中文标签（边 label 显示用）
+const REL_LABEL: Record<string, string> = {
+  supply: '供给',
+  review: '复核',
+  handoff: '交接',
+  design: '设计',
+  compose: '组装',
+  owns: '拥有',
+}
+
 function CandidateNodeInner({ data }: NodeProps<Node<CandNodeData>>) {
   const { cand, selected, searchDim, seed } = data
   const st = cand.status
@@ -139,7 +149,7 @@ function RelEdgeInner({
             color: dangling ? 'var(--muted)' : 'var(--text)',
           }}
         >
-          {rel}
+          {REL_LABEL[rel] ?? rel}
         </div>
       </EdgeLabelRenderer>
     </>
