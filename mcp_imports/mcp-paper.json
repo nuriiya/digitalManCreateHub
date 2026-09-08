@@ -35,6 +35,30 @@
       }
     },
     {
+      "name": "search_dblp",
+      "description": "在 DBLP 搜索论文（无需代理），type 字段区分期刊/会议，是置信度分级依据",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "max_results": { "type": "integer", "default": 10 }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "search_openalex",
+      "description": "在 OpenAlex 搜索论文（无需代理、无反爬、无需 key），type 字段最可靠，是置信度分级主源",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "max_results": { "type": "integer", "default": 10 }
+        },
+        "required": ["query"]
+      }
+    },
+    {
       "name": "search_scholar",
       "description": "Google Scholar 学术搜索（可能被反爬拦截，兜底用）",
       "input_schema": {

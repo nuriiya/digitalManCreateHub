@@ -29,6 +29,8 @@ def _client() -> httpx.Client:
     kwargs = {"verify": False, "timeout": 30, "follow_redirects": True}
     if PAPER_PROXY:
         kwargs["proxy"] = PAPER_PROXY
+    # 网络抖动重试：Docker Desktop 容器外网间歇 SSL EOF，连接失败自动重试 2 次
+    kwargs["transport"] = httpx.HTTPTransport(retries=2)
     return httpx.Client(**kwargs)
 
 
@@ -84,6 +86,76 @@ def search_semantic_scholar(query: str, max_results: int = 10) -> list[dict]:
             "doi": ext.get("DOI"),
             "url": p.get("url"),
             "pdf_url": pdf.get("url"),
+        })
+    return out
+
+
+@mcp.tool()
+def search_openalex(query: str, max_results: int = 10) -> list[dict]:
+    """在 OpenAlex 搜索论文（无需代理、无反爬、无需 key），type 字段区分类型。
+
+    OpenAlex 完全开放（api.openalex.org），国内可直连，是置信度分级的最稳来源：
+      - article / review → 期刊
+      - conference paper / proceedings → 会议
+      - preprint → 预印本
+      - dissertation / book → 学位论文/书籍
+    """
+    url = "https://api.openalex.org/works"
+    r = _client().get(url, params={"search": query, "per-page": max_results})
+    r.raise_for_status()
+    out = []
+    for w in r.json().get("results", []):
+        authors = [a.get("author", {}).get("display_name", "")
+                   for a in w.get("authorships", [])]
+        loc = w.get("primary_location") or {}
+        source = loc.get("source") or {}
+        out.append({
+            "source": "openalex",
+            "title": w.get("title"),
+            "authors": authors,
+            "venue": source.get("display_name"),
+            "year": w.get("publication_year"),
+            "type": w.get("type"),
+            "doi": w.get("doi"),
+            "citation_count": w.get("cited_by_count"),
+            "url": loc.get("landing_page_url") or w.get("id"),
+        })
+    return out
+
+
+@mcp.tool()
+def search_dblp(query: str, max_results: int = 10) -> list[dict]:
+    """在 DBLP 搜索论文（无需代理，国内可直连），返回标题/作者/会议期刊/年份/类型。
+
+    DBLP 的 type 字段可区分期刊/会议（置信度分级的关键依据）：
+      - Journal Articles → 期刊
+      - Conference and Workshop Papers → 会议
+      - Informal and Other Publications → 预印本/技术报告
+      - Books and Theses → 学位论文/书籍
+    """
+    url = "https://dblp.org/search/publ/api"
+    r = _client().get(url, params={"q": query, "format": "json", "h": max_results})
+    r.raise_for_status()
+    hits = r.json().get("result", {}).get("hits", {}).get("hit", [])
+    if isinstance(hits, dict):  # 单条结果时 DBLP 返回 dict 而非 list
+        hits = [hits]
+    out = []
+    for h in hits:
+        info = h.get("info", {}) or {}
+        authors = info.get("authors", {}).get("author", [])
+        if isinstance(authors, str):
+            authors = [authors]
+        clean_authors = [a.get("text", a) if isinstance(a, dict) else a
+                         for a in authors]
+        out.append({
+            "source": "dblp",
+            "title": info.get("title"),
+            "authors": clean_authors,
+            "venue": info.get("venue"),
+            "year": info.get("year"),
+            "type": info.get("type"),
+            "doi": info.get("doi"),
+            "url": info.get("url"),
         })
     return out
 

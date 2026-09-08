@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research
 
 
 def _sha256(text: str) -> str:
@@ -181,6 +181,36 @@ def mcp_call(server_id: int, body: McpCallBody):
     """直接调用 MCP 工具（stdio 协议），用于前端调试 + 端到端验证。"""
     return mcp.call_tool(db.get_conn(), server_id, body.tool_name,
                          body.arguments or {})
+
+
+class ResearchSearchBody(BaseModel):
+    query: str
+    mcp_server_id: int = 0
+    max_results: int = 5
+    ingest: bool = True
+
+
+@app.post("/api/research/search")
+def research_search(body: ResearchSearchBody):
+    """调研链路：多源搜索 → 置信度聚合排序 → 入库 RAG。"""
+    conn = db.get_conn()
+    query = (body.query or "").strip()
+    if not query:
+        return JSONResponse({"detail": "query 必填"}, status_code=400)
+    mcp_id = body.mcp_server_id
+    if not mcp_id:
+        row = conn.execute(
+            "SELECT id FROM mcp_servers WHERE approval_status='approved'"
+            " ORDER BY id LIMIT 1").fetchone()
+        if not row:
+            return JSONResponse({"detail": "无已审批的 MCP，请先审批"},
+                                status_code=400)
+        mcp_id = row["id"]
+    result = research.search_and_aggregate(conn, query, mcp_id, body.max_results)
+    if body.ingest and result.get("results"):
+        result["ingested"] = research.ingest_results(conn, query,
+                                                     result["results"])
+    return result
 
 
 # ---------------- settings ----------------
