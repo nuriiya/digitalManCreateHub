@@ -89,6 +89,14 @@ def start_server(conn, mcp_id) -> tuple[bool, str]:
         return False, "no image configured"
     name = _container_name(mcp_id)
     client = _client()
+    # 确保镜像存在：本地有就用；有 build 配置则自动构建（基础镜像走国内源）；
+    # 否则国内源前缀拉取。绝不让 docker-py 自动 pull 走失效的 daocloud。
+    ok, msg = _ensure_image(client, row["image"], row.get("build"))
+    if not ok:
+        conn.execute("UPDATE mcp_servers SET status='error' WHERE id=?",
+                     (mcp_id,))
+        conn.commit()
+        return False, msg
     # drop any stale container
     try:
         client.containers.get(name).remove(force=True)
@@ -98,10 +106,13 @@ def start_server(conn, mcp_id) -> tuple[bool, str]:
     if row["port"]:
         ports[f"{row['port']}/tcp"] = row["port"]
     command = shlex.split(row["command"]) if row["command"] else None
+    # stdio 传输的 MCP server 需要保持 stdin 打开（否则 mcp.run() 检测到 stdin
+    # 关闭立即退出）。http 传输则无需 stdin。
+    stdin_open = (row["transport"] or "http") == "stdio"
     try:
         client.containers.run(
             row["image"], command=command, name=name,
-            detach=True, ports=ports)
+            detach=True, ports=ports, stdin_open=stdin_open)
     except Exception as e:  # noqa: BLE001
         conn.execute("UPDATE mcp_servers SET status='error' WHERE id=?",
                      (mcp_id,))
@@ -256,3 +267,84 @@ def approve_server(conn, mcp_id: int, approve: bool) -> tuple[bool, str]:
                  (status, mcp_id))
     conn.commit()
     return True, status
+
+
+# ---------------- 镜像准备（避免 docker-py 自动 pull 走失效的 daocloud） ----------------
+# Docker Desktop 的 daemon registry-mirrors 指向已失效的 daocloud，任何镜像拉取都会
+# EOF。故 start_server 前显式准备镜像：本地有→用；有 build→自动构建（基础镜像走国内
+# 源前缀预拉）；否则国内源前缀拉取。绝不依赖 docker-py 的隐式 auto-pull。
+
+# 国内镜像源（与 start1.ps1 / .env 默认源一致，dockerproxy.net 对大镜像更稳）
+CN_MIRRORS = ("dockerproxy.net", "docker.1ms.run", "docker.xuanyuan.me")
+
+
+def _library_image(image: str) -> str:
+    """官方镜像 → library 命名空间名（python:3.12 → library/python:3.12）。"""
+    name = image
+    for prefix in ("docker.io/", "registry-1.docker.io/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    if name.startswith("library/"):
+        return name
+    return f"library/{name}"
+
+
+def _pull_official(client, image: str) -> tuple[bool, str]:
+    """用国内源拉取官方镜像（library 命名空间）并 tag 回标准名。"""
+    lib = _library_image(image)
+    for prefix in CN_MIRRORS:
+        try:
+            client.images.pull(f"{prefix}/{lib}")
+            client.images.get(f"{prefix}/{lib}").tag(image)
+            return True, f"via {prefix}"
+        except Exception:  # noqa: BLE001
+            continue
+    return False, f"所有国内源拉取 {image} 失败"
+
+
+def _prepull_base_images(client, dockerfile_path: Path) -> list[str]:
+    """解析 Dockerfile 的 FROM 行，用国内源预拉官方基础镜像（避免 build 时走 daocloud）。"""
+    pulled = []
+    if not dockerfile_path.exists():
+        return pulled
+    for line in dockerfile_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s.upper().startswith("FROM "):
+            img = s[5:].strip().split()[0]
+            ok, msg = _pull_official(client, img)
+            pulled.append(f"{img} ({'ok' if ok else msg})")
+    return pulled
+
+
+def _ensure_image(client, image: str, build: dict | None) -> tuple[bool, str]:
+    """确保镜像存在：本地有→用；有 build→自动构建；否则国内源拉取。"""
+    import docker
+    try:
+        client.images.get(image)
+        return True, ""
+    except docker.errors.ImageNotFound:
+        pass
+    # 有 build 配置 → 自动构建（context 相对项目根，容器内即 _ROOT 下）
+    if build and (build.get("context") or "").strip():
+        context = _ROOT / build["context"]
+        dockerfile = build.get("dockerfile") or "Dockerfile"
+        df_path = context / dockerfile
+        if not df_path.exists():
+            return False, f"构建上下文缺失：{df_path}（sandbox 目录需挂载进容器）"
+        _prepull_base_images(client, df_path)
+        try:
+            client.images.build(path=str(context), dockerfile=dockerfile,
+                                tag=image, rm=True)
+            return True, f"built from {build['context']}"
+        except Exception as e:  # noqa: BLE001
+            return False, f"build 失败：{str(e)[:200]}"
+    # 无 build → 国内源前缀拉取
+    for prefix in CN_MIRRORS:
+        try:
+            client.images.pull(f"{prefix}/{image}")
+            client.images.get(f"{prefix}/{image}").tag(image)
+            return True, f"pulled via {prefix}"
+        except Exception:  # noqa: BLE001
+            continue
+    return False, f"镜像 {image} 不存在（无 build 配置，且国内源拉取失败）"

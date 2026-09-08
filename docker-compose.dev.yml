@@ -12,6 +12,8 @@ services:
       - ./exports:/app/exports
       # MCP 定义导入目录：模型输出的 JSON 放这里，后端自动扫描导入
       - ./mcp_imports:/app/mcp_imports
+      # MCP 沙盒构建上下文：start_server 自动 build MCP 镜像时读取
+      - ./sandbox:/app/sandbox
     environment:
       ENV: dev
       EMBEDDING_BASE_URL: http://host.docker.internal:11434

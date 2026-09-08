@@ -35,6 +35,9 @@ RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r backend/requirements.txt
 COPY backend/ ./backend/
 COPY --from=frontend /app/client/dist ./client/dist
 
+# MCP 沙盒构建上下文（start_server 自动 build MCP 镜像时用，见 mcp.py _ensure_image）
+COPY sandbox/ ./sandbox/
+
 # Entrypoint (waits for PG, then execs the command).
 COPY scripts/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
