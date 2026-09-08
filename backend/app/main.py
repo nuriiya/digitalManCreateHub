@@ -171,6 +171,18 @@ def mcp_approve(server_id: int, body: McpApproveBody):
     return {"ok": True, "approval_status": msg}
 
 
+class McpCallBody(BaseModel):
+    tool_name: str
+    arguments: dict = {}
+
+
+@app.post("/api/mcp/servers/{server_id}/call")
+def mcp_call(server_id: int, body: McpCallBody):
+    """直接调用 MCP 工具（stdio 协议），用于前端调试 + 端到端验证。"""
+    return mcp.call_tool(db.get_conn(), server_id, body.tool_name,
+                         body.arguments or {})
+
+
 # ---------------- settings ----------------
 
 class LlmPatch(BaseModel):

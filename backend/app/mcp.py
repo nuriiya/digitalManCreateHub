@@ -19,6 +19,8 @@ can call them.
 import json
 import os
 import shlex
+import struct
+import threading
 from pathlib import Path
 
 from . import db
@@ -348,3 +350,132 @@ def _ensure_image(client, image: str, build: dict | None) -> tuple[bool, str]:
         except Exception:  # noqa: BLE001
             continue
     return False, f"镜像 {image} 不存在（无 build 配置，且国内源拉取失败）"
+
+
+# ---------------- MCP stdio 工具调用（execute_mcp 的真正实现） ----------------
+# 通过 docker attach 连容器 stdio，走 MCP JSON-RPC 协议：initialize →
+# notifications/initialized → tools/call。协议实测结论（2026-09-08）：
+#   - 写 stdin：raw bytes（json + "\n"，**不带** multiplexed header）
+#   - 读 stdout/stderr：multiplexed（8 字节 header：>BxxxL，stream 1=stdout 2=stderr）
+#   - 每条消息一行 JSON（newline-delimited），protocolVersion "2024-11-05"
+
+_MCP_LOCK = threading.Lock()  # attach 是共享流，串行化请求
+_MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+def _read_exact(sock, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _read_stdout_line(sock, timeout: int) -> str:
+    """从 multiplexed attach 流读 stdout，凑满一行 JSON（\\n 结尾）。"""
+    sock.settimeout(timeout)
+    buf = b""
+    while b"\n" not in buf:
+        hdr = _read_exact(sock, 8)
+        if len(hdr) < 8:
+            break
+        stream, n = struct.unpack(">BxxxL", hdr)
+        data = _read_exact(sock, n)
+        if stream == 1:  # stdout
+            buf += data
+    return buf.split(b"\n", 1)[0].strip().decode("utf-8", errors="replace")
+
+
+def call_tool(conn, mcp_id: int, tool_name: str, args: dict,
+              timeout: int = 90) -> dict:
+    """调用 MCP stdio 工具：attach → initialize → tools/call → 解析结果。"""
+    import docker
+    row = conn.execute("SELECT * FROM mcp_servers WHERE id=?",
+                       (mcp_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": "MCP server 不存在"}
+    if (row["approval_status"] or "approved") != "approved":
+        return {"ok": False, "error": "MCP 未审批，禁止调用"}
+    if (row["transport"] or "http") != "stdio":
+        return {"ok": False, "error": f"暂只支持 stdio 传输，当前 {row['transport']}"}
+    name = _container_name(mcp_id)
+    client = _client()
+    try:
+        container = client.containers.get(name)
+    except docker.errors.NotFound:
+        return {"ok": False, "error": "MCP 容器不存在，请先启动"}
+    if container.status != "running":
+        return {"ok": False, "error": "MCP 容器未运行，请先启动"}
+
+    with _MCP_LOCK:
+        sock = container.attach_socket(
+            params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
+        try:
+            # 1. initialize
+            init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"protocolVersion": _MCP_PROTOCOL_VERSION,
+                               "capabilities": {},
+                               "clientInfo": {"name": "rag-mvp",
+                                              "version": "0.1.0"}}}
+            sock.sendall((json.dumps(init) + "\n").encode())
+            resp = _read_stdout_line(sock, 30)
+            if not resp:
+                return {"ok": False, "error": "initialize 无响应"}
+            try:
+                init_obj = json.loads(resp)
+            except Exception:  # noqa: BLE001
+                return {"ok": False, "error": f"initialize 响应异常：{resp[:200]}"}
+            if "result" not in init_obj:
+                return {"ok": False, "error": f"initialize 失败：{resp[:200]}"}
+            # 2. initialized 通知
+            sock.sendall((json.dumps({"jsonrpc": "2.0",
+                                      "method": "notifications/initialized"})
+                          + "\n").encode())
+            # 3. tools/call
+            call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": {"name": tool_name, "arguments": args or {}}}
+            sock.sendall((json.dumps(call, ensure_ascii=False) + "\n").encode())
+            resp2 = _read_stdout_line(sock, timeout)
+            if not resp2:
+                return {"ok": False, "error": "tools/call 无响应（超时）"}
+            try:
+                call_obj = json.loads(resp2)
+            except Exception:  # noqa: BLE001
+                return {"ok": False, "error": f"tools/call 响应异常：{resp2[:200]}"}
+            if "error" in call_obj:
+                return {"ok": False,
+                        "error": json.dumps(call_obj["error"],
+                                            ensure_ascii=False)[:500]}
+            result = call_obj.get("result") or {}
+            content = result.get("content") or []
+            # 收集所有 text 块（FastMCP 可能把 list 返回值拆成多个 content 块，
+            # 也可能整段序列化进单个块——两种都要兼容）
+            texts = []
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    texts.append(blk.get("text", ""))
+                elif isinstance(blk, str):
+                    texts.append(blk)
+            if result.get("isError"):
+                return {"ok": False, "error": (texts[0] if texts else "")[:500]}
+            # 逐个解析每个 text 块（工具返回值被 JSON 序列化）
+            items = []
+            for t in texts:
+                try:
+                    items.append(json.loads(t))
+                except Exception:  # noqa: BLE001
+                    items.append(t)
+            if not items:
+                parsed = None
+            elif len(items) == 1:
+                parsed = items[0]
+            else:
+                parsed = items
+            return {"ok": True, "result": parsed}
+        finally:
+            try:
+                sock.close()
+            except Exception:  # noqa: BLE001
+                pass

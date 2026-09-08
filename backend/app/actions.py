@@ -235,8 +235,9 @@ def _exec_write_file(conn, identity_id: int, args: dict) -> dict:
 
 
 def execute_mcp(conn, mcp_server_id: int, mcp_tool_name: str, args: dict) -> dict:
-    # MCP 工具执行（stdio server 调用）——首版聚焦 builtin，MCP 绑定留扩展。
-    return {"ok": False, "error": f"MCP 动作执行尚未实现（server #{mcp_server_id}）"}
+    """调用 MCP stdio 工具（attach → initialize → tools/call），见 mcp.call_tool。"""
+    from . import mcp as mcp_mod
+    return mcp_mod.call_tool(conn, int(mcp_server_id), mcp_tool_name, args or {})
 
 
 # ---------------- nomination (LLM nominates, code adjudicates) ----------------
