@@ -1012,9 +1012,11 @@ def graph(conn, include_status: list[str] | None = None) -> dict:
     # 2) target-name -> entity id in ONE query (was: one per relation).
     #    lowest id wins on duplicate names (deterministic; old code picked an
     #    arbitrary row via fetchone()).
+    #    注意：不再按 kind='entity' 过滤——本体 type 已细分（组织架构/角色/规则/…），
+    #    数字人角色实体、组织架构实体都要能作为关系的 target 被连起来。
     name_to_id: dict[str, int] = {}
     for r in conn.execute(
-            "SELECT id, name FROM candidates WHERE kind='entity' ORDER BY id"
+            "SELECT id, name FROM candidates ORDER BY id"
     ).fetchall():
         name_to_id.setdefault(r["name"], r["id"])
 
