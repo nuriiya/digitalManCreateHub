@@ -18,6 +18,7 @@ can call them.
 """
 import json
 import os
+import re
 import shlex
 import struct
 import threading
@@ -269,6 +270,70 @@ def approve_server(conn, mcp_id: int, approve: bool) -> tuple[bool, str]:
                  (status, mcp_id))
     conn.commit()
     return True, status
+
+
+def _extract_json(text: str):
+    """从 LLM 输出提取 JSON 对象（容错 markdown 代码块 + 前后杂文）。"""
+    text = (text or "").strip()
+    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
+    """命令：根据自然语言需求生成一个 MCP 定义，写 mcp_imports 并导入。
+
+    这是「在对话中让 pipeline 跑起来生成 MCP」的端到端命令：LLM 分析需求 →
+    生成 MCP 定义 JSON → 确定性校验（validate_mcp_def）→ 写 mcp_imports/ →
+    扫描导入（approval_status=pending，用户审批后即可启动）。
+    """
+    from . import llm
+    request = (request or "").strip()
+    if not request:
+        return {"ok": False, "error": "需求描述不能为空"}
+    prompt = (
+        "你是 MCP（Model Context Protocol）服务器设计器。根据下面的需求，生成一个"
+        " MCP 服务器定义 JSON。\n\n"
+        f"需求：{request}\n\n"
+        "严格按以下 schema 输出 JSON（不要任何解释、不要 markdown 代码块标记）：\n"
+        '{"name": "唯一英文短名", "description": "中文描述", "transport": "stdio",'
+        ' "image": "docker镜像名", "build": {"context": "构建目录", "dockerfile": "Dockerfile"},'
+        ' "tools": [{"name": "工具名", "description": "用途", "input_schema": {...}}]}\n\n'
+        "要求：name 用英文小写连字符；transport 用 stdio；tools 至少 1 个，"
+        "每个 tool 的 input_schema 是 JSON Schema 对象。只输出 JSON。"
+    )
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        text = llm.chat(messages, temperature=0.2) if provider == "llm" \
+            else llm.chat2(messages)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"LLM 生成失败：{e}"}
+    data = _extract_json(text)
+    if data is None:
+        return {"ok": False, "error": "未能从 LLM 输出解析出 JSON",
+                "raw": text[:500]}
+    ok, err = validate_mcp_def(data)
+    if not ok:
+        return {"ok": False, "error": f"定义校验失败：{err}",
+                "raw": json.dumps(data, ensure_ascii=False)[:500]}
+    name = data["name"]
+    fname = f"{name}.json"
+    IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = IMPORT_DIR / fname
+    dest.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    ok2, msg, sid = import_from_json(conn, data, source_path=str(dest))
+    return {"ok": ok2, "name": name, "server_id": sid, "msg": msg,
+            "approval_status": "pending", "file": fname,
+            "tools": [t.get("name") for t in (data.get("tools") or [])]}
 
 
 # ---------------- 镜像准备（避免 docker-py 自动 pull 走失效的 daocloud） ----------------

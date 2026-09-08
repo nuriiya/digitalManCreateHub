@@ -183,6 +183,18 @@ def mcp_call(server_id: int, body: McpCallBody):
                          body.arguments or {})
 
 
+class McpGenerateBody(BaseModel):
+    request: str
+    provider: str = "llm"
+
+
+@app.post("/api/mcp/generate")
+def mcp_generate(body: McpGenerateBody):
+    """命令：根据自然语言需求生成一个 MCP（LLM 设计 → 校验 → 导入 pending）。"""
+    return mcp.generate_from_request(db.get_conn(), body.request,
+                                     body.provider)
+
+
 class ResearchSearchBody(BaseModel):
     query: str
     mcp_server_id: int = 0
@@ -1221,6 +1233,24 @@ def persona_chat(body: ChatBody):
     settings.llm_mode == "local", resolve to ("ollama", local_llm.model).
     Backend logic only — explicit provider="llm"/"llm2"/"ollama" wins.
     """
+    # 对话命令：/mcp <需求> 触发「生成 MCP」的端到端 pipeline（LLM 设计 → 校验 →
+    # 写 mcp_imports → 导入 pending）。无需绑定具体数字人。
+    msg = (body.message or "").strip()
+    cmd = msg.split(None, 1)[0].lower() if msg else ""
+    if cmd in ("/mcp", "/创建mcp", "/create-mcp"):
+        req = msg.split(None, 1)[1].strip() if len(msg.split(None, 1)) > 1 else ""
+        if not req:
+            return JSONResponse({"error": "命令格式：/mcp <需求描述>"},
+                                status_code=400)
+        result = mcp.generate_from_request(db.get_conn(), req, "llm")
+        if result.get("ok"):
+            reply = (f"已生成 MCP「{result['name']}」（{len(result.get('tools', []))}"
+                     f" 个工具），已导入待审批。审批后可在 MCP 页启动。\n"
+                     f"工具：{', '.join(result.get('tools', []))}")
+        else:
+            reply = f"生成 MCP 失败：{result.get('error', '未知错误')}"
+        return {"ok": True, "reply": reply, "mcp": result}
+
     prov, omodel = body.provider, body.ollama_model
     if prov in ("llm2", "", None):
         prov, omodel = settings_store.resolve_provider()
