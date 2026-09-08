@@ -28,6 +28,18 @@ function Write-Warn($msg) { Write-Host "[start] $msg" -ForegroundColor Yellow }
 # ---------- 1. Docker CLI (install if missing) ----------
 $docker = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $docker) {
+    # Docker Desktop may be installed but its CLI dir is not on the current
+    # session PATH (the installer writes it to the registry PATH, which a
+    # freshly-opened shell may not have picked up). Probe the fixed install
+    # location FIRST so we never reinstall an already-working Docker Desktop.
+    $ddBin = "C:\Program Files\Docker\Docker\resources\bin"
+    if (Test-Path (Join-Path $ddBin "docker.exe")) {
+        Write-Step "docker found at $ddBin (adding to PATH)..."
+        $env:Path = "$env:Path;$ddBin"
+        $docker = Get-Command docker -ErrorAction SilentlyContinue
+    }
+}
+if (-not $docker) {
     Write-Step "docker not found - installing Docker Desktop (winget)..."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
