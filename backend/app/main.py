@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research
@@ -1333,6 +1333,55 @@ def persona_chat(body: ChatBody):
         return JSONResponse({"error": result.get("error", "chat failed")},
                             status_code=400)
     return result
+
+
+@app.post("/api/chat/stream")
+def chat_stream(body: ChatBody):
+    """SSE 流式对话：路由 → 边生成 token 边推送 → done 收尾（事件格式见
+    chat.stream_answer 的 docstring）。
+
+    与 `/api/chat` 的差异：流式响应让对话页能立刻看到「由 X 回答中…」并逐
+    token 渲染，而不是等 1-30 秒才能看到完整气泡（LLM 思考/生成期间用户
+    视觉死等）。
+
+    不支持 tool_call 循环（流式 + tool交错复杂度过高）；tool-use 数字人仍
+    走 `/api/chat` 一次性端点。
+
+    Provider fallback 与 `/api/chat` 保持一致（"llm2"+空 mode → 解析
+    settings.llm_mode 为 ollama/local）。
+    """
+    msg = (body.message or "").strip()
+    cmd = msg.split(None, 1)[0].lower() if msg else ""
+    if cmd in ("/mcp", "/创建mcp", "/create-mcp"):
+        # /mcp 命令需要结构化最终输出，走一次性端点
+        return persona_chat(body)
+
+    prov, omodel = body.provider, body.ollama_model
+    if prov in ("llm2", "", None):
+        prov, omodel = settings_store.resolve_provider()
+        omodel = omodel or body.ollama_model
+
+    def gen():
+        try:
+            for evt in chat.stream_answer(
+                db.get_conn(), body.identity_id, body.message,
+                use_ontology=body.use_ontology,
+                provider=prov, ollama_model=omodel,
+                use_rag=body.use_rag,
+                session_id=body.session_id,
+            ):
+                # SSE: each data line is JSON, terminated by an empty line.
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except llm.LLMError as e:
+            # LLM 整体不可达（路由/LLM 配置层错误），推到 SSE 流末尾
+            yield f"data: {json.dumps({'event': 'error', 'error': f'模型调用失败：{e}'}, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            yield f"data: {json.dumps({'event': 'error', 'error': f'{type(e).__name__}: {str(e)[:200]}'}, ensure_ascii=False)}\n\n"
+
+    # X-Accel-Buffering=no 反向代理下禁 buffer；Cache-Control 防 CDN 缓存 SSE
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/chat/compare")

@@ -380,6 +380,91 @@ export const sendChat = (
     body: JSON.stringify({ identity_id: identityId, message, ...opts }),
   })
 
+/** 流式对话回调：每个阶段都会按到达顺序触发。详见 chat.stream_answer 文档。
+ * - onSession：后端若自动创建 session（session_id 未传）会触发一次
+ * - onToken：LLM 每生成一个 content delta 触发一次，UI 应实时追加到气泡
+ * - onDone：流正常结束，data 含 reply/messages/context/session_id，可选地
+ *   用 messages 替换前端的临时气泡
+ * - onError：LLM 报错、网络断、HTTP 4xx/5xx 都会触发，UI 应把错误写到气泡里
+ */
+export interface StreamChatCallbacks {
+  onSession?: (session_id: number) => void
+  onToken?: (text: string) => void
+  onDone?: (data: { reply: string; messages: ChatMessage[]; context?: any; session_id: number }) => void
+  onError?: (error: string) => void
+}
+
+export async function streamChat(
+  identityId: number,
+  message: string,
+  opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null; session_id?: number | null } = {},
+  cb: StreamChatCallbacks,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  let res: Response
+  try {
+    res = await fetch('/api/chat/stream', {
+      method: 'POST', headers,
+      body: JSON.stringify({ identity_id: identityId, message, ...opts }),
+    })
+  } catch (e: any) {
+    cb.onError?.(`请求失败：${e?.message || e}`)
+    return
+  }
+  if (res.status === 401) {
+    setToken('')
+    window.dispatchEvent(new CustomEvent('auth:logout'))
+  }
+  if (!res.ok || !res.body) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      msg = data.detail || data.error || msg
+    } catch { /* ignore */ }
+    cb.onError?.(msg)
+    return
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buf = ''
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      // SSE 事件按 `\n\n` 分隔；同一事件可能跨多个 chunk 到达
+      let idx: number
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const raw = buf.slice(0, idx)
+        buf = buf.slice(idx + 2)
+        // 多行 `data:` 聚合（标准 SSE 允许多行）
+        const dataLines = raw.split('\n')
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).trim())
+        if (!dataLines.length) continue
+        const data = dataLines.join('\n')
+        let evt: any
+        try { evt = JSON.parse(data) } catch { continue }
+        if (evt.event === 'session' && typeof evt.session_id === 'number') {
+          cb.onSession?.(evt.session_id)
+        } else if (evt.event === 'token' && typeof evt.text === 'string') {
+          cb.onToken?.(evt.text)
+        } else if (evt.event === 'done') {
+          cb.onDone?.(evt)
+        } else if (evt.event === 'error') {
+          cb.onError?.(evt.error || '未知错误')
+        }
+      }
+    }
+  } catch (e: any) {
+    cb.onError?.(`流中断：${e?.message || e}`)
+  }
+}
+
 export const generateMcp = (request: string) =>
   api<{ ok: boolean; name?: string; server_id?: number; tools?: string[]; approval_status?: string; error?: string }>('/api/mcp/generate', {
     method: 'POST', body: JSON.stringify({ request }),

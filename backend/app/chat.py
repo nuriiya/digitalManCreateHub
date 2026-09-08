@@ -1083,6 +1083,183 @@ def answer(conn, identity_id: int, message: str, use_ontology: bool = True,
     }
 
 
+def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = True,
+                  provider: str = "llm2", ollama_model: str | None = None,
+                  use_rag: bool = False, session_id: int | None = None):
+    """Generator yielding JSON-able SSE events for the chat page stream
+    endpoint. Reuses `_generate`'s retrieval + assembly logic, but dispatches
+    the LLM call to `llm.stream_pick` so each `content` delta is yielded as
+    soon as it lands.
+
+    Event shape (each `data:` line is one JSON object):
+      - {"event": "session", "session_id": int}             # when auto-created
+      - {"event": "token",   "text": str}                   # per content delta
+      - {"event": "done",    "reply": str, "session_id": int,
+                            "messages": [...], "context": {...}}
+      - {"event": "error",   "error": str}                  # recoverable failure
+
+    Scope: stream path DOES NOT run the tool-call loop (action 调用循环保持非
+    流式，避免半路 tool_call + token 交错；如数字人需要 tool_call，会话路径
+    走 `/api/chat` 一次性端点）。Tool_use 数字人极少出现在对话里。
+    """
+    ident = _identity(conn, identity_id)
+    if not ident:
+        yield {"event": "error", "error": f"数字人 #{identity_id} 不存在"}
+        return
+    message = (message or "").strip()
+    if not message:
+        yield {"event": "error", "error": "消息不能为空"}
+        return
+    if provider not in PROVIDERS:
+        yield {"event": "error", "error": f"未知模型通道 {provider}"}
+        return
+    if provider == "ollama" and not ollama_model:
+        ollama_model = DEFAULT_OLLAMA_MODEL
+
+    created_session = False
+    if session_id is None:
+        sess = create_session(conn, identity_id, _auto_title(message))
+        if sess is None:
+            yield {"event": "error", "error": f"数字人 #{identity_id} 不存在"}
+            return
+        session_id = sess["id"]
+        created_session = True
+
+    yield {"event": "session", "session_id": session_id}
+
+    model = _provider_model(provider, ollama_model)
+    context_window, model_ctx_len = _context_window(provider, model)
+    budget_tokens = int(context_window * ONTOLOGY_BUDGET_RATIO)
+
+    anchors = _approved_anchors(conn, identity_id)
+    ontology = _persona_ontology(conn, identity_id)
+    relations = _relations(conn, identity_id)
+    history = _history_messages(conn, identity_id, HISTORY_LIMIT, session_id)
+
+    if use_ontology:
+        query_text = _query_text(message, history)
+        # 流式路径不走 #106 概念抽取兜底（兜底会让首 token 延迟 1-3 秒，反而
+        # 破坏流式体感；stream 用户体验优先=立刻看到路由到的数字人在「说话」）。
+        retrieved = _retrieve_context(anchors, ontology, relations, query_text,
+                                      budget_tokens, extract_concepts=None)
+        injected_ont = retrieved["ontology"]
+        injected_rel = retrieved["relations"]
+        retrieval_stats = retrieved["stats"]
+    else:
+        injected_ont, injected_rel = [], []
+        retrieval_stats = {
+            "total_ontology": len(ontology),
+            "total_relations": len(relations),
+            "query_hits": 0, "fallback": False, "expanded": 0,
+            "depth_reached": 0,
+            "llm_fallback": {"used": False, "concepts": [], "hits": 0},
+            "budget_total": budget_tokens, "budget_used": 0, "truncated": False,
+        }
+
+    rag_info = {"used": False, "hits": 0, "error": None}
+    rag_texts: list[str] = []
+    if use_rag:
+        got = _rag_snippets(conn, message)
+        rag_texts = got["texts"]
+        rag_info = {"used": got["used"], "hits": got["hits"],
+                    "error": got["error"]}
+
+    ctx = {
+        "identity": ident,
+        "anchors": anchors,
+        "ontology": injected_ont,
+        "relations": injected_rel,
+        "rag": rag_texts,
+    }
+    system = _system_prompt(ctx, use_ontology=use_ontology)
+    from . import actions as actions_mod
+    approved_acts = actions_mod.approved_actions(conn, identity_id)
+    if approved_acts:
+        system += _actions_block(approved_acts)
+
+    messages = [{"role": "system", "content": system}] + history + [
+        {"role": "user", "content": message}]
+
+    usage: dict = {}
+    parts: list[str] = []
+    from . import llm as llm_mod
+    try:
+        for tok in llm_mod.stream_pick(provider, messages, ollama_model,
+                                       usage_out=usage):
+            parts.append(tok)
+            yield {"event": "token", "text": tok}
+    except llm_mod.LLMError as e:
+        # 失败也持久化 user 消息（不让对话组丢失提问）
+        try:
+            _save(conn, identity_id, "user", message, session_id)
+        except Exception:
+            pass
+        yield {"event": "error", "error": f"模型调用失败：{e}"}
+        return
+    except Exception as e:  # noqa: BLE001
+        yield {"event": "error", "error": f"{type(e).__name__}: {str(e)[:200]}"}
+        return
+
+    reply = "".join(parts)
+    _save(conn, identity_id, "user", message, session_id)
+    _save(conn, identity_id, "assistant", reply, session_id)
+
+    prompt_tokens = usage.get("prompt_tokens")
+    estimate = not isinstance(prompt_tokens, int)
+    if estimate:
+        prompt_tokens = _estimate_tokens(
+            "".join(m.get("content") or "" for m in messages))
+    sent_chars = sum(len(m.get("content") or "") for m in messages)
+    percent = round(prompt_tokens * 100.0 / context_window, 2) if context_window else 0.0
+
+    yield {
+        "event": "done",
+        "reply": reply,
+        "session_id": session_id,
+        "messages": list_messages(conn, identity_id, session_id),
+        "context": {
+            "provider": provider,
+            "model": model,
+            "use_ontology": use_ontology,
+            "use_rag": use_rag,
+            "rag": rag_info,
+            "tool_calls": [],
+            "actions_available": [a["name"] for a in approved_acts],
+            "anchors": [{"name": a["name"],
+                         "definition": a.get("definition") or ""}
+                        for a in anchors],
+            "ontology": [{"name": o["name"],
+                          "definition": o.get("definition") or ""}
+                         for o in injected_ont],
+            "relations": [{"source": r["source_name"],
+                           "type": r["relation_type"],
+                           "target": r["target_name"]}
+                          for r in injected_rel],
+            "counts": {
+                "anchors": len(anchors),
+                "ontology": len(ontology),
+                "relations": len(relations),
+            },
+            "injected_ontology": len(injected_ont),
+            "injected_relations": len(injected_rel),
+            "retrieval": retrieval_stats,
+            "truncated": retrieval_stats.get("truncated", False),
+            "sent": messages,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": usage.get("completion_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "estimate": estimate,
+                "sent_chars": sent_chars,
+                "context_window": context_window,
+                "model_context_length": model_ctx_len,
+                "percent": percent,
+            },
+            "has_user_prompt": bool((ident.get("prompt") or "").strip()),
+        },
+    }
+
+
 def compare(conn, identity_id: int, message: str,
             provider: str = "ollama", ollama_model: str | None = None,
             left: dict | None = None, right: dict | None = None) -> dict:

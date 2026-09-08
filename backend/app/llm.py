@@ -316,6 +316,98 @@ def _call_llm(s: dict, messages: list[dict], temperature: float,
     return reply
 
 
+# ---------------- streaming generators (chat page 流式 token 输出) ----------------
+
+def _iter_openai(s: dict, messages: list[dict], temperature: float,
+                 usage_out: dict | None = None,
+                 extra_body: dict | None = None):
+    """Generator yielding `content` deltas from a streaming OpenAI-compatible
+    chat completion.
+
+    The wrapper layer (`iter_chat` / `iter_chat_persona` / `iter_chat_ollama`)
+    assembles the right channel config. The two-tier timeout (idle / hard) is
+    enforced by the caller if needed (see `_call_llm_with_usage` for the
+    non-streaming counterpart).
+    """
+    if netutil.is_local_url(s["base_url"]):
+        import httpx
+        kwargs_client = {"http_client": httpx.Client(trust_env=False)}
+    else:
+        kwargs_client = {}
+    from openai import OpenAI
+    client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
+                    timeout=float(s.get("timeout", 90)), max_retries=0,
+                    **kwargs_client)
+    kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
+                  stream=True, stream_options={"include_usage": True})
+    extra = dict(extra_body or {})
+    keep_alive = s.get("keep_alive")
+    if keep_alive is not None:
+        extra["keep_alive"] = keep_alive
+    if extra:
+        kwargs["extra_body"] = extra
+    resp = client.chat.completions.create(**kwargs)
+    for chunk in resp:
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:  # usage-only sentinel chunk (include_usage=True)
+            if usage_out is not None:
+                usage_out.update({
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                })
+            continue
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            yield delta.content
+
+
+def iter_chat(messages: list[dict], temperature: float = 0.5,
+              usage_out: dict | None = None):
+    """Streaming chat on the generator channel (llm). Yields content deltas."""
+    s = settings_store.load_settings()["llm"]
+    yield from _iter_openai(s, messages, temperature, usage_out=usage_out)
+
+
+def iter_chat_persona(messages: list[dict], temperature: float = 0.5,
+                      usage_out: dict | None = None):
+    """Streaming chat on the persona responder channel (llm2 = GLM 5.2).
+    Thinking stays ON (chat channel keeps GLM's long-context strength)."""
+    s = settings_store.load_settings()["llm2"]
+    yield from _iter_openai(s, messages, temperature, usage_out=usage_out)
+
+
+def iter_chat_ollama(messages: list[dict], temperature: float = 0.5,
+                     model: str | None = None,
+                     usage_out: dict | None = None):
+    """Streaming chat on the local Ollama 7B baseline."""
+    s = settings_store.load_settings()["embedding"]
+    base = (s.get("base_url") or "http://localhost:11434").rstrip("/")
+    ollama = {
+        "base_url": base + "/v1",
+        "api_key": "ollama",
+        "model": model or "qwen2.5:7b-cpu",
+        "timeout": 300,
+        "hard_timeout": 1800,
+        "keep_alive": "10m",
+    }
+    yield from _iter_openai(ollama, messages, temperature,
+                            usage_out=usage_out)
+
+
+def stream_pick(provider: str, messages: list[dict], ollama_model: str | None,
+                usage_out: dict | None = None):
+    """Pick the right iter_* generator by channel. Echoes `_dispatch`."""
+    if provider == "ollama":
+        return iter_chat_ollama(messages, temperature=0.5, model=ollama_model,
+                                usage_out=usage_out)
+    if provider == "llm":
+        return iter_chat(messages, temperature=0.5, usage_out=usage_out)
+    return iter_chat_persona(messages, temperature=0.5, usage_out=usage_out)
+
+
 def _is_ratelimited(e: Exception) -> bool:
     """429 detection across OpenAI SDK error shapes (status_code attr, class
     name, or message text) - the provider throttles us transiently."""

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
-  getIdentities, getChatMessages, sendChat, routeChat, getChatSessions,
+  getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, generateMcp, generatePipeline,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
@@ -158,31 +158,104 @@ export default function ConversationPage({ refreshKey }: Props) {
       }
       return
     }
-    setSending(true)
+    // 普通对话：路由 → 流式生成。每一步都在气泡里可见，不再"发送后黑屏"。
+    // 临时 id 用负数避免与后端真实 id 冲突；最终用后端全量 messages 替换。
+    const tempBase = -Date.now()
+    const userMsg: ChatMessage = {
+      id: tempBase,
+      identity_id: 0,
+      role: 'user',
+      content: text,
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    const assistantId = tempBase - 1
+    const assistantMsg: ChatMessage = {
+      id: assistantId,
+      identity_id: 0,
+      role: 'assistant',
+      content: '判断路由中…',
+      identity_name: '系统',
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    setMessages((m) => [...m, userMsg, assistantMsg])
     setInput('')
+    setSending(true)
+    const updateAssistant = (patch: Partial<ChatMessage>) =>
+      setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, ...patch } : x)))
+    let streamStarted = false
+    let streamFinished = false
     try {
-      // 1. 自动路由：判断交给哪个数字人
+      // 阶段 A：路由（确定性 0 LLM）
       const r = await routeChat(text)
-      const route = r.route
+      const route: ChatRoute | null = r.route
       if (!route) {
-        toast('无法自动确定由哪个数字人回答，请换个更明确的说法', 'err')
-        setInput(text)
+        updateAssistant({
+          content: '无法自动确定由哪个数字人回答。请换个更明确的说法（包含具体领域关键词）。',
+          identity_name: '提示',
+        })
+        toast('路由失败', 'err')
         return
       }
-      // 2. 交给路由到的数字人回答
-      const reply = await sendChat(route.identity_id, text, { session_id: sessionId })
-      setMessages(reply.messages ?? [])
-      if (reply.session_id != null && reply.session_id !== sessionId) {
-        setSessionId(reply.session_id)
-      }
-      // 刷新全局会话列表（后端为路由到的数字人建了 session）
-      await refreshSessions()
+      updateAssistant({
+        identity_id: route.identity_id,
+        identity_name: `${route.identity_name} 正在组织语言…`,
+        content: '',
+      })
+
+      // 阶段 B：流式生成（边收 token 边追加到气泡）
+      let accumulated = ''
+      await streamChat(
+        route.identity_id,
+        text,
+        { session_id: sessionId },
+        {
+          onSession: (sid) => {
+            if (sid !== sessionId) setSessionId(sid)
+          },
+          onToken: (tok) => {
+            if (!streamStarted) streamStarted = true
+            accumulated += tok
+            updateAssistant({
+              identity_name: route.identity_name,
+              content: accumulated,
+            })
+          },
+          onDone: (data) => {
+            streamFinished = true
+            // 用后端持久化的全量消息替换掉临时 user + assistant 气泡
+            // （保留下方的 created_at / identity_name 不变）
+            const finalMsgs = data.messages ?? []
+            if (finalMsgs.length) {
+              setMessages(finalMsgs)
+            } else {
+              // 兜底：保留临时气泡 + 显示真实回复
+              updateAssistant({
+                identity_name: route.identity_name,
+                content: data.reply || accumulated,
+              })
+            }
+            refreshSessions()
+          },
+          onError: (err) => {
+            updateAssistant({
+              identity_name: '错误',
+              content: `生成失败：${err}${accumulated ? '\n\n（已接收的片段）\n' + accumulated : ''}`,
+            })
+            toast(`生成失败：${err}`, 'err')
+          },
+        },
+      )
     } catch (e: any) {
-      toast(e.message, 'err')
-      setInput(text)
+      updateAssistant({
+        identity_name: '错误',
+        content: `请求失败：${e?.message || e}`,
+      })
+      toast(e?.message || String(e), 'err')
     } finally {
       setSending(false)
     }
+    // 静态分析提示：streamStarted 留作后续扩展（如显示打字指示器），当前未使用
+    void streamFinished
   }
 
   const newSession = () => {
