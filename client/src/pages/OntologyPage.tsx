@@ -59,6 +59,14 @@ const KIND_COLOR: Record<string, string> = {
   Object: 'var(--accent)',
   Action: 'var(--purple)',
   Function: 'var(--green)',
+  组织架构: 'var(--purple)',
+  角色: 'var(--accent)',
+  规则: 'var(--orange)',
+  系统: 'var(--green)',
+  流程: 'var(--accent)',
+  概念: 'var(--accent)',
+  对象: 'var(--accent)',
+  其他: 'var(--muted)',
 }
 
 function CandidateNodeInner({ data }: NodeProps<Node<CandNodeData>>) {

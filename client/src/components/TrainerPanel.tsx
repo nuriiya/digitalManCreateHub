@@ -200,7 +200,7 @@ export default function TrainerPanel({ personas }: { personas: Identity[] }) {
         <div className="grid cols3">
           <label className="field"><span>类型</span>
             <select value={seed.kind} onChange={(e) => setSeed({ ...seed, kind: e.target.value })}>
-              {['规则', '概念', '流程', '对象', '角色', '系统', '其他'].map((k) => <option key={k} value={k}>{k}</option>)}
+              {['组织架构', '角色', '规则', '系统', '流程', '概念', '对象', '其他'].map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
           </label>
           <label className="field"><span>本体名</span>

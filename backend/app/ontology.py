@@ -16,7 +16,19 @@ import re
 
 from . import db, jobs, llm
 
-ENTITY_TYPES = {"概念", "角色", "系统", "流程", "规则", "对象", "其他"}
+# 本体 type 闭集 + 优先级（顺序即优先级：靠前 = 优先级高）。
+# 「组织架构」= 数字人与数字人之间的关系（谁依赖谁、谁向谁交接）——它是整个
+# 体系的骨架，故排最高；「角色」= 数字人身份；「规则」= 铁律/安全边界；
+# 其余是知识型本体。检索注入同分时按此优先级 tie-break（见 chat._retrieve_context）。
+ENTITY_TYPES = ("组织架构", "角色", "规则", "系统", "流程", "概念", "对象", "其他")
+
+# type 优先级映射（数字越小优先级越高；缺省回落到最末档）
+ENTITY_TYPE_PRIORITY = {t: i for i, t in enumerate(ENTITY_TYPES)}
+
+
+def entity_type_priority(etype: str) -> int:
+    """本体 type 的优先级（越小越优先；未知 type 落到最末档）。"""
+    return ENTITY_TYPE_PRIORITY.get(etype, len(ENTITY_TYPES))
 # Domain tags: an orthogonal dimension to `kind`. CLOSED preset set — tags
 # must come from this fixed taxonomy (rules / law / domain knowledge / term /
 # metric / example) so the ontology stays a stable classification, not a pile

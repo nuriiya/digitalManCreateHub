@@ -675,7 +675,11 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
     remaining = max(0, budget_tokens - anchor_cost)
 
     scored = _score_ontology(query_text, ontology)
-    scored.sort(key=lambda x: -x[1])
+    # 排序：先按字面匹配分 desc，同分时按 type 优先级（组织架构>角色>规则>…）
+    # tie-break，保证数字人关系/身份骨架优先于普通知识注入。
+    from .ontology import entity_type_priority
+    scored.sort(key=lambda x: (-x[1], entity_type_priority(
+        ontology[x[0]].get("kind") or ontology[x[0]].get("type") or "其他")))
     hit_names = [ontology[i]["name"] for i, _ in scored]
     fallback = not hit_names
 

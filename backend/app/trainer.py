@@ -22,8 +22,8 @@ from . import db, capability, identity
 
 TRAINER_NAME = "Pipeline 训练师"
 
-# 本体 kind 闭集（与前端 seed.kind 下拉一致）
-ONTOLOGY_KINDS = ("规则", "概念", "流程", "对象", "角色", "系统", "其他")
+# 本体 kind 闭集（与 ontology.ENTITY_TYPES 优先级一致，含「组织架构」）
+from .ontology import ENTITY_TYPES as ONTOLOGY_KINDS
 
 # 训练任务进度（内存，单进程够用）。job_id -> 进度 dict。
 _JOBS: dict = {}
