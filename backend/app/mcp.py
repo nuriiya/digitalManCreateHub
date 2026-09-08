@@ -363,19 +363,44 @@ _MCP_LOCK = threading.Lock()  # attach 是共享流，串行化请求
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
-def _read_exact(sock, n: int) -> bytes:
+# attach_socket 的返回类型随 docker-py 连接方式而异：Windows named pipe 返回
+# raw socket（sendall/recv）；unix socket / TCP（容器内）返回只读 socket.SocketIO
+# （HTTP 响应体，无 sendall/recv），其 _sock 属性才是双向 raw socket。解包统一。
+def _unwrap_sock(sock):
+    if not hasattr(sock, "sendall"):
+        raw = getattr(sock, "_sock", None)
+        if raw is not None and hasattr(raw, "sendall"):
+            return raw
+    return sock
+
+
+def _sock_write(sock, data: bytes):
+    _unwrap_sock(sock).sendall(data)
+
+
+def _sock_read(sock, n: int) -> bytes:
+    """读恰好 n 字节。"""
+    s = _unwrap_sock(sock)
     buf = b""
     while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
+        chunk = s.recv(n - len(buf))
         if not chunk:
             break
         buf += chunk
     return buf
 
 
+def _sock_settimeout(sock, timeout: int):
+    _unwrap_sock(sock).settimeout(timeout)
+
+
+def _read_exact(sock, n: int) -> bytes:
+    return _sock_read(sock, n)
+
+
 def _read_stdout_line(sock, timeout: int) -> str:
     """从 multiplexed attach 流读 stdout，凑满一行 JSON（\\n 结尾）。"""
-    sock.settimeout(timeout)
+    _sock_settimeout(sock, timeout)
     buf = b""
     while b"\n" not in buf:
         hdr = _read_exact(sock, 8)
@@ -419,7 +444,7 @@ def call_tool(conn, mcp_id: int, tool_name: str, args: dict,
                                "capabilities": {},
                                "clientInfo": {"name": "rag-mvp",
                                               "version": "0.1.0"}}}
-            sock.sendall((json.dumps(init) + "\n").encode())
+            _sock_write(sock, (json.dumps(init) + "\n").encode())
             resp = _read_stdout_line(sock, 30)
             if not resp:
                 return {"ok": False, "error": "initialize 无响应"}
@@ -430,13 +455,13 @@ def call_tool(conn, mcp_id: int, tool_name: str, args: dict,
             if "result" not in init_obj:
                 return {"ok": False, "error": f"initialize 失败：{resp[:200]}"}
             # 2. initialized 通知
-            sock.sendall((json.dumps({"jsonrpc": "2.0",
-                                      "method": "notifications/initialized"})
-                          + "\n").encode())
+            _sock_write(sock, (json.dumps({"jsonrpc": "2.0",
+                                           "method": "notifications/initialized"})
+                               + "\n").encode())
             # 3. tools/call
             call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                     "params": {"name": tool_name, "arguments": args or {}}}
-            sock.sendall((json.dumps(call, ensure_ascii=False) + "\n").encode())
+            _sock_write(sock, (json.dumps(call, ensure_ascii=False) + "\n").encode())
             resp2 = _read_stdout_line(sock, timeout)
             if not resp2:
                 return {"ok": False, "error": "tools/call 无响应（超时）"}
