@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup
 
 
 def _sha256(text: str) -> str:
@@ -2022,6 +2022,32 @@ def trainer_job(job_id: str):
     if not p:
         return JSONResponse({"error": "job not found"}, status_code=404)
     return p
+
+
+# ---------------- backup / restore（全量导出导入） ----------------
+
+@app.get("/api/backup/status")
+def backup_status():
+    """导出目录状态（是否存在、已导出哪些表、大小）。"""
+    return backup.export_status()
+
+
+@app.post("/api/backup/export")
+def backup_export():
+    """全量导出：数字人 + 本体 + RAG + pipeline + 能力题/工具 → exports/ 目录。"""
+    result = backup.export_all(db.get_conn())
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error")}, status_code=500)
+    return result
+
+
+@app.post("/api/backup/import")
+def backup_import():
+    """全量导入：从 exports/ 目录恢复（清空重建）。"""
+    result = backup.import_all(db.get_conn())
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error")}, status_code=400)
+    return result
 
 
 # ---------------- static frontend (dist) ----------------
