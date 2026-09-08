@@ -568,3 +568,99 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
     conn.execute("UPDATE pipeline_runs SET status='done' WHERE id=?", (run_id,))
     conn.commit()
     jobs.finish_job(conn, job_id, ok=True)
+
+
+# ---------------- 对话命令：自然语言 → pipeline 设计 → 落库（draft 待审批） ----------------
+def _extract_json(text: str):
+    """从 LLM 输出提取 JSON（容错 markdown 代码块 + 前后杂文）。"""
+    import re
+    text = (text or "").strip()
+    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:
+        return None
+
+
+def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
+    """对话命令：自然语言需求 → LLM 设计 pipeline → 落库为 draft（待用户审批）。"""
+    from . import llm
+    request = (request or "").strip()
+    if not request:
+        return {"ok": False, "error": "需求描述不能为空"}
+    personas = [dict(r) for r in conn.execute(
+        "SELECT id, name, category FROM identities WHERE status='approved' ORDER BY id"
+    ).fetchall()]
+    persona_str = "\n".join(
+        f"  - id={p['id']} name={p['name']} category={p['category']}" for p in personas
+    ) or "（无）"
+    prompt = (
+        "你是 pipeline 编排设计师。根据需求设计一个数字人协作的 pipeline "
+        "（节点 + 关系），输出 JSON 落库待审批。\n\n"
+        f"需求：{request}\n\n"
+        f"可用数字人：\n{persona_str}\n\n"
+        "严格按以下 schema 输出 JSON（不要解释、不要 markdown 代码块）：\n"
+        '{"name":"英文短名","description":"中文描述","tags":["tag1"],'
+        '"nodes":[{"node_key":"step1","persona_id":1,"step_name":"步骤名"}],'
+        '"relations":[{"from_node_key":"step1","to_node_key":"step2",'
+        '"relation_type":"supply"}]}\n\n'
+        "要求：node_key 唯一英文小写连字符；persona_id 必须是上面可用数字人的 id；"
+        f"relation_type ∈ {RELATION_TYPES}；关系形成 DAG 不能成环。"
+    )
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        text = (llm.chat(messages, temperature=0.2) if provider == "llm"
+                else llm.chat2(messages))
+    except Exception as e:
+        return {"ok": False, "error": f"LLM 生成失败：{e}"}
+    data = _extract_json(text)
+    if data is None:
+        return {"ok": False, "error": "未能解析 LLM 输出的 JSON", "raw": text[:500]}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "name 必填"}
+    nodes = data.get("nodes") or []
+    if not isinstance(nodes, list) or not nodes:
+        return {"ok": False, "error": "nodes 不能为空"}
+    persona_ids = {p["id"] for p in personas}
+    for n in nodes:
+        pid = n.get("persona_id")
+        if pid not in persona_ids:
+            return {"ok": False,
+                    "error": f"节点 {n.get('node_key')} 的 persona_id {pid} 不在可用数字人中"}
+    relations = data.get("relations") or []
+    for r in relations:
+        if r.get("relation_type") not in RELATION_TYPES:
+            return {"ok": False,
+                    "error": f"关系 {r} 的 relation_type 越界"}
+    try:
+        pipeline_id = create_pipeline(conn, name, data.get("description", ""),
+                                     data.get("tags") or [])
+    except Exception as e:
+        return {"ok": False, "error": f"创建 pipeline 失败：{e}"}
+    key_to_id: dict[str, int] = {}
+    for n in nodes:
+        nid = add_node(conn, pipeline_id, n["node_key"], n.get("persona_id"),
+                       kind=KIND_NOMINATE, step_name=n.get("step_name", ""))
+        if nid is None:
+            conn.execute("DELETE FROM pipelines WHERE id=?", (pipeline_id,))
+            return {"ok": False, "error": f"创建节点 {n.get('node_key')} 失败"}
+        key_to_id[n["node_key"]] = nid
+    for r in relations:
+        fid = key_to_id.get(r.get("from_node_key"))
+        tid = key_to_id.get(r.get("to_node_key"))
+        if not fid or not tid:
+            continue
+        add_relation(conn, pipeline_id, fid, tid, r["relation_type"])
+    if nodes:
+        update_pipeline(conn, pipeline_id, {
+            "entry_node_id": key_to_id[nodes[0]["node_key"]],
+            "exit_node_id": key_to_id[nodes[-1]["node_key"]],
+        })
+    return {"ok": True, "pipeline_id": pipeline_id, "name": name,
+            "status": STATUS_DRAFT, "nodes": len(nodes), "relations": len(relations)}

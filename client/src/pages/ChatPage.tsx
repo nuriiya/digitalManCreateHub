@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatModels, getChatMessages, sendChat, clearChat, compareChat,
   getChatSessions, deleteChatSession, renameChatSession,
@@ -646,7 +647,7 @@ export default function ChatPage({ refreshKey }: Props) {
                   {g.items.map((m) => (
                     <div key={m.id} className={`chat-msg ${m.role}`}>
                       <span className="chat-msg-time">{timeLabel(m.created_at)}</span>
-                      <span className="chat-msg-body">{m.content}</span>
+                      <div className="chat-msg-body md-body"><ReactMarkdown>{m.content}</ReactMarkdown></div>
                     </div>
                   ))}
                 </div>

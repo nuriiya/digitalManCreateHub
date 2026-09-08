@@ -195,6 +195,18 @@ def mcp_generate(body: McpGenerateBody):
                                      body.provider)
 
 
+class PipelineGenerateBody(BaseModel):
+    request: str
+    provider: str = "llm"
+
+
+@app.post("/api/pipeline/generate")
+def pipeline_generate(body: PipelineGenerateBody):
+    """对话命令：自然语言需求 → LLM 设计 pipeline → 落库为 draft（待审批）。"""
+    return pipeline.generate_from_request(db.get_conn(), body.request,
+                                           body.provider)
+
+
 class ResearchSearchBody(BaseModel):
     query: str
     mcp_server_id: int = 0

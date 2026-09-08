@@ -385,6 +385,11 @@ export const generateMcp = (request: string) =>
     method: 'POST', body: JSON.stringify({ request }),
   })
 
+export const generatePipeline = (request: string) =>
+  api<{ ok: boolean; pipeline_id?: number; name?: string; status?: string; nodes?: number; relations?: number; error?: string }>('/api/pipeline/generate', {
+    method: 'POST', body: JSON.stringify({ request }),
+  })
+
 export interface CompareSide {
   reply: string
   context: ChatContext

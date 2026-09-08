@@ -425,36 +425,38 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           if (!a || !b) return null
           const ax = a.x + a.w; const bx = b.x
           const mx = (ax + bx) / 2; const my = (a.y + b.y) / 2
-          // 关系样式：审核门(review)=红色粗线+菱形门；询问(ask)=蓝色虚线；其余灰实线
+          // 关系样式：审核门(review)=亮红粗线+菱形门；询问(ask)=亮蓝虚线；其余浅灰
           const isGate = r.relation_type === 'review'
           const isAsk = r.relation_type === 'ask'
-          const stroke = isGate ? '#A32D2D' : isAsk ? '#1D5F9E' : '#888780'
-          const sw = isGate ? 2.2 : 1.5
-          const dash = isAsk ? '5,4' : undefined
+          const stroke = isGate ? '#FF6B6B' : isAsk ? '#5DA8FF' : '#A0A0A8'
+          const sw = isGate ? 2.4 : 1.6
+          const dash = isAsk ? '6,4' : undefined
           const label = REL_TYPE_LABEL[r.relation_type] || r.relation_type
           return (
             <g key={r.id}>
               <path d={`M ${ax} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${bx} ${b.y + 30}`} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
               {isGate && (
-                <rect x={mx - 7} y={my - 7} width="14" height="14" transform={`rotate(45 ${mx} ${my})`} fill="#A32D2D" stroke="none" opacity="0.85" />
+                <rect x={mx - 8} y={my - 8} width="16" height="16" transform={`rotate(45 ${mx} ${my})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.5" opacity="0.95" />
               )}
-              <text x={mx} y={my - (isGate ? 12 : 6)} textAnchor="middle" fontSize="11" fill={stroke}>{label}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
+              <rect x={mx - (label.length * 5) - 4} y={my - (isGate ? 14 : 8) - 12} width={label.length * 10 + 8} height="16" rx="3" fill="rgba(20,24,33,0.85)" />
+              <text x={mx} y={my - (isGate ? 14 : 8)} textAnchor="middle" fontSize="11" fontWeight="500" fill={stroke}>{label}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
             </g>
           )
         })}
         {cur.nodes.map((n) => {
           const p = layout[n.id]; if (!p) return null
-          const fill = n.kind === 'deterministic' ? '#E1F5EE' : '#FAEEDA'
-          const stroke = n.kind === 'deterministic' ? '#0F6E56' : '#854F0B'
-          const title = n.kind === 'deterministic' ? '#085041' : '#633806'
+          // 深色主题配色：节点深色背景 + 亮色文字 + 彩色边框（在黑色背景下醒目）
+          const fill = n.kind === 'deterministic' ? '#1e3a4a' : '#2a2540'
+          const stroke = n.kind === 'deterministic' ? '#5DCAA8' : '#9C7CFF'
+          const title = '#F0F0F5'
           const label = n.step_name || personaName(n.persona_id)
           const cx = p.x + p.w / 2
           return (
             <g key={n.id}>
-              <rect x={p.x} y={p.y} width={p.w} height="60" rx="8" fill={fill} stroke={stroke} strokeWidth="0.5" />
-              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="12" fontWeight="500" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
-              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11" fill={title}>{clip(label, 11, p.w - 16)}</text>
-              <text x={cx} y={p.y + 55} textAnchor="middle" fontSize="10" fill="#888780">{KIND_LABEL[n.kind]}</text>
+              <rect x={p.x} y={p.y} width={p.w} height="60" rx="10" fill={fill} stroke={stroke} strokeWidth="1.2" />
+              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="12" fontWeight="600" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
+              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11" fill="#B8B8C5">{clip(label, 11, p.w - 16)}</text>
+              <text x={cx} y={p.y + 55} textAnchor="middle" fontSize="10" fill={stroke}>{KIND_LABEL[n.kind]}</text>
             </g>
           )
         })}

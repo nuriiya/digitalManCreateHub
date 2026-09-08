@@ -297,26 +297,38 @@ def _extract_json(text: str):
 
 
 def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
-    """命令：根据自然语言需求生成一个 MCP 定义，写 mcp_imports 并导入。
+    """命令：根据自然语言需求生成一个完整 MCP 包（按自动写代码 pipeline 6 阶段思考）。
 
-    这是「在对话中让 pipeline 跑起来生成 MCP」的端到端命令：LLM 分析需求 →
-    生成 MCP 定义 JSON → 确定性校验（validate_mcp_def）→ 写 mcp_imports/ →
-    扫描导入（approval_status=pending，用户审批后即可启动）。
+    这是「创建 MCP 调自动写代码 pipeline」的命令：prompt 引导 LLM 按
+    需求分析 → 技术设计 → 代码实现 → 代码审查 → 测试 → 调试 的 pipeline
+    协作思维输出。产出 MCP 定义 JSON + server.py + Dockerfile，分别写入
+    mcp_imports/{name}.json 和 sandbox/{name}/（build context）。
     """
     from . import llm
     request = (request or "").strip()
     if not request:
         return {"ok": False, "error": "需求描述不能为空"}
     prompt = (
-        "你是 MCP（Model Context Protocol）服务器设计器。根据下面的需求，生成一个"
-        " MCP 服务器定义 JSON。\n\n"
-        f"需求：{request}\n\n"
-        "严格按以下 schema 输出 JSON（不要任何解释、不要 markdown 代码块标记）：\n"
-        '{"name": "唯一英文短名", "description": "中文描述", "transport": "stdio",'
-        ' "image": "docker镜像名", "build": {"context": "构建目录", "dockerfile": "Dockerfile"},'
-        ' "tools": [{"name": "工具名", "description": "用途", "input_schema": {...}}]}\n\n'
-        "要求：name 用英文小写连字符；transport 用 stdio；tools 至少 1 个，"
-        "每个 tool 的 input_schema 是 JSON Schema 对象。只输出 JSON。"
+        "你是 MCP 服务器设计专家。请按「自动写代码 pipeline」的 6 个阶段协作思维设计一个完整 MCP：\n"
+        "  1) 需求分析：拆解用户要的能力\n"
+        "  2) 技术设计：选 transport/image/build/tools 列表\n"
+        "  3) 代码实现：写可运行的 server.py（FastMCP，stdio，httpx/requests 调外部 API）\n"
+        "  4) 代码审查：保证 server.py 语法正确、错误处理完善、依赖可装\n"
+        "  5) 测试：设计 input_schema 覆盖正常/边界用例\n"
+        "  6) 调试：写 Dockerfile 选 python:3.12-slim 装 pip 依赖\n\n"
+        f"用户需求：{request}\n\n"
+        "严格按以下 schema 输出 JSON（不要任何解释、不要 markdown 代码块）：\n"
+        '{"name":"唯一英文短名","description":"中文描述","transport":"stdio",'
+        '"image":"mcp/<name>:latest","build":{"context":".","dockerfile":"Dockerfile"},'
+        '"tools":[{"name":"工具名","description":"用途","input_schema":{"type":"object",'
+        '"properties":{...},"required":[...]}}],'
+        '"server_py":"<完整可运行的 Python server.py，含 mcp.server.fastmcp 导入、@mcp.tool 装饰器、'
+        'PAPER_PROXY 环境变量、httpx.Client(verify=False) 调外部 API>",'
+        '"dockerfile":"FROM python:3.12-slim\\nWORKDIR /app\\nCOPY requirements.txt .\\n'
+        'RUN pip install --no-cache-dir -r requirements.txt\\nCOPY server.py .\\nCMD [\"python\",\"server.py\"]"}\n\n'
+        "要求：server_py 必须包含 imports、FastMCP 实例、@mcp.tool 装饰的函数（参数从 tools 抽）、"
+        "if __name__ == \"__main__\": mcp.run()；dockerfile 用 python:3.12-slim + pip install + CMD；"
+        "只输出 JSON（server_py 和 dockerfile 字段值是字符串，用 \\n 换行）。"
     )
     messages = [{"role": "user", "content": prompt}]
     try:
@@ -338,9 +350,24 @@ def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
     dest = IMPORT_DIR / fname
     dest.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                     encoding="utf-8")
+    # 写 server.py + Dockerfile 到 sandbox/{name}/（build context）
+    build = data.get("build") or {}
+    ctx_rel = build.get("context", ".") or "."
+    sandbox_root = _ROOT / "sandbox"
+    ctx_path = (sandbox_root / ctx_rel).resolve()
+    sandbox_root.mkdir(parents=True, exist_ok=True)
+    ctx_path.mkdir(parents=True, exist_ok=True)
+    files_written = [fname]
+    if data.get("server_py"):
+        (ctx_path / "server.py").write_text(data["server_py"], encoding="utf-8")
+        files_written.append(str(ctx_path.relative_to(_ROOT)) + "/server.py")
+    if data.get("dockerfile"):
+        (ctx_path / "Dockerfile").write_text(data["dockerfile"], encoding="utf-8")
+        files_written.append(str(ctx_path.relative_to(_ROOT)) + "/Dockerfile")
     ok2, msg, sid = import_from_json(conn, data, source_path=str(dest))
     return {"ok": ok2, "name": name, "server_id": sid, "msg": msg,
             "approval_status": "pending", "file": fname,
+            "files": files_written,
             "tools": [t.get("name") for t in (data.get("tools") or [])]}
 
 

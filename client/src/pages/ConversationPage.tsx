@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, getChatSessions,
-  deleteChatSession, renameChatSession, clearChat, generateMcp,
+  deleteChatSession, renameChatSession, clearChat, generateMcp, generatePipeline,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -35,6 +36,7 @@ export default function ConversationPage({ refreshKey }: Props) {
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(false)
   const [genMcpMode, setGenMcpMode] = useState(false)
+  const [genPipelineMode, setGenPipelineMode] = useState(false)
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
@@ -102,6 +104,33 @@ export default function ConversationPage({ refreshKey }: Props) {
   const doSend = async () => {
     const text = input.trim()
     if (!text || sending) return
+    // 创建 pipeline 模式：输入作为需求，LLM 设计节点+关系并落库 draft
+    if (genPipelineMode) {
+      setSending(true)
+      setInput('')
+      try {
+        const r = await generatePipeline(text)
+        if (r.ok) {
+          toast(`已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），待审批`, 'ok')
+          setMessages((m) => [...m, {
+            id: -4, identity_id: 0, role: 'user', content: `创建 pipeline：${text}`, created_at: Date.now() / 1000,
+          }, {
+            id: -5, identity_id: 0, role: 'assistant',
+            content: `已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），状态 draft。待审批后可执行，去「编排」页批准。`,
+            created_at: Date.now() / 1000,
+          }])
+        } else {
+          toast(r.error || '生成失败', 'err')
+          setInput(text)
+        }
+      } catch (e: any) {
+        toast(e.message, 'err')
+        setInput(text)
+      } finally {
+        setSending(false)
+      }
+      return
+    }
     // 生成 MCP 模式：输入内容作为需求生成一个 MCP（无需路由数字人）
     if (genMcpMode) {
       setSending(true)
@@ -280,7 +309,7 @@ export default function ConversationPage({ refreshKey }: Props) {
                       <span className="cv-identity">由「{m.identity_name}」回答</span>
                     )}
                     <span className="chat-msg-time">{timeLabel(m.created_at)}</span>
-                    <span className="chat-msg-body">{m.content}</span>
+                    <span className="chat-msg-body md-body"><ReactMarkdown>{m.content}</ReactMarkdown></span>
                   </div>
                 ))}
               </div>
@@ -288,25 +317,32 @@ export default function ConversationPage({ refreshKey }: Props) {
             {sending && <div className="chat-msg assistant chat-typing">正在判断并回答…</div>}
           </div>
 
-          <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''}`}>
+          <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''} ${genPipelineMode ? 'pipe-on' : ''}`}>
             <textarea
               value={input}
-              placeholder={genMcpMode ? '描述你要生成的 MCP（如：一个论文搜索工具，返回标题作者摘要）' : '今天帮你做些什么？（Enter 发送，Shift+Enter 换行）'}
+              placeholder={genMcpMode ? '描述你要生成的 MCP（如：一个论文搜索工具，返回标题作者摘要）'
+                : genPipelineMode ? '描述你要创建的 pipeline（如：先需求分析再技术设计再代码实现再审查）'
+                : '今天帮你做些什么？（Enter 发送，Shift+Enter 换行）'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
-              disabled={!genMcpMode && approved.length === 0}
+              disabled={!genMcpMode && !genPipelineMode && approved.length === 0}
             />
             <div className="chat-bubble-bar">
               <button className="bubble-op" title="上传文件（暂未开放）" disabled>＋</button>
               <button className={`bubble-op gen ${genMcpMode ? 'on' : ''}`}
-                onClick={() => setGenMcpMode((v) => !v)}
+                onClick={() => { setGenMcpMode((v) => !v); setGenPipelineMode(false) }}
                 title="生成 MCP：把输入内容作为需求生成一个 MCP（LLM 设计 → 校验 → 导入待审批）">
                 ⚙ 生成 MCP
               </button>
+              <button className={`bubble-op gen ${genPipelineMode ? 'on' : ''}`}
+                onClick={() => { setGenPipelineMode((v) => !v); setGenMcpMode(false) }}
+                title="创建 pipeline：把输入作为需求，让 LLM 设计节点+关系并落库 draft（待审批）">
+                🔗 创建 pipeline
+              </button>
               <span className="bubble-spacer" />
               <button className="btn green" onClick={doSend}
-                disabled={!input.trim() || sending || (!genMcpMode && approved.length === 0)}>
-                {genMcpMode ? '生成 MCP' : '发送'}
+                disabled={!input.trim() || sending || (!genMcpMode && !genPipelineMode && approved.length === 0)}>
+                {genMcpMode ? '生成 MCP' : genPipelineMode ? '创建 pipeline' : '发送'}
               </button>
             </div>
           </div>
