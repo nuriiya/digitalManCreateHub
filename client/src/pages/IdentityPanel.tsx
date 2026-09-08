@@ -31,7 +31,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   const [adding, setAdding] = useState<number | null>(null) // identity id being extended
   const [newAnchor, setNewAnchor] = useState({ name: '', type: '概念', definition: '' })
   const [editingId, setEditingId] = useState<number | null>(null) // identity being edited
-  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert' })
+  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert', reactive: false })
   const [creating, setCreating] = useState(false)
   const [createDraft, setCreateDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert' })
   // assembly per persona
@@ -110,14 +110,14 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
 
   const startEditId = (it: Identity) => {
     setEditingId(it.id)
-    setIdDraft({ name: it.name, mission: it.mission || '', prompt: it.prompt || '', category: it.category || 'domain_expert' })
+    setIdDraft({ name: it.name, mission: it.mission || '', prompt: it.prompt || '', category: it.category || 'domain_expert', reactive: !!it.reactive })
   }
   const saveEditId = async () => {
     if (!editingId) return
     try {
       await updateIdentity(editingId, {
         name: idDraft.name, mission: idDraft.mission, prompt: idDraft.prompt,
-        category: idDraft.category,
+        category: idDraft.category, reactive: idDraft.reactive,
       })
       toast('数字人已更新', 'ok')
       setEditingId(null)
@@ -504,6 +504,7 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
         <b>{it.name}</b>
         <span className={`status-pill ${it.status}`} style={{ marginLeft: 0 }}>{it.status}</span>
         <span className="status-pill cat" style={{ marginLeft: 0 }}>{CATEGORY_LABEL[it.category] || '执行领域专家'}</span>
+        {it.reactive && <span className="status-pill running" style={{ marginLeft: 0 }}>反应式</span>}
         <span className="ops" style={{ marginLeft: 'auto' }}>
           <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
           <button className="btn red small" onClick={() => identityDelete(it.id)}>删除</button>
@@ -525,6 +526,11 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
             <select value={idDraft.category} onChange={(e) => setIdDraft({ ...idDraft, category: e.target.value })}>
               {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
             </select>
+          </label>
+          <label className="dlg-field" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ margin: 0 }}>反应式循环（写→测→改，能力型数字人打开）</span>
+            <input type="checkbox" checked={idDraft.reactive}
+              onChange={(e) => setIdDraft({ ...idDraft, reactive: e.target.checked })} />
           </label>
           <label className="dlg-field">
             <span>附加指令（prompt · 对话/装配时注入 · 铁律由系统硬保证不可被覆盖）</span>

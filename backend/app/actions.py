@@ -30,7 +30,46 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                          "properties": {"query": {"type": "string"}},
                          "required": ["query"]},
     },
+    # ---- 执行类动作（反应式循环的核心）----
+    "run_code": {
+        "name": "运行代码",
+        "description": "在隔离沙箱中执行一段 Python 代码，返回 stdout/stderr（禁网、只读、限资源）",
+        "input_schema": {"type": "object",
+                         "properties": {"code": {"type": "string"}},
+                         "required": ["code"]},
+        "category": "exec",
+    },
+    "run_test": {
+        "name": "运行测试",
+        "description": "在隔离沙箱中运行代码 + 断言测试，返回 pass/fail 和失败堆栈（写→测→改的核心闭环动作）",
+        "input_schema": {"type": "object",
+                         "properties": {"code": {"type": "string"},
+                                        "test": {"type": "string"},
+                                        "entry_point": {"type": "string"}},
+                         "required": ["code", "test"]},
+        "category": "exec",
+    },
+    "read_file": {
+        "name": "读取文件",
+        "description": "读取工作区文件内容（用于调试：读报错相关源码）",
+        "input_schema": {"type": "object",
+                         "properties": {"path": {"type": "string"}},
+                         "required": ["path"]},
+        "category": "fs",
+    },
+    "write_file": {
+        "name": "写入文件",
+        "description": "把代码写入工作区文件（用于写代码：落盘后可被测试/运行引用）",
+        "input_schema": {"type": "object",
+                         "properties": {"path": {"type": "string"},
+                                        "content": {"type": "string"}},
+                         "required": ["path", "content"]},
+        "category": "fs",
+    },
 }
+
+# 动作类别闭集
+ACTION_CATEGORIES = ("knowledge", "exec", "fs")
 
 CLOSED_KINDS = ("builtin", "mcp")
 
@@ -59,6 +98,14 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_ontology_retrieve(conn, identity_id, q)
     if builtin_name == "rag_retrieve":
         return _exec_rag_retrieve(conn, q)
+    if builtin_name == "run_code":
+        return _exec_run_code(conn, identity_id, args)
+    if builtin_name == "run_test":
+        return _exec_run_test(conn, identity_id, args)
+    if builtin_name == "read_file":
+        return _exec_read_file(conn, identity_id, args)
+    if builtin_name == "write_file":
+        return _exec_write_file(conn, identity_id, args)
     return {"ok": False, "error": f"未知内置动作 {builtin_name}"}
 
 
@@ -84,6 +131,78 @@ def _exec_rag_retrieve(conn, query: str) -> dict:
         return {"ok": False, "error": got["error"]}
     return {"ok": True, "result": {"hits": got.get("hits", 0),
                                    "texts": got.get("texts", [])}}
+
+
+# ---------------- 执行类动作（反应式循环） ----------------
+# 安全边界铁律：所有执行都在一次性 docker 沙箱（禁网/只读/限资源），
+# 数字人永远无法触及宿主文件系统或网络。读写文件限定在 per-identity 工作区。
+
+import os as _os
+import re as _re
+
+_WORKDIR_ROOT = _os.environ.get("RAG_WORK_DIR", "data") + "/workspace"
+
+
+def _safe_path(identity_id: int, path: str) -> str:
+    """校验并返回工作区内的安全绝对路径（防路径穿越 ../）。"""
+    base = _os.path.abspath(_WORKDIR_ROOT)
+    p = _os.path.abspath(_os.path.join(base, f"id_{identity_id}", path or ""))
+    if not (p == base or p.startswith(base + _os.sep)):
+        return ""
+    return p
+
+
+def _exec_run_code(conn, identity_id: int, args: dict) -> dict:
+    code = (args or {}).get("code", "") or ""
+    if not code.strip():
+        return {"ok": False, "error": "code 不能为空"}
+    from . import capability
+    r = capability.run_code_sandbox(code, timeout=20)
+    return {"ok": True, "result": {"exit_ok": r.get("exit_ok"),
+                                   "output": r.get("output", "")[:3000]}}
+
+
+def _exec_run_test(conn, identity_id: int, args: dict) -> dict:
+    code = (args or {}).get("code", "") or ""
+    test = (args or {}).get("test", "") or ""
+    entry = (args or {}).get("entry_point", "solution") or "solution"
+    if not code.strip() or not test.strip():
+        return {"ok": False, "error": "code 和 test 不能为空"}
+    from . import capability
+    r = capability.run_test_sandbox(code, test, entry, timeout=20)
+    return {"ok": True, "result": {"verdict": r.get("verdict"),
+                                   "output": r.get("output", "")[:3000]}}
+
+
+def _exec_read_file(conn, identity_id: int, args: dict) -> dict:
+    path = (args or {}).get("path", "") or ""
+    p = _safe_path(identity_id, path)
+    if not p:
+        return {"ok": False, "error": "非法路径（越出工作区）"}
+    try:
+        content = open(p, encoding="utf-8").read()
+    except FileNotFoundError:
+        return {"ok": False, "error": f"文件不存在：{path}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "result": {"path": path, "content": content[:5000]}}
+
+
+def _exec_write_file(conn, identity_id: int, args: dict) -> dict:
+    path = (args or {}).get("path", "") or ""
+    content = (args or {}).get("content", "") or ""
+    if not path.strip():
+        return {"ok": False, "error": "path 不能为空"}
+    p = _safe_path(identity_id, path)
+    if not p:
+        return {"ok": False, "error": "非法路径（越出工作区）"}
+    try:
+        _os.makedirs(_os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "result": {"path": path, "written": len(content)}}
 
 
 def execute_mcp(conn, mcp_server_id: int, mcp_tool_name: str, args: dict) -> dict:
@@ -240,7 +359,13 @@ def set_action_status(conn, action_id: int, status: str) -> bool:
 
 def guard_action(conn, identity_id: int, name: str, args: dict) -> tuple[bool, str, dict | None]:
     """Deterministic pre-execution gate (guardians): only an approved action
-    with valid args may run. Returns (ok, reason, action_row)."""
+    with valid args may run. Returns (ok, reason, action_row).
+
+    安全边界（执行类动作额外校验）：
+      - 执行类动作（exec/fs）必须显式声明且 approved（白名单裁决，默认拒绝）
+      - 入参按 JSON Schema required 校验（泛化，不再只查 query）
+      - 执行类入参长度封顶（防 prompt 注入/超大 payload）
+    """
     row = conn.execute(
         "SELECT * FROM persona_actions WHERE identity_id=? AND name=?",
         (identity_id, name)).fetchone()
@@ -250,9 +375,16 @@ def guard_action(conn, identity_id: int, name: str, args: dict) -> tuple[bool, s
         return False, f"动作「{name}」未通过审批", None
     if not isinstance(args, dict):
         return False, "动作入参必须是对象", None
-    # 内置动作：入参 query 必填
+    # 内置动作：按 schema required 泛化校验入参
     if row["kind"] == "builtin" and row["builtin_name"] in BUILTIN_ACTIONS:
         schema = BUILTIN_ACTIONS[row["builtin_name"]]["input_schema"]
-        if "query" in schema.get("required", []) and not (args.get("query") or "").strip():
-            return False, "动作入参缺少 query", None
+        for req in schema.get("required", []):
+            val = args.get(req)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                return False, f"动作入参缺少 {req}", None
+        # 执行类动作：入参长度封顶（防超大 payload / prompt 注入）
+        if BUILTIN_ACTIONS[row["builtin_name"]].get("category") in ("exec", "fs"):
+            for k, v in args.items():
+                if isinstance(v, str) and len(v) > 20000:
+                    return False, f"动作入参 {k} 超长（>20000 字符）", None
     return True, "", dict(row)

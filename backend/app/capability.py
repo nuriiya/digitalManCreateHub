@@ -71,7 +71,13 @@ def _run_in_container(code: str, timeout=30) -> tuple[bool, str]:
     """一次性 python 容器跑代码，返回 (ok, output)。
 
     通过挂载的 /var/run/docker.sock 用 docker-py SDK 直接调宿主 daemon，
-    不依赖 docker CLI。"""
+    不依赖 docker CLI。
+
+    安全边界（能力型数字人的沙箱铁律）：
+      - network_disabled：容器禁网（不 touch 外网）
+      - 只读根文件系统 + 无特权 + 无 cap
+      - 内存/CPU 上限 + 强超时
+    """
     import docker
     try:
         client = docker.from_env()
@@ -79,6 +85,13 @@ def _run_in_container(code: str, timeout=30) -> tuple[bool, str]:
             SANDBOX_IMAGE,
             command=["python", "-c", code],
             remove=True, stdout=True, stderr=True,
+            network_disabled=True,
+            mem_limit="256m",
+            nano_cpus=1_000_000_000,   # 1 CPU
+            read_only=True,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges"],
+            pids_limit=64,
         )
         return True, (result or b"").decode("utf-8", errors="replace").strip()
     except docker.errors.ContainerError as e:
@@ -109,6 +122,27 @@ def run_task(conn, task_id, code: str, identity_id=None, timeout=30) -> dict:
     return {"run_id": cur.lastrowid, "task_id": task_id,
             "entry_point": task["entry_point"], "verdict": verdict,
             "output": output[:2000]}
+
+
+def run_code_sandbox(code: str, timeout=30) -> dict:
+    """通用沙箱执行（供数字人「执行类动作」run_code / run_test 调用）。
+
+    返回 {"ok", "output", "exit_ok"}。安全边界见 _run_in_container。
+    """
+    ok, output = _run_in_container(code, timeout=timeout)
+    return {"ok": ok, "output": output[:4000], "exit_ok": ok}
+
+
+def run_test_sandbox(code: str, test: str, entry_point: str = "solution",
+                     timeout=30) -> dict:
+    """沙箱跑「代码 + 断言测试」，返回 pass/fail + 失败堆栈（数字人 run_test 动作）。
+
+    test 是 check(candidate) 形式：把数字人生的函数丢进去跑 assert。
+    返回 {"verdict": pass|fail, "output": ...}。
+    """
+    runner = f"{code}\n\n{test}\n\ncheck({entry_point})\n"
+    ok, output = _run_in_container(runner, timeout=timeout)
+    return {"verdict": "pass" if ok else "fail", "output": output[:4000]}
 
 
 def _extract_code(reply: str) -> str:

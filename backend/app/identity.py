@@ -362,6 +362,10 @@ def update_identity(conn, identity_id: int, patch: dict) -> bool:
         if cat is not None and cat not in IDENTITY_CATEGORIES:
             return False
         sets.append("category=?"); vals.append(cat)
+    if "reactive" in patch:
+        rv = patch.get("reactive")
+        if rv is not None:
+            sets.append("reactive=?"); vals.append(bool(rv))
     if not sets:
         return False
     vals.append(identity_id)

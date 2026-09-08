@@ -158,6 +158,7 @@ export interface Identity {
   description: string | null; keywords: string[]; status: string
   prompt: string
   category: string    // 'general' 通用数字人 | 'domain_expert' 执行领域专家
+  reactive: boolean   // 反应式循环开关（能力型数字人打开）
   anchors: IdentityAnchor[]
 }
 export const getIdentities = () => api<{ identities: Identity[] }>('/api/ontology/identities')

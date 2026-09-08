@@ -838,6 +838,7 @@ class IdentityUpdateBody(BaseModel):
     description: str | None = None
     prompt: str | None = None          # 附加指令（铁律由代码硬保证不被绕过）
     category: str | None = None        # general | domain_expert
+    reactive: bool | None = None       # 反应式循环开关（能力型数字人打开）
 
 
 @app.put("/api/ontology/identities/{identity_id}")

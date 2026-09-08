@@ -836,6 +836,11 @@ def _init_schema(conn: _Conn) -> None:
         # rows default to 'domain_expert' (they were all RAG-derived specialists).
         cur.execute("ALTER TABLE identities ADD COLUMN IF NOT EXISTS"
                     " category TEXT NOT NULL DEFAULT 'domain_expert'")
+        # identities reactive (2026-09-08): 反应式循环开关 — 打开后该数字人
+        # 在能力题/对话里走「生成→执行动作→观察→修正」的 agent loop，而非单次
+        # 生成。默认关闭（知识型数字人单次生成即可）。
+        cur.execute("ALTER TABLE identities ADD COLUMN IF NOT EXISTS"
+                    " reactive BOOLEAN NOT NULL DEFAULT false")
     conn.commit()
 
 
