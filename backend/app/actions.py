@@ -144,10 +144,35 @@ _WORKDIR_ROOT = _os.environ.get("RAG_WORK_DIR", "data") + "/workspace"
 
 
 def _safe_path(identity_id: int, path: str) -> str:
-    """校验并返回工作区内的安全绝对路径（防路径穿越 ../）。"""
-    base = _os.path.abspath(_WORKDIR_ROOT)
-    p = _os.path.abspath(_os.path.join(base, f"id_{identity_id}", path or ""))
+    """校验并返回该数字人工作区内的安全绝对路径（防路径穿越 ../）。"""
+    ident_dir = _os.path.abspath(_os.path.join(_WORKDIR_ROOT, f"id_{identity_id}"))
+    p = _os.path.abspath(_os.path.join(ident_dir, path or ""))
+    if not (p == ident_dir or p.startswith(ident_dir + _os.sep)):
+        return ""
+    return p
+
+
+_MCP_PREFIXES = ("mcp_imports/", "/mcp_imports/")
+
+
+def _mcp_import_path(path: str) -> str:
+    """把 MCP 定义 JSON 写到 mcp_imports/ 提案目录（仅 *.json）。
+
+    这是「模型输出 JSON → 自动导入 MCP」的写入侧：数字人（模型）在对话里
+    产出 MCP 定义 JSON，通过 write_file 写到这里，后端 scan 目录自动导入。
+    仅允许 .json，且限定在 mcp_imports/ 内（防路径穿越到项目其他文件）。
+    """
+    from . import mcp
+    base = _os.path.abspath(str(mcp.IMPORT_DIR))
+    rel = path or ""
+    for prefix in _MCP_PREFIXES:
+        if rel.startswith(prefix):
+            rel = rel[len(prefix):]
+            break
+    p = _os.path.abspath(_os.path.join(base, rel))
     if not (p == base or p.startswith(base + _os.sep)):
+        return ""
+    if not p.lower().endswith(".json"):
         return ""
     return p
 
@@ -193,7 +218,11 @@ def _exec_write_file(conn, identity_id: int, args: dict) -> dict:
     content = (args or {}).get("content", "") or ""
     if not path.strip():
         return {"ok": False, "error": "path 不能为空"}
-    p = _safe_path(identity_id, path)
+    # 路径路由：mcp_imports/ 前缀 → MCP 提案目录（仅 .json）；否则 → 工作区
+    if path.startswith(_MCP_PREFIXES):
+        p = _mcp_import_path(path)
+    else:
+        p = _safe_path(identity_id, path)
     if not p:
         return {"ok": False, "error": "非法路径（越出工作区）"}
     try:

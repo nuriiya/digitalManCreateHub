@@ -841,6 +841,17 @@ def _init_schema(conn: _Conn) -> None:
         # 生成。默认关闭（知识型数字人单次生成即可）。
         cur.execute("ALTER TABLE identities ADD COLUMN IF NOT EXISTS"
                     " reactive BOOLEAN NOT NULL DEFAULT false")
+        # mcp_servers (2026-09-08): 模型输出 JSON → 自动导入 MCP。tools 存工具
+        # 清单（数字人提名动作时从这读）；approval_status 是「提名-裁决分离」的
+        # 审批态（模型提名=pending，用户审批=approved），与 status（容器运行时
+        # 状态）正交；source_path 记录 JSON 来源；build 存构建上下文。
+        cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS"
+                    " tools JSONB NOT NULL DEFAULT '[]'::jsonb")
+        cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS"
+                    " approval_status TEXT NOT NULL DEFAULT 'approved'")
+        cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS"
+                    " source_path TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS build JSONB")
     conn.commit()
 
 

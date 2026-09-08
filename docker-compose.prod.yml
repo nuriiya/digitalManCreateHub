@@ -9,6 +9,8 @@ services:
       - rag_docs:/data
       # 数据库导出目录（prod 用命名卷持久化，可挂 NFS/对象存储做大文件）
       - rag_exports:/app/exports
+      # MCP 定义导入目录（prod 用命名卷持久化）
+      - rag_mcp_imports:/app/mcp_imports
     environment:
       ENV: prod
     depends_on:

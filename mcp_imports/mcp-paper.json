@@ -1,0 +1,73 @@
+{
+  "name": "paper-crawler",
+  "description": "论文搜索 + PDF 全文抽取（arXiv / Semantic Scholar / Google Scholar）",
+  "transport": "stdio",
+  "image": "mcp-paper:latest",
+  "command": "",
+  "port": 0,
+  "build": {
+    "context": "sandbox/mcp-paper",
+    "dockerfile": "Dockerfile"
+  },
+  "tools": [
+    {
+      "name": "search_arxiv",
+      "description": "按关键词搜索 arXiv 论文，返回标题/作者/摘要/年份/PDF 链接",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "max_results": { "type": "integer", "default": 10 }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "search_semantic_scholar",
+      "description": "按关键词搜索 Semantic Scholar，附加引用数、DOI、开放 PDF",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "max_results": { "type": "integer", "default": 10 }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "search_scholar",
+      "description": "Google Scholar 学术搜索（可能被反爬拦截，兜底用）",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "max_results": { "type": "integer", "default": 10 }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "download_pdf",
+      "description": "下载 arXiv 论文 PDF 到指定目录",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "arxiv_id": { "type": "string" },
+          "output_dir": { "type": "string" }
+        },
+        "required": ["arxiv_id"]
+      }
+    },
+    {
+      "name": "extract_text",
+      "description": "抽取 PDF 全文（页数/字符数/正文）",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": { "type": "string" }
+        },
+        "required": ["pdf_path"]
+      }
+    }
+  ]
+}

@@ -44,6 +44,8 @@ export const logout = () => api<{ ok: boolean }>('/api/auth/logout', { method: '
 export interface McpServer {
   id: number; name: string; description: string; transport: string
   image: string; command: string; port: number; status: string; created_at: number
+  approval_status?: string; tools?: { name: string; description?: string }[]
+  source_path?: string
 }
 export const getMcpServers = () => api<{ servers: McpServer[] }>('/api/mcp/servers')
 export const createMcpServer = (body: object) =>
@@ -51,6 +53,10 @@ export const createMcpServer = (body: object) =>
 export const deleteMcpServer = (id: number) => api(`/api/mcp/servers/${id}`, { method: 'DELETE' })
 export const startMcpServer = (id: number) => api<{ ok: boolean }>(`/api/mcp/servers/${id}/start`, { method: 'POST' })
 export const stopMcpServer = (id: number) => api<{ ok: boolean }>(`/api/mcp/servers/${id}/stop`, { method: 'POST' })
+export const scanMcpServers = () =>
+  api<{ scanned: number; results: { file: string; ok: boolean; msg: string; server_id?: number }[] }>('/api/mcp/scan', { method: 'POST' })
+export const approveMcpServer = (id: number, approve: boolean) =>
+  api<{ ok: boolean; approval_status: string }>(`/api/mcp/servers/${id}/approve`, { method: 'POST', body: JSON.stringify({ approve }) })
 
 export const getSettings = () => api('/api/settings')
 export const saveSettings = (patch: object) =>

@@ -72,3 +72,4 @@ volumes:
   backend_data:
   rag_docs:
   rag_exports:
+  rag_mcp_imports:

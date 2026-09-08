@@ -34,6 +34,12 @@ async def lifespan(_app: FastAPI):
     recovered = jobs.recover_stale_jobs(conn, db.now())
     if recovered:
         jobs.emit(conn, None, "system.recovered", {"jobs": recovered})
+    # 启动时自动扫描 mcp_imports/ 目录，把模型输出的 MCP 定义 JSON 导入
+    # mcp_servers 表（幂等，按 name upsert；新导入的是 pending 待审批）。
+    try:
+        mcp.scan_import_dir(conn)
+    except Exception:  # noqa: BLE001
+        pass
     yield
 
 
@@ -144,6 +150,25 @@ def mcp_start(server_id: int):
 def mcp_stop(server_id: int):
     mcp.stop_server(db.get_conn(), server_id)
     return {"ok": True}
+
+
+class McpApproveBody(BaseModel):
+    approve: bool = True
+
+
+@app.post("/api/mcp/scan")
+def mcp_scan():
+    """扫描 mcp_imports/ 目录里的 *.json，自动导入 MCP（模型提名 → pending）。"""
+    return mcp.scan_import_dir(db.get_conn())
+
+
+@app.post("/api/mcp/servers/{server_id}/approve")
+def mcp_approve(server_id: int, body: McpApproveBody):
+    """用户终审：approve=True 批准，False 拒绝。"""
+    ok, msg = mcp.approve_server(db.get_conn(), server_id, body.approve)
+    if not ok:
+        return JSONResponse({"detail": msg}, status_code=404)
+    return {"ok": True, "approval_status": msg}
 
 
 # ---------------- settings ----------------

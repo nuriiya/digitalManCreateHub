@@ -10,6 +10,8 @@ services:
       - ./docs:/data
       # 数据库导出目录：宿主机 exports/ 映射进容器，导出文件可直接 git 提交
       - ./exports:/app/exports
+      # MCP 定义导入目录：模型输出的 JSON 放这里，后端自动扫描导入
+      - ./mcp_imports:/app/mcp_imports
     environment:
       ENV: dev
       EMBEDDING_BASE_URL: http://host.docker.internal:11434
