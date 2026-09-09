@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 # One-click full-docker startup for Linux.
-#   ./start.sh [dev|prod]     (default: dev)
+#   ./start.sh [dev|prod] [--rebuild]     (default: dev)
 #
 # Does everything automatically:
 #   1. installs Docker (get.docker.com) if missing, starts the daemon
-#   2. builds the backend image (frontend dist is built inside the image)
-#   3. docker compose up (dev/prod override)
-#   4. waits for Ollama and pulls bge-m3 if absent
-#   5. waits for the backend to answer on :8000
+#   2. docker compose up (dev/prod override). The backend image is REUSED by
+#      default (no rebuild) so a restart is instant; pass --rebuild to rebuild
+#      after a code change. When the image is absent, compose builds it itself.
+#   3. waits for Ollama and pulls bge-m3 if absent
+#   4. waits for the backend to answer on :8000
 
 set -euo pipefail
 
 ENV="${1:-dev}"
+REBUILD=0
+if [ "$ENV" = "--rebuild" ]; then
+    ENV="dev"
+    REBUILD=1
+fi
+for a in "$@"; do
+    [ "$a" = "--rebuild" ] && REBUILD=1
+done
 if [ "$ENV" != "dev" ] && [ "$ENV" != "prod" ]; then
-    echo "usage: $0 [dev|prod]" >&2
+    echo "usage: $0 [dev|prod] [--rebuild]" >&2
     exit 1
 fi
 
@@ -87,12 +96,24 @@ for img in $IMAGES; do
     [ "$pulled" = "1" ] || warn "could not pull $img - compose will try direct (may fail on CN network)"
 done
 
-# ---------- 3. Build + up ----------
-log "building + starting containers (env=$ENV)..."
-if [ "$ENV" = "prod" ]; then
-    docker compose "${COMPOSE[@]}" --profile ollama up -d --build
+# ---------- 3. Up (rebuild only when --rebuild is passed) ----------
+# Reuse the existing rag-backend:latest image by default so a restart is
+# instant. compose auto-builds when the image is absent (first run); pass
+# --rebuild to force a fresh build after a code change.
+if [ "$REBUILD" = "1" ]; then
+    log "rebuilding + starting containers (env=$ENV)..."
+    if [ "$ENV" = "prod" ]; then
+        docker compose "${COMPOSE[@]}" --profile ollama up -d --build
+    else
+        docker compose "${COMPOSE[@]}" up -d --build
+    fi
 else
-    docker compose "${COMPOSE[@]}" up -d --build
+    log "reusing existing image + starting containers (env=$ENV)..."
+    if [ "$ENV" = "prod" ]; then
+        docker compose "${COMPOSE[@]}" --profile ollama up -d
+    else
+        docker compose "${COMPOSE[@]}" up -d
+    fi
 fi
 
 # ---------- 4. Ollama + bge-m3 ----------

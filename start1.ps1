@@ -1,26 +1,26 @@
 # One-click full-docker startup for Windows.
-#   .\start1.ps1 [dev|prod]     (default: dev)
+#   .\start1.ps1 [dev|prod] [-Rebuild]     (default: dev)
 #
 # Does everything automatically:
-#   1. installs Docker Desktop (winget) if missing, starts it if not running
-#   2. builds the backend image (frontend dist is built inside the image)
-#   3. docker compose up (dev/prod override)
-#   4. waits for Ollama and pulls bge-m3 if absent
-#   5. waits for the backend to answer on :8000
+#   1. probes/installs Docker Desktop, starts it if not running
+#   2. docker compose up (dev/prod override). The backend image is REUSED by
+#      default (no rebuild) so a restart is instant; pass -Rebuild to rebuild
+#      after a code change. When the image is absent, compose builds it itself.
+#   3. waits for Ollama and pulls bge-m3 if absent
+#   4. waits for the backend to answer on :8000
 #
 # NOTE: keep this file ASCII-only (PowerShell 5.1 reads it as GBK when there is
 # no BOM - non-ASCII comments break the if-block structure).
 
+param(
+    [ValidateSet("dev", "prod")]
+    [string]$EnvName = "dev",
+    [switch]$Rebuild    # force rebuild of the backend image (default: reuse)
+)
+
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
-
-$EnvName = $args[0]
-if (-not $EnvName) { $EnvName = "dev" }
-if ($EnvName -ne "dev" -and $EnvName -ne "prod") {
-    Write-Host "usage: .\start1.ps1 [dev|prod]"
-    exit 1
-}
 
 function Write-Step($msg) { Write-Host "[start] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[start] $msg" -ForegroundColor Yellow }
@@ -151,12 +151,18 @@ foreach ($img in $baseImages) {
     if (-not $pulled) { Write-Warn "could not pull $img - compose will try direct (may fail on CN network)" }
 }
 
-# ---------- 4. Build + up ----------
-Write-Step "building + starting containers (env=$EnvName)..."
+# ---------- 4. Up (rebuild only when -Rebuild is passed) ----------
+# Reuse the existing rag-backend:latest image by default so a restart is
+# instant. compose auto-builds when the image is absent (first run); pass
+# -Rebuild to force a fresh build after a code change.
+$upArgs = @()
+if ($Rebuild) { $upArgs += "--build" }
 if ($EnvName -eq "prod") {
-    & docker compose @composeFiles --profile ollama up -d --build
+    Write-Step "starting containers (env=prod, rebuild=$($Rebuild.IsPresent))..."
+    & docker compose @composeFiles --profile ollama up -d @upArgs
 } else {
-    & docker compose @composeFiles up -d --build
+    Write-Step "starting containers (env=dev, rebuild=$($Rebuild.IsPresent))..."
+    & docker compose @composeFiles up -d @upArgs
 }
 if ($LASTEXITCODE -ne 0) {
     Write-Warn "docker compose up failed - see the error above"
