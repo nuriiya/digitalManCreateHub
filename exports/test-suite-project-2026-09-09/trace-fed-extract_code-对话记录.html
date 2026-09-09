@@ -1,0 +1,151 @@
+<!doctype html><html lang="zh-CN" data-page-node-id="ZPC1WFgsEi40e3Q7AhLRYS"><head data-page-node-id="HfasUpoU0QddKyQ0xB4qh1"><meta charset="UTF-8" data-page-node-id="NeHf2pH0CZ8MlRHdtmEpMX"/>
+<meta name="viewport" content="width=device-width,initial-scale=1" data-page-node-id="OgjMdmGAnBoNpNtnbIb0qI"/>
+<title>extract_code · pipeline 失败对话记录</title>
+<style>
+:root{--bg:#10141c;--panel:#171c26;--line:#28303f;--txt:#e6eaf2;--muted:#8b94a7;--dim:#5c6575;
+--green:#2fd17c;--red:#ff6b6b;--blue:#6ea8ff;--purple:#b18cff;--amber:#ffab4d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;padding:24px 18px 60px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:19px}h2{font-size:15px;margin:26px 0 8px}
+.tagline{color:var(--muted);font-size:12.5px;margin:6px 0 4px;line-height:1.7}
+.headrow{display:flex;justify-content:space-between;flex-wrap:wrap;align-items:baseline;margin-bottom:4px}
+.verdict{font-size:13px;padding:3px 10px;border-radius:9px;font-weight:600}
+.verdict.fail{background:rgba(255,107,107,.15);color:var(--red)}
+.chat{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel)}
+.msg{padding:14px 16px;border-bottom:1px solid var(--line);line-height:1.7}
+.msg:last-child{border-bottom:none}
+.msg .head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.msg .who{font-weight:600;font-size:13px}
+.msg .tag{font-size:11px;color:var(--dim)}
+.msg pre{background:#0b0e15;border:1px solid var(--line);border-radius:9px;padding:10px 12px;overflow-x:auto;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;line-height:1.6;margin-top:4px}
+.msg .nl{white-space:pre-wrap;font-size:13.5px;color:#d7dde8}
+.msg.writer .who{color:var(--blue)}.msg.writer pre.code{color:#bfd9ff;border-color:rgba(110,168,255,.3)}
+.msg.rev .who{color:var(--purple)}
+.msg.sys .who{color:var(--muted)}.msg.sys pre{color:#f0c08a}
+.msg.sys.fail .head{border-left:3px solid var(--red);padding-left:8px}
+.msg.writer .head{border-left:3px solid var(--blue);padding-left:8px}
+.msg.rev .head{border-left:3px solid var(--purple);padding-left:8px}
+.context{background:#141a26;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;font-size:12.5px}
+.context b{color:var(--amber)}
+.note{background:rgba(110,168,255,.07);border:1px solid rgba(110,168,255,.25);border-radius:12px;padding:12px 14px;margin-top:18px;font-size:13px;line-height:1.8;color:#c9d6e8}
+.note b{color:var(--blue)}
+</style></head><body data-page-node-id="1OUmVNRi6xlz6LKOSAlbdI"><div class="wrap" data-page-node-id="7OHCUREXVUdM8XqeGQjXXB">
+<h1 data-page-node-id="o4UJLXVYN8k876TsLaktye">失败用例对话记录 · extract_code（pipeline + 本体 + reviewer 喂饱）</h1>
+<p class="tagline" data-page-node-id="b6gH1Nf8SAOCeDfblaoBng">writer=代码工程师(3) ↔ reviewer=调试工程师(6) · qwen2.5:7b-32k · 沙箱隐藏测试裁定（LLM 不判分）· 3 轮写测改，绿即停</p>
+<div class="headrow" data-page-node-id="e3spELjsx8SpWsMVSB1tbV"><h2 data-page-node-id="z5pUvjcxELgcDKqMIMvYZ0">背景上下文（reviewer 每轮都能看到）</h2><span class="verdict fail" data-page-node-id="ETLWGTrFWv67GvVJ18PHgX">最终 3 轮全 FAIL</span></div>
+<div class="context" data-page-node-id="ybF91SHLsEXLLxBPsWMqPD"><b data-page-node-id="PEmvzSLRZyJabQ4HcaHwtX">题目 docstring：</b><pre style="background:none;border:none;padding:6px 0 2px" data-page-node-id="qWhMoWq7gYir0m94BXXgE7">def extract_code(reply: str) -&gt; str:
+    &quot;&quot;&quot;从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    &quot;&quot;&quot;
+</pre></div>
+<div class="context" data-page-node-id="OI8RKa2XXFThHJYU10haDY"><b data-page-node-id="lEdIEuzB7VC3tXJeAkUanx">隐藏测试断言：</b><pre style="background:none;border:none;padding:6px 0 2px" data-page-node-id="LlKm4LhK1a8T9ubQSiP5Fy">def check(candidate):
+    assert candidate(&#x27;解释一下\n```python\ndef f():\n    return 1\n```\n以上&#x27;) == \
+        &#x27;def f():\n    return 1&#x27;
+    assert candidate(&#x27;说明\ndef f():\n    return 1\n&#x27;) == &#x27;def f():\n    return 1&#x27;
+    assert candidate(&#x27;from x import y&#x27;) == &#x27;from x import y&#x27;
+</pre></div>
+
+<h2 data-page-node-id="ypx3wTDBv3DArPYLwt83M7">完整对话（3 轮 · 手递手）</h2>
+<div class="chat" data-page-node-id="jOG1XJV6ZMU2n7aP2AYKgD">
+<div class="msg writer" data-page-node-id="8NJHorua5VJy84htgECIrg"><div class="head" data-page-node-id="edK5lBPGH2qTLcV1FnwTIZ"><span class="who" data-page-node-id="aU4qGnzte8aI2Xy07rKI5R">代码工程师 · writer</span><span class="tag" data-page-node-id="u0CGYxY1W6haV8UAwV4Y6r">第 1 次提交 · 完整代码 857 字符</span></div><pre class="code" data-page-node-id="2mMYWIR3TQmMObquVhspFO">def extract_code(reply: str) -&gt; str:
+    &quot;&quot;&quot;
+    从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    &quot;&quot;&quot;
+    # 检查是否包含 ```python ... ``` 代码块
+    start = reply.find(&quot;```python&quot;)
+    if start != -1:
+        end = reply.find(&quot;```&quot;, start + 7)
+        if end != -1:
+            return reply[start + 7:end].strip()
+
+    # 检查是否包含 def/from/import 开头的行
+    lines = reply.splitlines()
+    code_lines = []
+    for line in lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith(&quot;def &quot;) or stripped_line.startswith(&quot;from &quot;) or stripped_line.startswith(&quot;import &quot;):
+            code_lines.append(line)
+            break
+
+    # 如果找到 def/from/import 开头的行，截取到结尾
+    if code_lines:
+        return &quot;&quot;.join(code_lines).strip()
+
+    # 如果没有找到任何代码块或 def/from/import 开头的行，返回原文
+    return reply.strip()</pre></div>
+<div class="msg sys fail" data-page-node-id="o9evVic2B3H5LhANyTc1HL"><div class="head" data-page-node-id="KRfDbFAE2RWDKWOMhWgizI"><span class="who" data-page-node-id="loI1WGPih1FBVMFWaLyKFH">沙箱 · 隐藏测试</span><span class="tag" data-page-node-id="D1qmuWDNqa0ueXpoYRkZdd">R1 判定：FAIL</span></div><pre data-page-node-id="AV11AXmMogHMcIfdnsmG4N">Traceback (most recent call last):
+  File &quot;&lt;string&gt;&quot;, line 37, in &lt;module&gt;
+    check(extract_code)
+    ~~~~~^^^^^^^^^^^^^^
+  File &quot;&lt;string&gt;&quot;, line 31, in check
+    assert candidate(&#x27;解释一下\n```python\ndef f():\n    return 1\n```\n以上&#x27;) == \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        &#x27;def f():\n    return 1&#x27;
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError</pre></div>
+<div class="msg rev" data-page-node-id="X3pAnsAxRxtJWoBnnHiDUX"><div class="head" data-page-node-id="I7a1Evtltt9QUcCFHF6AKH"><span class="who" data-page-node-id="vWxo0ckqMBjLHuIDA3iesG">调试工程师 · reviewer</span><span class="tag" data-page-node-id="00HbnzRyRuM1R3anP3nEnA">R1 诊断 · 收到【任务要求 docstring + 隐藏测试断言】后</span></div><div class="nl" data-page-node-id="8vMAi92ytRXMBxhFiLTP6j">根据失败测试报告，断言 `check(extract_code)` 失败，具体表现为：
+
+```python
+assert candidate(&#x27;解释一下\n```python\ndef f():\n    return 1\n```\n以上&#x27;) == \
+    &#x27;def f():\n    return 1&#x27;
+```
+
+实际返回值与期望值不符。失败原因在于代码块 ```python ... ``` 之后的代码没有被正确截取。具体来说，`extract_code` 函数在提取 ```python 代码块时，只截取了 ```python 之前的代码，而没有包含 ```python 之后的代码。
+
+根据 docstring，函数应优先提取 ```python ... ``` 代码块，因此需要修正代码块的提取逻辑。
+
+**修改建议：**
+在提取 ```python 代码块时，应包含 ```python 之后的代码。具体修改如下：
+
+```python
+def extract_code(reply: str) -&gt; str:
+    start = reply.find(&quot;```python&quot;)
+    if start != -1:
+        end = reply.find(&quot;```&quot;, start + 7)
+        if end != -1:
+            return reply[start + 7:end + 3].strip()  # 包含 ```python 之后的代码
+
+    lines = reply.splitlines()
+    code_lines = []
+    for line in lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith(&quot;def &quot;) or stripped_line.startswith(&quot;from &quot;) or stripped_line.startswith(&quot;import &quot;):
+            code_lines.append(line)
+            break
+
+    if code_lines:
+        return &quot;&quot;.join(code_lines).strip()
+
+    return reply.strip()
+```
+
+通过上述修改，`extract_code` 函数在提取 ```python 代码块时，将包含 ```python 之后的代码，确保测试通过。</div></div>
+<div class="msg writer" data-page-node-id="RKS0sfRjSj46HdIZQoR9yl"><div class="head" data-page-node-id="A2Cpkpo4StxwPlx0gwI3ch"><span class="who" data-page-node-id="Rw1QjnacsahiTTIVuv5JFZ">代码工程师 · writer</span><span class="tag" data-page-node-id="3IkTU9XBnktwLAX2jzOfvh">第 2 次提交（读了 R1 诊断后）· 61 字符</span></div><pre class="code" data-page-node-id="ZxE43u7dvT6lutyXRpHeB7">def extract_code(reply: str) -&gt; str:
+    start = reply.find(&quot;</pre></div>
+<div class="msg sys fail" data-page-node-id="pABFY8ukbY8TKNvaaYpHVz"><div class="head" data-page-node-id="XHngyE5UPqUQ8jLB3Gu2ze"><span class="who" data-page-node-id="3S7wexFNikSUCUCChOPtVv">沙箱 · 隐藏测试</span><span class="tag" data-page-node-id="LUrm42oaU2O5RK74HVZzIY">R2 判定：FAIL</span></div><pre data-page-node-id="l4QIQHQkiZMda0Tfs5ZHt7">File &quot;&lt;string&gt;&quot;, line 2
+    start = reply.find(&quot;
+                       ^
+SyntaxError: unterminated string literal (detected at line 2)</pre></div>
+<div class="msg rev" data-page-node-id="boaE0cBY2LBhLDdGlylFom"><div class="head" data-page-node-id="smj7K8Wp4Df2tPddhSnlHz"><span class="who" data-page-node-id="20txFBi5SnXyqHrfFTycV4">调试工程师 · reviewer</span><span class="tag" data-page-node-id="GeP9I35cZ8g1AJgKFslHG5">R2 诊断</span></div><div class="nl" data-page-node-id="NXV4lyIYt5kAdaihv45fuL">根据失败测试报告中的堆栈信息，`SyntaxError: unterminated string literal` 表明在 `reply.find(&quot;`&quot;)` 这一行中，字符串未正确终止。具体来看，`reply` 中的字符串字面量在 `\n` 之后没有正确闭合。
+
+从 docstring 可知，`extract_code` 函数需要从模型回答中提取纯 Python 代码。测试用例 `check(candidate(&#x27;解释一下\n```python\ndef f():\n    return 1\n```\n以上&#x27;))` 中的字符串包含换行符 `\n`，这导致了字符串未正确闭合。
+
+**修改建议：**
+在 `reply.find(&quot;`&quot;)` 之前，确保 `reply` 中的字符串字面量正确闭合。具体来说，需要在 `reply` 中替换或移除换行符 `\n`，确保字符串字面量正确闭合。
+
+**验证方式：**
+修复后重新运行 `check(candidate)` 断言，确保所有测试用例通过。特别是需要验证包含换行符的字符串能否正确处理。</div></div>
+<div class="msg writer" data-page-node-id="ns300d9O2LlbA5C23Fe97z"><div class="head" data-page-node-id="bT05A4CPukqt3hOTCS2ID1"><span class="who" data-page-node-id="MKzXUUBCEApfVRp8f34wGo">代码工程师 · writer</span><span class="tag" data-page-node-id="R6WRdGtI13ELlWrDP1zojv">第 3 次提交 · 73 字符</span></div><pre class="code" data-page-node-id="zUKs58WTNj7EHuE7aCUYHA">def extract_code(reply: str) -&gt; str:
+    &quot;&quot;&quot;从模型回答里提取纯 Python 代码。
+    优先提取</pre></div>
+</div>
+
+<div class="note" data-page-node-id="ZNa3O25id3Ovf7yJf5SahN"><b data-page-node-id="CsS73LzbLePGsD6xOz0FTi">为什么失败（从对话能直接读出）：</b><br data-page-node-id="KPtVol1Fnyy1nvDD3TLiXr"/>
+① R1 reviewer 诊断其实<u data-page-node-id="DnGzHVJE7oTaiKskWxsezo">完全准确</u>——它引用了断言失败现场、点出“截取位置少了 ```python 之后的内容”，还给了修正方向；<br data-page-node-id="RFXPfPhfdNEoWATnucRCse"/>
+② 但 reviewer 给的“建议”是一份<u data-page-node-id="IqYhlcERn8MRtv87a2nzlA">完整重写代码</u>。writer 收到后没有在 R1 代码上打补丁，而是照着重写 —— 结果第 2 次提交只剩 61 字符，<u data-page-node-id="QYCByplkIk1NJaHfhgd1tE">引号都没闭合</u>（SyntaxError），连函数结构都丢了；<br data-page-node-id="NqR5xBw5DCECCra9fLavDI"/>
+③ R2 reviewer 把这次 SyntaxError 误判成“reply 字符串未闭合”（其实 writer 自己写崩了），给了错误方向；第 3 次 writer 又写成 73 字符、三引号未闭合 —— 7B 在长诊断上下文里修正时写崩，是模型能力上限，不是信息不够。</div>
+</div></body></html>

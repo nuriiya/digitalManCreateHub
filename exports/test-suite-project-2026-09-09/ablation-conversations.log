@@ -1,9 +1,1859 @@
 digitalMan pipeline capability 消融对话 log
 generated 2026-09-09 · 纯文本记录（非 HTML）
 题源：12 道项目能力题（capability_tasks_project.json）· 沙箱可执行验证，LLM 不判分
+模型：qwen2.5:7b-32k（provider=ollama）· writer=代码工程师(3) · reviewer=调试工程师(6)
+备注：本批为 2026-09-09 下午修复 host.docker.internal 代理回归（LLM_PROXY 误套
+      导致 ollama 502）+ 截断续写落地后重跑（results_qwen_r2_*），链路干净无 ERR。
+
+# 汇总
+
+组                  pass   fail  明细
+------------------------------------------------------------------------------------------
+A 单数字人+本体          8/12   4     pass=paginate,jsonb_get,cosine,validate_tags,safe_truncate,extract_code,merge_summaries,topk
+                            fail=normalize_name,parse_dsn,dedup_tags,chunk_overlap
+B 单数字人-本体          7/12   5     pass=paginate,jsonb_get,cosine,validate_tags,safe_truncate,extract_code,topk
+                            fail=normalize_name,parse_dsn,dedup_tags,chunk_overlap,merge_summaries
+C pipeline+本体      7/12   5     pass=paginate,jsonb_get,cosine,validate_tags,safe_truncate,merge_summaries,topk
+                            fail=normalize_name,parse_dsn,dedup_tags,chunk_overlap,extract_code
+D pipeline-本体      7/12   5     pass=parse_dsn,paginate,jsonb_get,cosine,validate_tags,extract_code,topk
+                            fail=normalize_name,dedup_tags,chunk_overlap,safe_truncate,merge_summaries
+
+对照（历史）：修复前 qwen A=9/12 B/C/D=7/12；本次干净重跑见上表。
+V4-Flash 对照：A=11/12 B/C/D=12/12（results_v4_*）。
+
+# 逐题 × 四组 verdict
+
+题                        A      B      C      D      轮次轨迹(A/B/C/D)
+------------------------------------------------------------------------------------------
+proj_normalize_name      fail(3)  fail(3)  fail(3)  fail(3) 
+proj_parse_dsn           fail(3)  fail(3)  fail(3)  pass(3) 
+proj_paginate            pass(1)  pass(1)  pass(1)  pass(1) 
+proj_dedup_tags          fail(3)  fail(3)  fail(3)  fail(3) 
+proj_jsonb_get           pass(1)  pass(1)  pass(1)  pass(1) 
+proj_chunk_overlap       fail(3)  fail(3)  fail(3)  fail(3) 
+proj_cosine              pass(1)  pass(1)  pass(1)  pass(1) 
+proj_validate_tags       pass(1)  pass(2)  pass(1)  pass(2) 
+proj_safe_truncate       pass(1)  pass(3)  pass(1)  fail(3) 
+proj_extract_code        pass(2)  pass(1)  fail(3)  pass(1) 
+proj_merge_summaries     pass(1)  fail(3)  pass(1)  fail(3) 
+proj_topk                pass(1)  pass(1)  pass(1)  pass(1) 
+
+
+##### 组：A 单数字人+本体 —— 完整对话
+==============================================================================
+[qwen-r2 A 单数字人+本体 proj_normalize_name] run_id=294 task=165 identity=None reviewer=- mode=single ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = name.replace("(", "")
+    name = name.replace(")", "")
+    name = name.strip()
+    
+    return name
+
+# 测试用例
+def run_test():
+    test_cases = [
+        ("Alice", "alice"),
+        ("Bob (Developer)", "bob"),
+        ("Charlie (C.E.O.)", "charlie"),
+        ("", ""),
+        ("  Dave  ", "dave"),
+        ("Eve (Manager)  ", "eve"),
+        ("Frank (CFO) (CTO)", "frank")
+    ]
+    
+    for input_name, expected in test_cases:
+        result = normalize_name(input_name)
+        assert result == expected, f"Expected {expected}, got {result} for input '{input_name}'"
+    
+    print("All tests passed!")
+
+run_test()
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 30, in <module>
+    run_test()
+    ~~~~~~~~^^
+  File "<string>", line 26, in run_test
+    assert result == expected, f"Expected {expected}, got {result} for input '{input_name}'"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Expected bob, got bob developer for input 'Bob (Developer)'
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)
+    name = name.replace(' ', '')
+    return name
+
+import re
+
+def run_test():
+    test_cases = [
+        ("Bob (Developer)", "bobdeveloper"),
+        ("Alice (Engineer)", "aliceengineer"),
+        ("Charlie (Manager)", "charliemanager"),
+        ("David", "david"),
+        ("", ""),
+        ("(Developer)", "developer"),
+        ("  Developer  ", "developer")
+    ]
+    
+    for input_name, expected in test_cases:
+        result = normalize_name(input_name)
+        assert result == expected, f"Expected {expected}, got {result} for input '{input_name}'"
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 38, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 33, in check
+    assert candidate('ABC（中文）DEF') == 'abcdef'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    return name.lower().replace('(', '').replace(')', '').replace(' ', '')
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 12, in check
+    assert candidate('  Hello (World)  ') == 'hello'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
 
 ==============================================================================
-[qwen-E pipeline+本体+reviewer喂饱 extract_code] run_id=235 task=174 writer=3 reviewer=6 mode=pipeline ontology=True
+END OF CASE
+
+==============================================================================
+[qwen-r2 A 单数字人+本体 proj_parse_dsn] run_id=295 task=166 identity=None reviewer=- mode=single ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """
+    解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    import re
+
+    # 定义正则表达式模式
+    pattern = r'postgresql://(?P<user>[^:]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)?/(?P<dbname>[^/]+)'
+
+    # 匹配dsn字符串
+    match = re.match(pattern, dsn)
+    if not match:
+        raise ValueError("DSN格式不正确")
+
+    # 提取匹配结果
+    user = match.group('user')
+    password = match.group('password') or None
+    host = match.group('host')
+    port = match.group('port')
+    dbname = match.group('dbname')
+
+    # 处理端口
+    if port is None:
+        port = 5432
+
+    # 返回解析结果
+    return {
+        'user': user,
+        'password': password,
+        'host': host,
+        'port': int(port),
+        'dbname': dbname
+    }
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 46, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 40, in check
+    assert candidate('postgresql://u:p@h/db') == \
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 15, in parse_dsn
+    raise ValueError("DSN格式不正确")
+ValueError: DSN格式不正确
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    parts = dsn.split('://', 1)
+    if len(parts) != 2:
+        raise ValueError("DSN格式不正确")
+    
+    scheme, rest = parts
+    if scheme != 'postgresql':
+        raise ValueError("DSN方案不正确")
+    
+    user_pass, host_db = rest.split('@', 1)
+    user, password = user_pass.split(':', 1) if ':' in user_pass else ('', '')
+    host, db = host_db.split('/', 1)
+    
+    port = 5432
+    if ':' in host:
+        host, port_str = host.split(':', 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            raise ValueError("DSN格式不正确")
+    
+    return {
+        'user': user,
+        'password': password,
+        'host': host,
+        'port': port,
+        'dbname': db
+    }
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 43, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 39, in check
+    assert candidate('postgresql://u@h:5555/db') == \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {'user': 'u', 'password': '', 'host': 'h', 'port': 5555, 'dbname': 'db'}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    parts = dsn.split('://')[1].split('@')
+    user_pass = parts[0].split(':')
+    user = user_pass[0]
+    password = user_pass[1] if len(user_pass) > 1 else ''
+    host_port = parts[1].split(':')
+    host = host_port[0]
+    port = int(host_port[1]) if len(host_port) > 1 else 5432
+    dbname = dsn.split('/')[-1]
+    
+    return {
+        'user': user,
+        'password': password,
+        'host': host,
+        'port': port,
+        'dbname': dbname
+    }
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 32, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 24, in check
+    assert candidate('postgresql://postgres:secret@localhost:5432/rag') == \
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 12, in parse_dsn
+    port = int(host_port[1]) if len(host_port) > 1 else 5432
+           ~~~^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: '5432/rag'
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 A 单数字人+本体 proj_dedup_tags] run_id=297 task=168 identity=None reviewer=- mode=single ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        normalized_tag = tag.strip().lower()
+        if normalized_tag not in seen:
+            seen.add(normalized_tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 21, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate([' x ', 'X', ' y']) == ['x', 'y']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        normalized_tag = tag.strip().lower()
+        if normalized_tag not in seen:
+            seen.add(normalized_tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 21, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate([' x ', 'X', ' y']) == ['x', 'y']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 A 单数字人+本体 proj_chunk_overlap] run_id=299 task=170 identity=None reviewer=- mode=single ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = max(start + max_len, len(text))
+        if len(chunks) == 0 or end - start == overlap:
+            chunks.append(text[start:end])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+
+    return chunks
+
+# 测试用例
+def run_test():
+    test_cases = [
+        ("", 10, 3, []),
+        ("hello", 10, 3, ["hello"]),
+        ("hello world", 10, 3, ["hello worl", "llo worl", "lo worl", " worl", " world"]),
+        ("hello world", 5, 3, ["hello", "llo w", "lo wo", " wo", " world"]),
+        ("hello world", 3, 2, ["hel", "ell", "llo", "lo ", " wo", "or", "rl", "ld"]),
+    ]
+
+    for text, max_len, overlap, expected in test_cases:
+        result = chunk_overlap(text, max_len, overlap)
+        assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+
+    print("All tests passed!")
+
+run_test()
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 34, in <module>
+    run_test()
+    ~~~~~~~~^^
+  File "<string>", line 30, in run_test
+    assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Failed for hello world with max_len=10, overlap=3. Expected ['hello worl', 'llo worl', 'lo worl', ' worl', ' world'], got ['hello world', 'rld']
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    """把文本切成有重叠的分段。
+    每段不超过 max_len 字符；相邻段之间重叠 overlap 个字符；
+    最后一段即使很短也要保留。
+    """
+    if not text:
+        return []
+
+    result = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if start == 0:
+            result.append(text[:end])
+        else:
+            result.append(text[start - overlap:end])
+        start = end
+
+    return result
+
+def run_test():
+    text = "hello world"
+    max_len = 10
+    overlap = 3
+    expected = ['hello worl', 'llo worl', 'lo worl', ' worl', ' world']
+    result = chunk_overlap(text, max_len, overlap)
+    assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 36, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 30, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+    
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = max(start + max_len, len(text))
+        chunks.append(text[start:end])
+        start = end - overlap
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 20, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 14, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 A 单数字人+本体 proj_extract_code (pass 样例)] run_id=303 task=174 identity=None reviewer=- mode=single ontology=True
+verdict=pass reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def extract_code(reply: str) -> str:
+    """
+    从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    """
+    if '```python' in reply:
+        start = reply.index('```python') + len('```python')
+        end = reply.find('```', start)
+        if end == -1:
+            return ''
+        return reply[start:end].strip()
+
+    lines = reply.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def ', 'from ', 'import ')):
+            start = i
+            break
+    else:
+        return reply
+
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].strip() and not lines[i].strip().startswith(('def ', 'from ', 'import ')):
+            end = i
+            break
+
+    return '\n'.join(lines[start:end]).strip()
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 37, in <module>
+    check(extract_code)
+    ~~~~~^^^^^^^^^^^^^^
+  File "<string>", line 33, in check
+    assert candidate('说明\ndef f():\n    return 1\n') == 'def f():\n    return 1'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> pass
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def extract_code(reply: str) -> str:
+    """从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    """
+    if '```python' in reply:
+        start = reply.index('```python') + len('```python')
+        end = reply.index('```', start)
+        return reply[start:end].strip()
+    
+    lines = reply.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def', 'from', 'import')):
+            start = i
+            break
+    else:
+        return reply
+    
+    end = len(lines)
+    return '\n'.join(lines[start:end]).strip()
+
+==============================================================================
+END OF CASE
+
+
+##### 组：B 单数字人-本体 —— 完整对话
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_normalize_name] run_id=306 task=165 identity=None reviewer=- mode=single ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    # 去掉括号及括号内的内容
+    name = re.sub(r'\(.*?\)', '', name)
+    # 转小写
+    name = name.lower()
+    # 去掉所有空白字符
+    name = name.replace(" ", "")
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 24, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate('Foo Bar') == 'foobar'
+           ~~~~~~~~~^^^^^^^^^^^
+  File "<string>", line 9, in normalize_name
+    name = re.sub(r'\(.*?\)', '', name)
+           ^^
+NameError: name 're' is not defined. Did you forget to import 're'?
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)
+    name = name.replace(" ", "")
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 18, in check
+    assert candidate('ABC（中文）DEF') == 'abcdef'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    import re
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)
+    name = name.replace(' ', '')
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 22, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate('ABC（中文）DEF') == 'abcdef'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_parse_dsn] run_id=307 task=166 identity=None reviewer=- mode=single ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """
+    解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    import re
+
+    # 定义正则表达式模式
+    pattern = re.compile(r'postgresql://(?P<user>[^:]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)?/(?P<dbname>[^/]+)')
+
+    # 匹配dsn字符串
+    match = pattern.match(dsn)
+
+    if not match:
+        raise ValueError("DSN格式不正确")
+
+    # 提取匹配结果
+    user = match.group('user')
+    password = match.group('password') or None
+    host = match.group('host')
+    port = match.group('port')
+    dbname = match.group('dbname')
+
+    # 处理端口
+    if port is None:
+        port = 5432
+    else:
+        port = int(port)
+
+    # 返回解析结果
+    return {
+        'user': user,
+        'password': password,
+        'host': host,
+        'port': port,
+        'dbname': dbname
+    }
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 49, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 43, in check
+    assert candidate('postgresql://u:p@h/db') == \
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 16, in parse_dsn
+    raise ValueError("DSN格式不正确")
+ValueError: DSN格式不正确
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    import re
+
+    pattern = r'postgresql://(?P<user>[^:]+)(?::(?P<password>[^@]+))?@(?P<host>[^:]+)(?::(?P<port>\d+))?/(?P<dbname>[^/]+)'
+    match = re.match(pattern, dsn)
+
+    if not match:
+        raise ValueError("DSN格式不正确")
+
+    result = match.groupdict()
+    if result['port'] is None:
+        result['port'] = '5432'
+
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 21, in check
+    assert candidate('postgresql://postgres:secret@localhost:5432/rag') == \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {'user': 'postgres', 'password': 'secret', 'host': 'localhost', 'port': 5432, 'dbname': 'rag'}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    import re
+    
+    pattern = r'postgresql://(?P<user>[^:]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)/(?P<dbname>[^/]+)'
+    match = re.match(pattern, dsn)
+    
+    if not match:
+        raise ValueError("Invalid DSN format")
+    
+    result = match.groupdict()
+    result['port'] = int(result['port'])
+    
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 28, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 22, in check
+    assert candidate('postgresql://u:p@h/db') == \
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 12, in parse_dsn
+    raise ValueError("Invalid DSN format")
+ValueError: Invalid DSN format
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_dedup_tags] run_id=309 task=168 identity=None reviewer=- mode=single ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    """
+    标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        # 去除首尾空白并转换为小写
+        clean_tag = tag.strip().lower()
+        if clean_tag not in seen:
+            seen.add(clean_tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 19, in check
+    assert candidate([' x ', 'X', ' y']) == ['x', 'y']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_chunk_overlap] run_id=311 task=170 identity=None reviewer=- mode=single ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    """把文本切成有重叠的分段。
+    每段不超过 max_len 字符；相邻段之间重叠 overlap 个字符；
+    最后一段即使很短也要保留。
+    """
+    if max_len <= 0 or overlap < 0:
+        raise ValueError("max_len must be positive and overlap must be non-negative")
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = max(start + max_len, len(text))
+        if start == 0:
+            chunk = text[:end]
+        else:
+            chunk = text[start - overlap:end]
+        chunks.append(chunk)
+        start = end - overlap
+
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    """把文本切成有重叠的分段。
+    每段不超过 max_len 字符；相邻段之间重叠 overlap 个字符；
+    最后一段即使很短也要保留。
+    """
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+    
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if start == 0:
+            chunks.append(text[:end])
+            start = end
+        else:
+            chunks.append(text[start - overlap:end])
+            start = end
+    
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    """把文本切成有重叠的分段。
+    每段不超过 max_len 字符；相邻段之间重叠 overlap 个字符；
+    最后一段即使很短也要保留。
+    """
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+    
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if start == 0:
+            chunks.append(text[:end])
+            start = end
+        else:
+            chunks.append(text[start - overlap:end])
+            start = end
+    
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_validate_tags (pass 样例)] run_id=313 task=172 identity=None reviewer=- mode=single ontology=False
+verdict=pass reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def validate_tags(tags: list, allowed: list) -> list:
+    """闭集校验：只保留在 allowed 里的标签，预设外的丢弃。
+    返回去重后的合法标签列表，保持顺序。
+    """
+    if not tags:
+        return []
+    
+    valid_tags = [tag for tag in tags if tag in allowed]
+    return list(set(valid_tags))  # 去重并保持原顺序
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(validate_tags)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['规则', '乱七八糟', '法律', '规则'], ALLOWED) == ['规则', '法律']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> pass
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def validate_tags(tags: list, allowed: list) -> list:
+    """闭集校验：只保留在 allowed 里的标签，预设外的丢弃。
+    返回去重后的合法标签列表，保持顺序。
+    """
+    return list(dict.fromkeys([tag for tag in tags if tag in allowed]))
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_extract_code (pass 样例)] run_id=315 task=174 identity=None reviewer=- mode=single ontology=False
+verdict=pass reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> pass
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def extract_code(reply: str) -> str:
+    """从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    """
+    import re
+
+    # 检查是否有 ```python ... ``` 代码块
+    code_block_match = re.search(r'```python(.*?)```', reply, re.DOTALL)
+    if code_block_match:
+        return code_block_match.group(1).strip()
+
+    # 检查是否有 def/from/import 开头的行
+    lines = reply.split('\n')
+    start_index = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def ', 'from ', 'import ')):
+            start_index = i
+            break
+
+    if start_index is not None:
+        return '\n'.join(lines[start_index:]).strip()
+
+    # 如果没有找到任何代码，返回原文
+    return reply.strip()
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 B 单数字人-本体 proj_merge_summaries] run_id=316 task=175 identity=None reviewer=- mode=single ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def merge_summaries(parts: list) -> str:
+    """
+    把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    def clean_summary(summary: str) -> str:
+        """清理摘要，去除空白和标点，转换为小写"""
+        import string
+        return summary.strip().translate(str.maketrans('', '', string.punctuation)).lower()
+
+    unique_summaries = []
+    seen = set()
+    for part in parts:
+        cleaned_part = clean_summary(part)
+        if cleaned_part and cleaned_part not in seen:
+            seen.add(cleaned_part)
+            unique_summaries.append(part)
+
+    return '\n'.join(unique_summaries)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 25, in check
+    assert candidate(['  a  ', 'a']) == 'a'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def merge_summaries(parts: list) -> str:
+    """把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    def clean_summary(summary):
+        return summary.strip().replace(' ', '').lower()
+    
+    unique_summaries = set()
+    cleaned_parts = [clean_summary(part) for part in parts if part.strip()]
+    
+    for cleaned_part in cleaned_parts:
+        if cleaned_part not in unique_summaries:
+            unique_summaries.add(cleaned_part)
+    
+    return '\n'.join(unique_summaries)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 25, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 22, in check
+    assert candidate(['hello', 'world', 'hello']) == 'hello\nworld'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def merge_summaries(parts: list) -> str:
+    """把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    from collections import defaultdict
+    
+    def clean_text(text):
+        return ''.join(c for c in text if c.isalnum() or c.isspace()).lower()
+    
+    cleaned_parts = [clean_text(part) for part in parts if part.strip()]
+    unique_parts = list({cleaned_part: True for cleaned_part in cleaned_parts}.keys())
+    
+    return '\n'.join(unique_parts)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 19, in check
+    assert candidate(['  a  ', 'a']) == 'a'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+
+##### 组：C pipeline+本体 —— 完整对话
+==============================================================================
+[qwen-r2 C pipeline+本体 proj_normalize_name] run_id=318 task=165 identity=3 reviewer=6 mode=pipeline ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = name.replace("(", "")
+    name = name.replace(")", "")
+    name = name.strip()
+    
+    return name
+
+# 测试用例
+def run_test():
+    test_cases = [
+        ("Alice", "alice"),
+        ("Bob (Developer)", "bob"),
+        ("Charlie (C.E.O.)", "charlie"),
+        ("", ""),
+        ("  Dave  ", "dave"),
+        ("Eve (Manager)  ", "eve"),
+        ("Frank (CFO) (CTO)", "frank")
+    ]
+    
+    for input_name, expected in test_cases:
+        result = normalize_name(input_name)
+        assert result == expected, f"Expected {expected}, got {result} for input '{input_name}'"
+    
+    print("All tests passed!")
+
+run_test()
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 30, in <module>
+    run_test()
+    ~~~~~~~~^^
+  File "<string>", line 26, in run_test
+    assert result == expected, f"Expected {expected}, got {result} for input '{input_name}'"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Expected bob, got bob developer for input 'Bob (Developer)'
+
+[REVIEWER 诊断]
+根据失败测试报告，`run_test` 中的测试用例 `("Bob (Developer)", "bob")` 失败了。具体报错信息为：
+
+```
+AssertionError: Expected bob, got bob developer for input 'Bob (Developer)'
+```
+
+这表明 `normalize_name` 函数在处理包含括号的输入时，没有完全去掉括号内的内容。具体来说，`"Bob (Developer)"` 被处理后变成了 `"bob developer"`，而期望的结果是 `"bob"`。
+
+根据 docstring 的描述，`normalize_name` 函数的规则是：
+1. 转小写
+2. 去掉括号及括号内的内容
+3. 去掉所有空白字符
+
+当前实现中，`name = name.replace("(", "")` 和 `name = name.replace(")", "")` 只是简单地移除了括号，但没有移除括号内的内容。因此，需要进一步处理去掉括号内的内容。
+
+**修改建议：**
+在 `name.lower()` 之后，添加一个移除括号内内容的步骤。可以使用正则表达式来匹配并移除括号及其内的内容。
+
+具体修改如下：
+```python
+import re
+
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)  # 移除括号及其内的内容
+    name = name.strip()
+    
+    return name
+```
+
+通过上述修改，`"Bob (Developer)"` 将被正确地处理为 `"bob"`。接下来，可以重新运行测试用例以验证修复效果。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)  # 移除括号及其内的内容
+    name = name.strip()
+    
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 21, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 14, in check
+    assert candidate('Foo Bar') == 'foobar'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据失败测试报告，`check(normalize_name)` 函数在执行 `assert candidate('Foo Bar') == 'foobar'` 时失败，说明 `normalize_name('Foo Bar')` 的返回值不是 `'foobar'`。
+
+从 `normalize_name` 函数的实现来看，`name.lower()` 会将字符串转为小写，`re.sub(r'\(.*?\)', '', name)` 会移除括号及其内的内容，`name.strip()` 会去掉所有空白字符。对于输入 `'Foo Bar'`，按照当前实现，会先转为小写 `'foo bar'`，然后移除括号及其内容，结果还是 `'foo bar'`，最后去掉空白字符，结果还是 `'foo bar'`，与期望的 `'foobar'` 不符。
+
+问题出在 `name.strip()` 这一步，它会去掉所有空白字符，包括空格、制表符、换行符等。而 `'Foo Bar'` 中的空格在 `lower()` 之后仍然存在，`strip()` 会将其去掉，导致结果不正确。
+
+**修改建议**：去掉 `name.strip()` 这一行，只保留 `name.lower()` 和 `re.sub(r'\(.*?\)', '', name)` 两步。这样可以保留输入中的所有空白字符，符合 docstring 中“去掉所有空白字符”的描述。
+
+具体修改为：
+```python
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)  # 移除括号及其内的内容
+    
+    return name
+```
+
+这样修改后，`normalize_name('Foo Bar')` 的返回值将为 `'foo bar'`，符合预期。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    
+    name = name.lower()
+    name = re.sub(r'\(.*?\)', '', name)  # 移除括号及其内的内容
+    
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 20, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate('Foo Bar') == 'foobar'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 C pipeline+本体 proj_parse_dsn] run_id=319 task=166 identity=3 reviewer=6 mode=pipeline ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def parse_dsn(dsn: str) -> dict:
+    """
+    解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    import re
+
+    # 定义正则表达式模式
+    pattern = r'postgresql://(?P<user>[^:]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)?/(?P<dbname>[^/]+)'
+
+    # 匹配dsn字符串
+    match = re.match(pattern, dsn)
+    if not match:
+        raise ValueError("DSN格式不正确")
+
+    # 提取匹配结果
+    user = match.group('user')
+    password = match.group('password') or None
+    host = match.group('host')
+    port = match.group('port')
+    dbname = match.group('dbname')
+
+    # 处理端口
+    if port is None:
+        port = 5432
+
+    # 返回解析结果
+    return {
+        'user': user,
+        'password': password,
+        'host': host,
+        'port': int(port),
+        'dbname': dbname
+    }
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 46, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 40, in check
+    assert candidate('postgresql://u:p@h/db') == \
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 15, in parse_dsn
+    raise ValueError("DSN格式不正确")
+ValueError: DSN格式不正确
+
+[REVIEWER 诊断]
+根据失败测试报告，`check` 函数中的测试用例 `postgresql://u:p@h/db` 失败，报错信息为 `ValueError: DSN格式不正确`。这表明 `parse_dsn` 函数在处理 `postgresql://u:p@h/db` 时未能正确匹配正则表达式。
+
+具体分析失败原因：
+- 正则表达式 `pattern` 中的 `(?P<password>[^@]+)?` 仅匹配了 `@` 之后的部分，而忽略了 `:` 之前的密码部分。
+- 正则表达式 `pattern` 需要调整，以正确匹配 `user` 和 `password` 之间的 `:`。
+
+修改建议：
+- 修改正则表达式 `pattern`，确保 `password` 部分能正确匹配 `user` 和 `@` 之间的内容。
+- 重新运行测试，确保所有测试用例通过。
+
+具体修改后的正则表达式为：
+```python
+pattern = r'postgresql://(?P<user>[^:@]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)?/(?P<dbname>[^/]+)'
+```
+
+这样修改后，`parse_dsn` 函数能够正确解析包含 `user` 和 `password` 的 DSN 字符串。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    pattern = r'postgresql://(?P<user>[^:@]+):(?P<password>[^@]+)?@(?P<host>[^:]+):(?P<port>\d+)?/(?P<dbname>[^/]+)'
+    match = re.match(pattern, dsn)
+    if not match:
+        raise ValueError('DSN格式不正确')
+    result = match.groupdict()
+    if result['port'] is None:
+        result['port'] = '5432'
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 26, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 18, in check
+    assert candidate('postgresql://postgres:secret@localhost:5432/rag') == \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {'user': 'postgres', 'password': 'secret', 'host': 'localhost', 'port': 5432, 'dbname': 'rag'}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据失败测试报告，`parse_dsn` 函数在处理包含端口的 DSN 字符串时，返回的 `port` 字段类型为字符串而不是整数。这违反了 docstring 中端口缺省值为 5432 的描述，即端口应为整数类型。
+
+具体来看，`match.groupdict()` 返回的 `port` 字段在端口未指定时被赋值为 `None`，而当端口指定时，`port` 字段仍为字符串形式。这导致了 `{'port': 5432}` 中的 `port` 为字符串类型，而非预期的整数类型。
+
+**根因定位：**
+- `match.groupdict()` 返回的 `port` 字段在端口未指定时为 `None`，而指定时为字符串形式，导致类型不一致。
+
+**修改建议：**
+- 将 `result['port']` 转换为整数类型，确保 `port` 字段始终为整数。
+
+具体修改如下：
+- 在 `if result['port'] is None` 之后，添加 `result['port'] = int(result['port'])`。
+
+**验证方式：**
+- 重新运行测试用例，确保所有测试用例通过且返回的 `port` 字段为整数类型。
+
+通过上述修改，可以确保 `parse_dsn` 函数在处理包含端口的 DSN 字符串时，返回的 `port` 字段类型为整数，符合 docstring 中的描述。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def parse_dsn(dsn: str) -> dict:
+    """解析 PostgreSQL 连接串，返回 dict。
+    格式：postgresql://user:password@host:port/dbname
+    端口缺省时默认 5432，密码可为空。
+    """
+    pattern = r'postgresql://(?P<user>.+):(?P<password>.+)@(?P<host>.+):(?P<port>\d+)/(?P<dbname>.+)'
+    match = re.match(pattern, dsn)
+    if match:
+        result = match.groupdict()
+        if result['port'] is None:
+            result['port'] = 5432
+        else:
+            result['port'] = int(result['port'])
+    else:
+        result = {'dbname': dsn.split('/')[-1], 'port': 5432}
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(parse_dsn)
+    ~~~~~^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('postgresql://u:p@h/db') == \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {'user': 'u', 'password': 'p', 'host': 'h', 'port': 5432, 'dbname': 'db'}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 C pipeline+本体 proj_dedup_tags] run_id=321 task=168 identity=3 reviewer=6 mode=pipeline ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据失败测试报告，`check` 函数中的断言 `assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']` 失败。这表明 `dedup_tags` 函数在处理大小写差异时出现了问题。具体来说，`A` 和 `a` 应该被视为相同的标签，但当前实现没有正确处理这一点。
+
+从 `dedup_tags` 函数的实现来看，`tag = tag.strip().lower()` 这一行确实将标签进行了标准化处理，但在 `if tag not in seen` 判断时，`seen` 集合中存储的是未标准化的标签。因此，`A` 和 `a` 被认为是不同的标签。
+
+**根因定位：**
+- `seen` 集合中存储的是未标准化的标签，导致大小写差异没有被正确处理。
+
+**修改建议：**
+- 将 `tag` 标准化后再进行去重判断，即在 `if tag not in seen` 之前先将 `tag` 标准化。
+
+具体修改为：
+```python
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+```
+
+通过上述修改，`tag` 在加入 `seen` 集合之前就已经进行了标准化处理，确保了大小写差异被正确处理。再次运行测试，应能通过所有测试用例。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据失败测试报告，`check(dedup_tags)` 函数在测试用例 `['A', 'a', 'B', 'b']` 时失败，实际返回值与预期不符。具体失败堆栈证据如下：
+
+```
+assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+```
+
+从 `dedup_tags` 函数的实现来看，`tag = tag.strip().lower()` 会将每个标签转换为小写并去除首尾空白。然而，`['A', 'a', 'B', 'b']` 中的 `'A'` 和 `'a'` 被视为不同的元素，因为它们在比较时没有转换为统一的小写形式。因此，`'a'` 仍然被添加到结果中。
+
+根因分析：`dedup_tags` 函数在处理大小写差异时没有统一转换为小写，导致 `'A'` 和 `'a'` 被视为不同的元素。
+
+修改建议：在将标签添加到 `seen` 集合之前，先将标签统一转换为小写形式。
+
+具体修改步骤：
+1. 将 `tag = tag.strip().lower()` 放到 `if tag not in seen` 之前。
+2. 保持 `result.append(tag)` 不变，因为 `tag` 已经是统一的小写形式。
+
+修改后的代码逻辑如下：
+```python
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+```
+
+通过上述修改，`'A'` 和 `'a'` 将被视为相同的元素，从而确保去重功能按预期工作。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 13, in check
+    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 C pipeline+本体 proj_chunk_overlap] run_id=323 task=170 identity=3 reviewer=6 mode=pipeline ontology=True
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = max(start + max_len, len(text))
+        if len(chunks) == 0 or end - start == overlap:
+            chunks.append(text[start:end])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+
+    return chunks
+
+# 测试用例
+def run_test():
+    test_cases = [
+        ("", 10, 3, []),
+        ("hello", 10, 3, ["hello"]),
+        ("hello world", 10, 3, ["hello worl", "llo worl", "lo worl", " worl", " world"]),
+        ("hello world", 5, 3, ["hello", "llo w", "lo wo", " wo", " world"]),
+        ("hello world", 3, 2, ["hel", "ell", "llo", "lo ", " wo", "or", "rl", "ld"]),
+    ]
+
+    for text, max_len, overlap, expected in test_cases:
+        result = chunk_overlap(text, max_len, overlap)
+        assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+
+    print("All tests passed!")
+
+run_test()
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 34, in <module>
+    run_test()
+    ~~~~~~~~^^
+  File "<string>", line 30, in run_test
+    assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Failed for hello world with max_len=10, overlap=3. Expected ['hello worl', 'llo worl', 'lo worl', ' worl', ' world'], got ['hello world', 'rld']
+
+[REVIEWER 诊断]
+根据失败测试报告中的断言信息，`chunk_overlap` 函数在处理 `"hello world"` 时出现了问题。具体表现为：
+
+```python
+assert result == expected, f"Failed for {text} with max_len={max_len}, overlap={overlap}. Expected {expected}, got {result}"
+```
+
+实际结果 `['hello world', 'rld']` 与期望结果 `['hello worl', 'llo worl', 'lo worl', ' worl', ' world']` 不匹配。
+
+从 `docstring` 可知，相邻段之间应重叠 `overlap` 个字符。具体到这个测试用例，`overlap` 为 3，因此相邻段之间应有 3 个字符的重叠。但实际结果中，`'hello world'` 与 `'rld'` 之间没有重叠。
+
+问题出现在 `while` 循环的条件判断和切片逻辑中。具体来说，`start` 的更新逻辑可能存在问题，导致没有正确地实现重叠。
+
+**修改建议：**
+
+1. 在 `while` 循环中，确保每次切片时都正确地实现重叠。具体来说，`start` 的更新应确保每次切片时都保留 `overlap` 个字符。
+2. 修正 `start` 的更新逻辑，确保每次切片时都正确地实现重叠。
+
+具体修改建议如下：
+
+- 在 `while` 循环中，确保每次切片时都保留 `overlap` 个字符。
+- 修正 `start` 的更新逻辑，确保每次切片时都正确地实现重叠。
+
+**具体修改：**
+
+```python
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if len(chunks) == 0 or end - start == overlap:
+            chunks.append(text[start:end])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+
+    return chunks
+```
+
+通过上述修改，确保每次切片时都正确地实现重叠。再次运行测试用例，确保所有测试通过。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if len(chunks) == 0 or end - start == overlap:
+            chunks.append(text[start:end])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+
+    return chunks
+
+[REVIEWER 诊断]
+根据提供的代码和测试断言，我们可以通过以下步骤定位根因并给出修改建议：
+
+1. **复现失败**：首先，我们需要复现测试失败的情况。根据断言，`check(chunk_overlap('abcdefgh', 4, 2))` 应该返回 `['abcd', 'cdef', 'efgh']`，但实际上代码返回了 `['abcd', 'efgh']`，缺少了 `cdef`。
+
+2. **定位根因**：通过观察代码和测试用例，我们发现代码在处理 `end - start == overlap` 的情况时，逻辑有误。具体来说，当 `end - start` 等于 `overlap` 时，代码直接将 `text[start:end]` 添加到 `chunks` 中，而没有考虑 `overlap` 的影响。
+
+3. **修改建议**：我们需要修正 `while` 循环中的逻辑，确保在 `end - start == overlap` 时，正确处理重叠部分。具体来说，当 `end - start` 等于 `overlap` 时，应该将 `text[start:end - overlap]` 添加到 `chunks` 中，然后将 `start` 移动到 `end - overlap`。
+
+根据上述分析，修改建议如下：
+
+- 将 `if len(chunks) == 0 or end - start == overlap:` 逻辑改为 `if end - start == overlap:`，并在该条件下调整 `start` 的值。
+
+最终修改后的代码逻辑如下：
+
+```python
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end - start == overlap:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end])
+            start = end - overlap
+
+    return chunks
+```
+
+通过上述修改，代码能够正确处理 `end - start == overlap` 的情况，确保生成正确的重叠分段。接下来，可以重新跑测试用例，验证修复后的代码是否通过所有测试。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    if not text or max_len <= 0 or overlap >= max_len:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end - start == overlap:
+            chunks.append(text[start:end - overlap])
+            start = end - overlap
+        else:
+            chunks.append(text[start:end])
+            start = end - overlap
+
+    return chunks
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 C pipeline+本体 proj_extract_code] run_id=327 task=174 identity=3 reviewer=6 mode=pipeline ontology=True
 verdict=fail reactive=True
 ==============================================================================
 
@@ -17,106 +1867,65 @@ def extract_code(reply: str) -> str:
     优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
     开头的行开始截取到结尾；都没有则返回原文。
     """
-    # 检查是否包含 ```python ... ``` 代码块
-    start = reply.find("```python")
-    if start != -1:
-        end = reply.find("```", start + 7)
-        if end != -1:
-            return reply[start + 7:end].strip()
+    if '```python' in reply:
+        start = reply.index('```python') + len('```python')
+        end = reply.find('```', start)
+        if end == -1:
+            return ''
+        return reply[start:end].strip()
 
-    # 检查是否包含 def/from/import 开头的行
-    lines = reply.splitlines()
-    code_lines = []
-    for line in lines:
-        stripped_line = line.strip()
-        if stripped_line.startswith("def ") or stripped_line.startswith("from ") or stripped_line.startswith("import "):
-            code_lines.append(line)
+    lines = reply.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def ', 'from ', 'import ')):
+            start = i
+            break
+    else:
+        return reply
+
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].strip() and not lines[i].strip().startswith(('def ', 'from ', 'import ')):
+            end = i
             break
 
-    # 如果找到 def/from/import 开头的行，截取到结尾
-    if code_lines:
-        return "".join(code_lines).strip()
-
-    # 如果没有找到任何代码块或 def/from/import 开头的行，返回原文
-    return reply.strip()
+    return '\n'.join(lines[start:end]).strip()
 
 [沙箱测试输出]
 Traceback (most recent call last):
   File "<string>", line 37, in <module>
     check(extract_code)
     ~~~~~^^^^^^^^^^^^^^
-  File "<string>", line 31, in check
-    assert candidate('解释一下\n```python\ndef f():\n    return 1\n```\n以上') == \
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        'def f():\n    return 1'
-        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 33, in check
+    assert candidate('说明\ndef f():\n    return 1\n') == 'def f():\n    return 1'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError
 
 [REVIEWER 诊断]
-根据失败测试报告，断言 `check(extract_code)` 失败，具体表现为：
+根据失败测试报告，`check` 函数中的测试用例 `assert candidate('说明\ndef f():\n    return 1\n') == 'def f():\n    return 1'` 失败了。这表明 `extract_code` 函数在处理这种情况时没有正确提取代码。
 
-```python
-assert candidate('解释一下\n```python\ndef f():\n    return 1\n```\n以上') == \
-    'def f():\n    return 1'
-```
+从 `extract_code` 函数的实现来看，它会从首个 `def/from/import` 开头的行开始截取到结尾。对于输入 `说明\ndef f():\n    return 1\n`，函数会从 `def` 开始截取到结尾，但没有找到 `from/import`，因此返回从 `def` 开始到结尾的代码。
 
-实际返回值与期望值不符。失败原因在于代码块 ```python ... ``` 之后的代码没有被正确截取。具体来说，`extract_code` 函数在提取 ```python 代码块时，只截取了 ```python 之前的代码，而没有包含 ```python 之后的代码。
+然而，根据 docstring，当没有代码块时，应该从首个 `def/from/import` 开头的行开始截取到结尾，但如果没有找到 `from/import`，则返回原文。因此，对于输入 `说明\ndef f():\n    return 1\n`，函数应该返回原文 `说明\ndef f():\n    return 1\n`。
 
-根据 docstring，函数应优先提取 ```python ... ``` 代码块，因此需要修正代码块的提取逻辑。
+具体来说，问题出在 `for i in range(start + 1, len(lines))` 这个循环中。当没有找到 `from/import` 时，`end` 仍然被设置为 `len(lines)`，导致截取了整个字符串。
 
 **修改建议：**
-在提取 ```python 代码块时，应包含 ```python 之后的代码。具体修改如下：
+在 `for i in range(start + 1, len(lines))` 循环中，增加一个条件判断，如果 `i` 达到 `len(lines)` 仍未找到 `def/from/import`，则将 `end` 设置为 `start`，返回原文。
 
+具体修改如下：
 ```python
-def extract_code(reply: str) -> str:
-    start = reply.find("```python")
-    if start != -1:
-        end = reply.find("```", start + 7)
-        if end != -1:
-            return reply[start + 7:end + 3].strip()  # 包含 ```python 之后的代码
-
-    lines = reply.splitlines()
-    code_lines = []
-    for line in lines:
-        stripped_line = line.strip()
-        if stripped_line.startswith("def ") or stripped_line.startswith("from ") or stripped_line.startswith("import "):
-            code_lines.append(line)
-            break
-
-    if code_lines:
-        return "".join(code_lines).strip()
-
-    return reply.strip()
+for i in range(start + 1, len(lines)):
+    if lines[i].strip() and not lines[i].strip().startswith(('def ', 'from ', 'import ')):
+        end = i
+        break
+else:
+    end = start
 ```
 
-通过上述修改，`extract_code` 函数在提取 ```python 代码块时，将包含 ```python 之后的代码，确保测试通过。
+这样修改后，对于输入 `说明\ndef f():\n    return 1\n`，函数会返回原文 `说明\ndef f():\n    return 1\n`，符合 docstring 的要求。
 
 ------------------------------------------------------------------------------
 ROUND 2 -> fail
-------------------------------------------------------------------------------
-[WRITER 提交代码]
-def extract_code(reply: str) -> str:
-    start = reply.find("
-
-[沙箱测试输出]
-File "<string>", line 2
-    start = reply.find("
-                       ^
-SyntaxError: unterminated string literal (detected at line 2)
-
-[REVIEWER 诊断]
-根据失败测试报告中的堆栈信息，`SyntaxError: unterminated string literal` 表明在 `reply.find("`")` 这一行中，字符串未正确终止。具体来看，`reply` 中的字符串字面量在 `\n` 之后没有正确闭合。
-
-从 docstring 可知，`extract_code` 函数需要从模型回答中提取纯 Python 代码。测试用例 `check(candidate('解释一下\n```python\ndef f():\n    return 1\n```\n以上'))` 中的字符串包含换行符 `\n`，这导致了字符串未正确闭合。
-
-**修改建议：**
-在 `reply.find("`")` 之前，确保 `reply` 中的字符串字面量正确闭合。具体来说，需要在 `reply` 中替换或移除换行符 `\n`，确保字符串字面量正确闭合。
-
-**验证方式：**
-修复后重新运行 `check(candidate)` 断言，确保所有测试用例通过。特别是需要验证包含换行符的字符串能否正确处理。
-
-------------------------------------------------------------------------------
-ROUND 3 -> fail
 ------------------------------------------------------------------------------
 [WRITER 提交代码]
 def extract_code(reply: str) -> str:
@@ -129,11 +1938,202 @@ File "<string>", line 2
     ^
 SyntaxError: unterminated triple-quoted string literal (detected at line 13)
 
+[REVIEWER 诊断]
+根据失败测试报告中的错误信息，`SyntaxError: unterminated triple-quoted string literal` 表明在 docstring 中未正确关闭三引号。具体来看，`check(candidate)` 函数中提供的第一个测试用例：
+
+```python
+assert candidate('解释一下\n```python\ndef f():\n    return 1\n```\n以上') == \
+    'def f():\n    return 1'
+```
+
+这里的 docstring 未正确关闭三引号，导致解释器在解析时出错。具体位置在 `line 2`，即 `"""从模型回答里提取纯 Python 代码。` 未正确关闭。
+
+**修改建议：**
+- 在 `extract_code` 函数的 docstring 中，确保三引号正确闭合。具体来说，需要在 `line 2` 之后添加一个 `"""`。
+
+**验证方式：**
+- 修复后重新运行 `check(candidate)` 函数，确保所有测试用例通过，特别是第一个用例的输出正确。
+
+通过以上修改，可以解决当前的语法错误。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def extract_code(reply: str) -> str:
+    """
+    从模型回答里提取纯 Python 代码。
+    优先提取
+
+[沙箱测试输出]
+File "<string>", line 2
+    """
+    ^
+SyntaxError: unterminated triple-quoted string literal (detected at line 14)
+
+==============================================================================
+END OF CASE
+
+
+##### 组：D pipeline-本体 —— 完整对话
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_normalize_name] run_id=330 task=165 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    # 去掉括号及括号内的内容
+    name = re.sub(r'\(.*?\)', '', name)
+    # 转小写
+    name = name.lower()
+    # 去掉所有空白字符
+    name = name.replace(" ", "")
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 24, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate('Foo Bar') == 'foobar'
+           ~~~~~~~~~^^^^^^^^^^^
+  File "<string>", line 9, in normalize_name
+    name = re.sub(r'\(.*?\)', '', name)
+           ^^
+NameError: name 're' is not defined. Did you forget to import 're'?
+
+[REVIEWER 诊断]
+根因在于代码中未导入 `re` 模块，导致在执行正则替换操作时抛出 `NameError`。
+
+根据文档字符串的要求，需要实现以下功能：
+- 转小写
+- 去掉括号及括号内的内容
+- 去掉所有空白字符
+
+修改建议如下：
+在 `normalize_name` 函数的上方添加 `import re` 语句，确保正则表达式操作能够正常执行。
+
+具体修改为：
+```python
+import re
+
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    # 去掉括号及括号内的内容
+    name = re.sub(r'\(.*?\)', '', name)
+    # 转小写
+    name = name.lower()
+    # 去掉所有空白字符
+    name = name.replace(" ", "")
+    return name
+```
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+import re
+
+def normalize_name(name: str) -> str:
+    """规范化实体名称。
+    用于本体实体去重前的名称标准化，规则是：
+    - 转小写
+    - 去掉括号及括号内的内容
+    - 去掉所有空白字符
+    """
+    # 去掉括号及括号内的内容
+    name = re.sub(r'\(.*?\)', '', name)
+    # 转小写
+    name = name.lower()
+    # 去掉所有空白字符
+    name = name.replace(" ", "")
+    return name
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 26, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 21, in check
+    assert candidate('ABC（中文）DEF') == 'abcdef'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据提供的测试断言和失败堆栈信息，可以定位到问题所在。具体来说，`'ABC（中文）DEF'` 的测试用例没有通过，返回值为 `'abcdef'`，但期望值为 `'abc中文def'`。这表明在处理包含中文字符的字符串时，代码没有正确地保留这些字符。
+
+根因在于：
+- 在去括号操作中，正则表达式 `r'\(.*?\)'` 会匹配并删除括号及其内部内容，包括中文字符。
+
+修改建议：
+- 在删除括号及括号内内容之前，先将字符串中的中文字符保留下来。可以通过先将非英文字符替换为临时占位符，再进行括号处理，最后再恢复这些字符。
+
+具体修改步骤：
+1. 将非英文字符替换为临时占位符（如 `@`）。
+2. 执行括号及括号内内容的删除操作。
+3. 将临时占位符恢复为原来的非英文字符。
+
+引用断言证据：
+```python
+assert candidate('ABC（中文）DEF') == 'abc中文def'
+```
+
+修改后的代码逻辑大致如下：
+1. 使用正则表达式将非英文字符替换为临时占位符。
+2. 执行括号及括号内内容的删除操作。
+3. 将临时占位符恢复为原来的非英文字符。
+
+请工程师在 `name` 变量上先进行上述步骤。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def normalize_name(name: str) -> str:
+    import re
+    
+    # 将非英文字符替换为临时占位符
+    temp_name = re.sub(r'[^A-Za-z]', '@', name)
+    
+    # 去掉括号及括号内的内容
+    temp_name = re.sub(r'\(.*?\)', '', temp_name)
+    
+    # 将临时占位符恢复为原来的非英文字符
+    result = re.sub(r'@', lambda m: name[name.find(m.group(0))], temp_name)
+    
+    return result.lower().replace(' ', '')
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(normalize_name)
+    ~~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 16, in check
+    assert candidate('Foo Bar') == 'foobar'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
 ==============================================================================
 END OF CASE
 
 ==============================================================================
-[V4-A 单+本体 dedup_tags] run_id=265 task=168 writer=None reviewer=- mode=single ontology=True
+[qwen-r2 D pipeline-本体 proj_dedup_tags] run_id=333 task=168 identity=3 reviewer=6 mode=pipeline ontology=False
 verdict=fail reactive=True
 ==============================================================================
 
@@ -142,38 +2142,104 @@ ROUND 1 -> fail
 ------------------------------------------------------------------------------
 [WRITER 提交代码]
 def dedup_tags(tags: list) -> list:
+    """
+    标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
     seen = set()
     result = []
     for tag in tags:
-        norm = tag.strip().lower()
-        if norm not in seen:
-            seen.add(norm)
-            result.append(norm)
+        # 去除首尾空白并转换为小写
+        clean_tag = tag.strip().lower()
+        if clean_tag not in seen:
+            seen.add(clean_tag)
+            result.append(tag)
     return result
 
 [沙箱测试输出]
 Traceback (most recent call last):
-  File "<string>", line 18, in <module>
+  File "<string>", line 23, in <module>
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
-  File "<string>", line 13, in check
-    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 19, in check
+    assert candidate([' x ', 'X', ' y']) == ['x', 'y']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError
+
+[REVIEWER 诊断]
+根据提供的断言和失败测试报告，可以定位到问题所在。具体来说，问题出在 `[' x ', 'X', ' y']` 这个测试用例上。虽然 `x` 和 `X` 被去重了，但 `y` 也被去重了，而实际上 `y` 应该保留。
+
+根据 docstring，去重时需要保持首次出现的顺序，并且忽略大小写差异和首尾空白。当前实现中，`clean_tag = tag.strip().lower()` 已经正确地去除了首尾空白并转换为小写，但在判断 `clean_tag` 是否在 `seen` 中时，直接使用了 `clean_tag`，而没有考虑 `tag` 的原始顺序。
+
+**修改建议**：在 `if clean_tag not in seen` 之前，先检查 `tag` 是否已经存在于 `result` 中，如果存在则跳过当前 `tag`。
+
+具体修改为：
+```python
+for tag in tags:
+    # 去除首尾空白并转换为小写
+    clean_tag = tag.strip().lower()
+    if clean_tag in seen:
+        continue
+    seen.add(clean_tag)
+    result.append(tag)
+```
+
+这样可以确保在 `seen` 中添加 `clean_tag` 之前，先检查 `tag` 是否已经存在于 `result` 中，从而保持原始顺序。
 
 ------------------------------------------------------------------------------
 ROUND 2 -> fail
 ------------------------------------------------------------------------------
 [WRITER 提交代码]
 def dedup_tags(tags: list) -> list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
     seen = set()
-    unique = []
+    result = []
     for tag in tags:
-        key = tag.strip().lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(tag)
-    return unique
+        # 去除首尾空白并转换为小写
+        clean_tag = tag.strip().lower()
+        if clean_tag in seen:
+            continue
+        seen.add(clean_tag)
+        result.append(tag)
+    return result
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "<string>", line 19, in check
+    assert candidate([' x ', 'X', ' y']) == ['x', 'y']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据断言 `assert candidate([' x ', 'X', ' y']) == ['x', 'y']` 失败，可以定位到问题出在 `clean_tag` 的处理上。具体来说，`' x '` 经过 `strip()` 去除首尾空白后变为 `'x'`，但 `seen` 集合中已经存在 `'x'`，因此 `' x '` 被忽略了，导致结果中没有包含 `' x '`。
+
+根因在于 `seen` 集合中存储的是去重后的标签，而 `result` 列表中应该保留原始的标签。因此，需要在 `result` 列表中添加原始的 `tag` 而不是 `clean_tag`。
+
+修改建议：将 `result.append(tag)` 改为 `result.append(clean_tag)`。
+
+具体修改如下：
+- 将 `result.append(tag)` 改为 `result.append(clean_tag)`。
+
+这样可以确保去重后的标签在结果中保留原始的格式。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def dedup_tags(tags: list) -> list:
+    seen = set()
+    result = []
+    for tag in tags:
+        clean_tag = tag.strip().lower()
+        if clean_tag not in seen:
+            seen.add(clean_tag)
+            result.append(tag)
+    return result
 
 [沙箱测试输出]
 Traceback (most recent call last):
@@ -185,32 +2251,553 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError
 
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_chunk_overlap] run_id=335 task=170 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    """把文本切成有重叠的分段。
+    每段不超过 max_len 字符；相邻段之间重叠 overlap 个字符；
+    最后一段即使很短也要保留。
+    """
+    if max_len <= 0 or overlap < 0:
+        raise ValueError("max_len must be positive and overlap must be non-negative")
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = max(start + max_len, len(text))
+        if start == 0:
+            chunk = text[:end]
+        else:
+            chunk = text[start - overlap:end]
+        chunks.append(chunk)
+        start = end - overlap
+
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 29, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据提供的实现和测试断言，代码在处理 `max_len` 和 `overlap` 参数时存在逻辑问题。具体来说，`max_len` 和 `overlap` 的边界条件没有完全满足 docstring 的要求。
+
+根据断言 `assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']`，可以发现实际输出是 `['abcd', 'cdef', 'efgh']`，而期望的输出是 `['abcd', 'cdef', 'efgh']`。这表明在 `start` 为 0 时，`chunk` 的生成逻辑没有问题。
+
+问题出现在 `max_len` 和 `overlap` 的边界条件处理上。当 `start` 为 0 时，`end` 应该是 `start + max_len`，但代码中直接使用了 `start + max_len` 作为 `end` 的初始值，这会导致在 `start` 为 0 时，`chunk` 的长度可能超过 `max_len`。
+
+**修改建议：**
+将 `start` 为 0 时的 `chunk` 生成逻辑改为：
+```python
+if start == 0:
+    chunk = text[:min(max_len, len(text))]
+```
+
+这样可以确保在 `start` 为 0 时，`chunk` 的长度不会超过 `max_len`。同时，确保 `end` 的计算逻辑正确，以满足相邻段之间的重叠要求。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_len
+        chunk = text[start:end]
+        if start == 0:
+            chunk = text[:min(max_len, len(text))]
+        chunks.append(chunk)
+        start = end - overlap
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 20, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 14, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据文档字符串，`chunk_overlap` 函数的实现需要满足以下要求：
+1. 每段不超过 `max_len` 字符。
+2. 相邻段之间重叠 `overlap` 个字符。
+3. 最后一段即使很短也要保留。
+
+从失败测试报告来看，`check` 函数中的第一个测试用例 `assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']` 失败了。实际输出与期望结果不符。
+
+具体问题在于：
+- 当 `start` 从 0 开始时，`chunk` 应该是 `text[:min(max_len, len(text))]`，即 `abcd`，但实现中直接使用了 `text[start:end]`，导致 `chunk` 为 `abcd` 而非 `abcd`。
+- 实际上，`start` 应该从 0 开始，`end` 应该是 `min(max_len, len(text))`，以确保第一段正确。
+
+修改建议：
+- 将 `start == 0` 的条件分支改为 `chunk = text[:min(max_len, len(text))]`。
+
+具体修改为：
+```python
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_len
+        if start == 0:
+            chunk = text[:min(max_len, len(text))]
+        else:
+            chunk = text[start - overlap:start + max_len - overlap]
+        chunks.append(chunk)
+        start = end - overlap
+    return chunks
+```
+
+这样可以确保第一段正确处理，并且后续段落也满足重叠要求。
+
 ------------------------------------------------------------------------------
 ROUND 3 -> fail
 ------------------------------------------------------------------------------
 [WRITER 提交代码]
-def dedup_tags(tags: list) -> list:
-    seen = set()
-    result = []
-    for tag in tags:
-        canon = tag.strip().lower()
-        if canon not in seen:
-            seen.add(canon)
-            result.append(canon)
-    return result
+def chunk_overlap(text: str, max_len: int, overlap: int) -> list:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_len
+        if start == 0:
+            chunk = text[:min(max_len, len(text))]
+        else:
+            chunk = text[start - overlap:start + max_len - overlap]
+        chunks.append(chunk)
+        start = end - overlap
+    return chunks
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 21, in <module>
+    check(chunk_overlap)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 15, in check
+    assert candidate('abcdefgh', 4, 2) == ['abcd', 'cdef', 'efgh']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_validate_tags (pass 样例)] run_id=337 task=172 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=pass reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def validate_tags(tags: list, allowed: list) -> list:
+    """闭集校验：只保留在 allowed 里的标签，预设外的丢弃。
+    返回去重后的合法标签列表，保持顺序。
+    """
+    if not tags:
+        return []
+    
+    valid_tags = [tag for tag in tags if tag in allowed]
+    return list(set(valid_tags))  # 去重并保持原顺序
 
 [沙箱测试输出]
 Traceback (most recent call last):
   File "<string>", line 18, in <module>
-    check(dedup_tags)
-    ~~~~~^^^^^^^^^^^^
+    check(validate_tags)
+    ~~~~~^^^^^^^^^^^^^^^
   File "<string>", line 13, in check
-    assert candidate(['A', 'a', 'B', 'b']) == ['A', 'B']
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    assert candidate(['规则', '乱七八糟', '法律', '规则'], ALLOWED) == ['规则', '法律']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据文档说明和测试断言，`validate_tags` 函数的实现存在以下问题：
+
+1. **去重逻辑问题**：`return list(set(valid_tags))` 会破坏原有顺序，而文档要求返回去重后的合法标签列表，保持顺序。
+2. **测试用例 `['规则', '乱七八糟', '法律', '规则']` 失败**：`['规则', '法律']` 应该包含重复的 '规则'，但去重后只保留了一个 '规则'。
+
+**修改建议**：在去重之前，先将 `valid_tags` 转换为一个有序集合，然后再转换为列表。可以使用 `OrderedDict` 来保持插入顺序。
+
+具体修改建议如下：
+- 将 `valid_tags` 转换为 `OrderedDict`，然后再转换为列表。
+
+修改后的代码逻辑应为：
+```python
+from collections import OrderedDict
+
+def validate_tags(tags: list, allowed: list) -> list:
+    if not tags:
+        return []
+    
+    valid_tags = [tag for tag in tags if tag in allowed]
+    return list(OrderedDict.fromkeys(valid_tags))
+```
+
+这样可以确保去重的同时保持原有顺序。
+
+------------------------------------------------------------------------------
+ROUND 2 -> pass
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+from collections import OrderedDict
+
+def validate_tags(tags: list, allowed: list) -> list:
+    if not tags:
+        return []
+    
+    valid_tags = [tag for tag in tags if tag in allowed]
+    return list(OrderedDict.fromkeys(valid_tags))
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_safe_truncate] run_id=338 task=173 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def safe_truncate(text: str, max_chars: int, ellipsis: str = '...') -> str:
+    """按字符数截断（不按字节，中文也要完整）。
+    超长时截断并追加 ellipsis；不超长原样返回。
+    """
+    if len(text) <= max_chars:
+        return text
+    truncated = ''
+    for char in text:
+        if len(truncated) + len(char.encode('utf-8')) > max_chars:
+            break
+        truncated += char
+    return truncated + ellipsis
+
+# 测试用例
+print(safe_truncate("hello", 5))  # hello
+print(safe_truncate("你好世界", 5))  # 你...
+print(safe_truncate("你好世界", 10))  # 你好世...
+print(safe_truncate("你好世界", 2))  # 你...
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 27, in <module>
+    check(safe_truncate)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 23, in check
+    assert candidate('你好世界', 2) == '你好...'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据测试用例 `check` 的断言，`safe_truncate('你好世界', 2)` 应该返回 `'你好...'`，但实际返回了 `'你好...'`，这表明在处理中文字符时，`safe_truncate` 函数的逻辑没有问题。问题可能出现在其他测试用例中。
+
+进一步分析失败测试报告，`AssertionError` 出现在 `check(safe_truncate)` 的调用中，具体是 `candidate('你好世界', 2)` 这一行。这表明 `safe_truncate` 在处理 `'你好世界'` 时，返回值与期望值不匹配。
+
+根据 docstring，`safe_truncate` 应该按字符数截断，中文字符应完整处理。从测试用例来看，`safe_truncate` 在处理 `'你好世界'` 时，`2` 个字符长度显然不足以包含任何完整的中文字符，因此应该返回 `'你好...'`。
+
+问题可能出现在 `safe_truncate` 函数的边界条件处理上。具体来说，`safe_truncate` 在 `max_chars` 小于文本长度时，应该截断并追加 `ellipsis`。但当前实现中，`max_chars` 为 2 时，`truncated` 为空，直接追加 `ellipsis`，导致返回值不正确。
+
+**修改建议**：在 `if len(text) <= max_chars:` 之后添加一个检查，确保 `truncated` 的长度不超过 `max_chars`，如果超过则追加 `ellipsis`。
+
+修改后的逻辑如下：
+```python
+    if len(text) <= max_chars:
+        return text
+    truncated = ''
+    for char in text:
+        if len(truncated) + len(char.encode('utf-8')) > max_chars:
+            break
+        truncated += char
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars] + ellipsis
+    return truncated
+```
+
+这样可以确保在 `max_chars` 较小时，`truncated` 不会超过 `max_chars`，从而正确返回 `'你好...'`。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def safe_truncate(text: str, max_chars: int, ellipsis: str = '...') -> str:
+    """按字符数截断（不按字节，中文也要完整）。
+    超长时截断并追加 ellipsis；不超长原样返回。
+    """
+    if len(text) <= max_chars:
+        return text
+    truncated = ''
+    for char in text:
+        if len(truncated) + len(char) > max_chars:
+            break
+        truncated += char
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars] + ellipsis
+    return truncated
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 23, in <module>
+    check(safe_truncate)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 18, in check
+    assert candidate('hello world', 5) == 'hello...'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据提供的实现和测试断言，代码在处理包含空格的字符串时出现了问题。具体来说，`'hello world'` 超过 `5` 个字符时，期望返回 `'hello...'`，但实际返回了 `'hello world...'`，这表明在截断时没有正确处理空格。
+
+根因在于 `for` 循环中，`truncated` 的长度计算没有考虑空格的长度。实际上，空格应被视为一个字符，但当前实现中，`len(char)` 会分别计算每个字符的长度，导致空格被错误地视为多个字符。
+
+**修改建议：** 将 `for char in text:` 改为 `for char in text.replace(' ', ''):`，即在遍历时先移除空格，确保每个 `char` 都是单个字符。然后在截断后重新插入空格。
+
+具体修改为：
+```python
+    truncated = ''
+    for char in text.replace(' ', ''):
+        if len(truncated) + len(char) > max_chars:
+            break
+        truncated += char
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars] + ellipsis
+    # 重新插入空格
+    return truncated.replace(' ', ' ', truncated.count(' '))
+```
+
+这样可以确保空格被正确处理，不会影响字符计数。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def safe_truncate(text: str, max_chars: int, ellipsis: str = '...') -> str:
+    """按字符数截断（不按字节，中文也要完整）。
+    超长时截断并追加 ellipsis；不超长原样返回。
+    """
+    truncated = ''
+    for char in text:
+        if len(truncated) + len(char) > max_chars:
+            break
+        truncated += char
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars] + ellipsis
+    # 重新插入空格
+    return truncated.replace(' ', ' ', truncated.count(' '))
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 22, in <module>
+    check(safe_truncate)
+    ~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 17, in check
+    assert candidate('hello world', 5) == 'hello...'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_extract_code (pass 样例)] run_id=339 task=174 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=pass reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> pass
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def extract_code(reply: str) -> str:
+    """从模型回答里提取纯 Python 代码。
+    优先提取 ```python ... ``` 代码块；没有代码块则从首个 def/from/import
+    开头的行开始截取到结尾；都没有则返回原文。
+    """
+    import re
+
+    # 检查是否有 ```python ... ``` 代码块
+    code_block_match = re.search(r'```python(.*?)```', reply, re.DOTALL)
+    if code_block_match:
+        return code_block_match.group(1).strip()
+
+    # 检查是否有 def/from/import 开头的行
+    lines = reply.split('\n')
+    start_index = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def ', 'from ', 'import ')):
+            start_index = i
+            break
+
+    if start_index is not None:
+        return '\n'.join(lines[start_index:]).strip()
+
+    return reply.strip()
+
+==============================================================================
+END OF CASE
+
+==============================================================================
+[qwen-r2 D pipeline-本体 proj_merge_summaries] run_id=340 task=175 identity=3 reviewer=6 mode=pipeline ontology=False
+verdict=fail reactive=True
+==============================================================================
+
+------------------------------------------------------------------------------
+ROUND 1 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def merge_summaries(parts: list) -> str:
+    """
+    把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    def clean_summary(summary: str) -> str:
+        """清理摘要，去除空白和标点，转换为小写"""
+        import string
+        return summary.strip().translate(str.maketrans('', '', string.punctuation)).lower()
+
+    unique_summaries = set()
+    cleaned_parts = [clean_summary(part) for part in parts if part.strip()]
+
+    for cleaned_part in cleaned_parts:
+        if cleaned_part not in unique_summaries:
+            unique_summaries.add(cleaned_part)
+
+    return '\n'.join(unique_summaries)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 28, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 22, in check
+    assert candidate(['a', 'b']) == 'a\nb'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据失败测试报告，`check(merge_summaries)` 的第一个测试用例 `assert candidate(['a', 'b']) == 'a\nb'` 失败了。这表明 `merge_summaries` 函数在处理 `['a', 'b']` 时，返回值与期望值 `'a\nb'` 不匹配。
+
+从实现来看，`merge_summaries` 函数的逻辑是正确的：首先清理摘要，然后去重，最后用换行连接剩余段。问题可能出在 `clean_summary` 函数的实现上。
+
+具体来说，`clean_summary` 函数的实现忽略了标点符号，但没有处理空字符串。在 `['a', 'b']` 这个测试用例中，`clean_summary('')` 会返回一个空字符串，而空字符串在 `unique_summaries` 集合中不会被去重，最终导致结果中包含多余的换行符。
+
+**修改建议：**
+
+在 `clean_summary` 函数中，直接过滤掉空字符串，避免它们进入 `unique_summaries` 集合。具体修改如下：
+
+```python
+def clean_summary(summary: str) -> str:
+    """清理摘要，去除空白和标点，转换为小写"""
+    import string
+    return summary.strip().translate(str.maketrans('', '', string.punctuation)).lower() if summary else ''
+```
+
+这样，空字符串在经过 `clean_summary` 处理后会变成空字符串，不会被加入 `unique_summaries` 集合，从而避免了多余的换行符。
+
+------------------------------------------------------------------------------
+ROUND 2 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def clean_summary(summary: str) -> str:
+    """清理摘要，去除空白和标点，转换为小写"""
+    import string
+    return summary.strip().translate(str.maketrans('', '', string.punctuation)).lower() if summary else ''
+
+def merge_summaries(parts: list) -> str:
+    """把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    unique_summaries = set()
+    for part in parts:
+        cleaned_summary = clean_summary(part)
+        if cleaned_summary:
+            unique_summaries.add(cleaned_summary)
+    
+    return '\n'.join(unique_summaries)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 26, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 20, in check
+    assert candidate(['a', 'b']) == 'a\nb'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+[REVIEWER 诊断]
+根据文档说明和测试断言，`merge_summaries` 函数的实现存在以下问题：
+
+1. **断言 `['a', 'b'] == 'a\nb'` 失败**：这表明函数在处理多个非空段时，没有正确地合并它们。具体来说，`unique_summaries` 集合中添加了 `cleaned_summary`，但没有正确地处理多个段的合并。
+
+根因定位：`unique_summaries` 集合在处理多个段时，没有正确地合并它们，导致 `'\n'.join(unique_summaries)` 生成的结果不正确。
+
+修改建议：在 `merge_summaries` 函数中，需要确保 `unique_summaries` 集合中的元素是唯一的，并且在生成最终结果时，正确地使用换行符连接这些元素。具体来说，可以在 `cleaned_summary` 加入 `unique_summaries` 之前，先检查该 `cleaned_summary` 是否已经存在于集合中，如果不存在，则加入。
+
+修改后的逻辑如下：
+
+```python
+for part in parts:
+    cleaned_summary = clean_summary(part)
+    if cleaned_summary and cleaned_summary not in unique_summaries:
+        unique_summaries.add(cleaned_summary)
+```
+
+这样可以确保 `unique_summaries` 集合中只包含唯一的摘要段，并且在生成最终结果时，正确地使用换行符连接这些元素。
+
+------------------------------------------------------------------------------
+ROUND 3 -> fail
+------------------------------------------------------------------------------
+[WRITER 提交代码]
+def merge_summaries(parts: list) -> str:
+    """把多段摘要聚合成整篇摘要。
+    过滤空白段；去除内容重复的段（忽略空白和标点差异）；
+    用换行连接剩余段。
+    """
+    def clean_summary(summary: str) -> str:
+        """清理摘要段，去除空白和标点符号，并转换为小写。"""
+        import string
+        return summary.strip().translate(str.maketrans('', '', string.punctuation)).lower()
+
+    unique_summaries = set()
+    for part in parts:
+        cleaned_summary = clean_summary(part)
+        if cleaned_summary and cleaned_summary not in unique_summaries:
+            unique_summaries.add(cleaned_summary)
+
+    return '\n'.join(unique_summaries)
+
+[沙箱测试输出]
+Traceback (most recent call last):
+  File "<string>", line 26, in <module>
+    check(merge_summaries)
+    ~~~~~^^^^^^^^^^^^^^^^^
+  File "<string>", line 20, in check
+    assert candidate(['a', 'b']) == 'a\nb'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError
 
 ==============================================================================
 END OF CASE
 
 
----- end of log ----
+---- end of log（dumped 24 个 case）----
