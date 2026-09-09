@@ -1,0 +1,80 @@
+{
+  "name": "ppt-read-write",
+  "description": "读取、生成和写入 PowerPoint(.pptx) 文件的 MCP 服务器，支持本地文件、远程 URL，并可选通过 PAPER_PROXY 外部 API 完成解析/生成。",
+  "transport": "stdio",
+  "image": "mcp/ppt-read-write:latest",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "tools": [
+    {
+      "name": "read_ppt",
+      "description": "读取 PowerPoint 文件并提取每张幻灯片的文字、表格与演讲者备注",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "本地 .pptx 文件路径，或 http(s) 下载地址"
+          },
+          "include_notes": {
+            "type": "boolean",
+            "description": "是否包含演讲者备注，默认 true"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      }
+    },
+    {
+      "name": "write_ppt",
+      "description": "根据结构化内容创建或覆盖 PowerPoint 文件",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "output_path": {
+            "type": "string",
+            "description": "要生成的 .pptx 文件路径"
+          },
+          "slides": {
+            "type": "array",
+            "description": "PPT 页面列表",
+            "items": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string",
+                  "description": "无 bullets 时作为正文内容"
+                },
+                "bullets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "要点列表"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "幻灯片标题"
+                }
+              },
+              "required": []
+            }
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "文件已存在时是否允许覆盖，默认 true"
+          }
+        },
+        "required": [
+          "output_path",
+          "slides"
+        ]
+      }
+    }
+  ],
+  "server_py": "import base64\nimport io\nimport json\nimport os\nfrom pathlib import Path\nfrom typing import Any, Dict, List, Optional\n\nimport httpx\nfrom mcp.server.fastmcp import FastMCP\nfrom pptx import Presentation\nfrom pptx.enum.shapes import MSO_SHAPE_TYPE\nfrom pptx.util import Inches\n\nPAPER_PROXY = os.environ.get('PAPER_PROXY', '').rstrip('/')\nPPT_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'\n\nmcp = FastMCP('ppt-read-write')\n_client = httpx.Client(verify=False, timeout=120.0)\n\n\ndef _proxy_json(operation: str, payload: Optional[Dict[str, Any]] = None, file_path: Optional[str] = None) -> Optional[Dict[str, Any]]:\n    if not PAPER_PROXY:\n        return None\n    url = f'{PAPER_PROXY}/{operation}'\n    try:\n        if file_path:\n            with open(file_path, 'rb') as fh:\n                response = _client.post(\n                    url,\n                    files={'file': (Path(file_path).name, fh, PPT_MIME)},\n                    data=payload or {},\n                )\n        else:\n            response = _client.post(url, json=payload or {})\n        response.raise_for_status()\n        try:\n            return response.json()\n        except Exception:\n            return {'ok': False, 'error': 'proxy response is not JSON', 'text': response.text[:500]}\n    except Exception as exc:\n        return {'ok': False, 'error': str(exc)}\n\n\ndef _load_source_bytes(source: str) -> bytes:\n    if source.startswith('http://') or source.startswith('https://'):\n        response = _client.get(source)\n        response.raise_for_status()\n        return response.content\n    path = Path(source)\n    if not path.exists():\n        raise FileNotFoundError(f'PPT file not found: {source}')\n    return path.read_bytes()\n\n\ndef _collect_shape_text(shape) -> List[str]:\n    texts: List[str] = []\n    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:\n        for child in shape.shapes:\n            texts.extend(_collect_shape_text(child))\n    if shape.has_text_frame:\n        for paragraph in shape.text_frame.paragraphs:\n            line = paragraph.text.strip()\n            if line:\n                texts.append(line)\n    if shape.has_table:\n        for row in shape.table.rows:\n            cells = [' '.join(cell.text.split()) for cell in row.cells]\n            if any(cells):\n                texts.append(' | '.join(cells))\n    return texts\n\n\ndef _parse_pptx_data(data: bytes) -> Dict[str, Any]:\n    prs = Presentation(io.BytesIO(data))\n    slides_payload: List[Dict[str, Any]] = []\n    for index, slide in enumerate(prs.slides, start=1):\n        shape_texts: List[str] = []\n        for shape in slide.shapes:\n            shape_texts.extend(_collect_shape_text(shape))\n        notes = ''\n        try:\n            notes = slide.notes_slide.notes_text_frame.text.strip()\n        except Exception:\n            notes = ''\n        slides_payload.append({\n            'slide_number': index,\n            'texts': shape_texts,\n            'notes': notes,\n        })\n    return {'slide_count': len(prs.slides), 'slides': slides_payload}\n\n\ndef _create_pptx_bytes(slides: List[Dict[str, Any]]) -> bytes:\n    prs = Presentation()\n    layout = prs.slide_layouts[1]\n    for item in slides:\n        if not isinstance(item, dict):\n            raise ValueError('each slide must be an object')\n        slide = prs.slides.add_slide(layout)\n        title_shape = slide.shapes.title\n        if title_shape is not None:\n            title_shape.text = str(item.get('title', ''))\n        body_placeholder = None\n        for placeholder in slide.placeholders:\n            if placeholder.placeholder_format.idx == 1:\n                body_placeholder = placeholder\n                break\n        if body_placeholder is None:\n            body_placeholder = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(5))\n        text_frame = body_placeholder.text_frame\n        text_frame.clear()\n        lines: List[str] = []\n        if item.get('bullets'):\n            lines = [str(bullet) for bullet in item['bullets']]\n        elif item.get('content'):\n            lines = str(item['content']).splitlines()\n        if lines:\n            text_frame.text = lines[0]\n            for line in lines[1:]:\n                paragraph = text_frame.add_paragraph()\n                paragraph.text = line\n        else:\n            text_frame.text = ''\n    buffer = io.BytesIO()\n    prs.save(buffer)\n    return buffer.getvalue()\n\n\n@mcp.tool()\ndef read_ppt(source: str, include_notes: bool = True) -> str:\n    '''读取 PowerPoint 文件并返回每张幻灯片的文字信息。\n\n    Args:\n        source: 本地 .pptx 文件路径或 http(s) 下载地址。\n        include_notes: 是否包含演讲者备注。\n    '''\n    proxy_result = None\n    if PAPER_PROXY:\n        payload = {'include_notes': str(include_notes).lower()}\n        if source.startswith('http://') or source.startswith('https://'):\n            proxy_result = _proxy_json('ppt/read', payload={'url': source, 'include_notes': str(include_notes).lower()})\n        else:\n            proxy_result = _proxy_json('ppt/read', payload=payload, file_path=source)\n        if proxy_result is not None and proxy_result.get('ok', True) is not False:\n            return json.dumps({'source': source, **proxy_result}, ensure_ascii=False, indent=2)\n    try:\n        data = _load_source_bytes(source)\n        result = _parse_pptx_data(data)\n        if not include_notes:\n            for slide in result['slides']:\n                slide['notes'] = ''\n        return json.dumps(result, ensure_ascii=False, indent=2)\n    except Exception as exc:\n        return json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False)\n\n\n@mcp.tool()\ndef write_ppt(output_path: str, slides: List[Dict[str, Any]], overwrite: bool = True) -> str:\n    '''根据结构化内容生成 PowerPoint(.pptx) 文件并写入本地。\n\n    Args:\n        output_path: 要写入的 .pptx 文件路径。\n        slides: 幻灯片列表，每项可包含 title、bullets 或 content。\n        overwrite: 文件已存在时是否允许覆盖。\n    '''\n    if not isinstance(slides, list):\n        return json.dumps({'ok': False, 'error': 'slides must be a list'}, ensure_ascii=False)\n    path = Path(output_path)\n    if path.exists() and not overwrite:\n        return json.dumps({'ok': False, 'error': f'{path} already exists and overwrite is False'}, ensure_ascii=False)\n\n    if PAPER_PROXY:\n        proxy_result = _proxy_json('ppt/write', payload={'output_path': str(path), 'slides': slides, 'overwrite': overwrite})\n        if proxy_result is not None and proxy_result.get('ok', True) is not False:\n            encoded = proxy_result.get('file_base64') or proxy_result.get('base64') or proxy_result.get('data')\n            if encoded:\n                try:\n                    path.parent.mkdir(parents=True, exist_ok=True)\n                    path.write_bytes(base64.b64decode(encoded))\n                    return json.dumps({'ok': True, 'file': str(path), 'mode': 'proxy', 'proxy': proxy_result}, ensure_ascii=False, indent=2)\n                except Exception as exc:\n                    return json.dumps({'ok': False, 'error': 'proxy returned invalid base64: ' + str(exc)}, ensure_ascii=False)\n            proxy_path = proxy_result.get('path')\n            if proxy_path and Path(proxy_path).exists():\n                return json.dumps({'ok': True, 'file': str(path), 'mode': 'proxy', 'proxy': proxy_result}, ensure_ascii=False, indent=2)\n\n    try:\n        data = _create_pptx_bytes(slides)\n        path.parent.mkdir(parents=True, exist_ok=True)\n        path.write_bytes(data)\n    except Exception as exc:\n        return json.dumps({'ok': False, 'error': 'write_ppt local failed: ' + str(exc)}, ensure_ascii=False)\n    return json.dumps({'ok': True, 'file': str(path), 'mode': 'local'}, ensure_ascii=False, indent=2)\n\n\nif __name__ == '__main__':\n    mcp.run()",
+  "dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nRUN pip install --no-cache-dir mcp python-pptx httpx\nCOPY server.py .\nCMD [\"python\", \"server.py\"]"
+}
