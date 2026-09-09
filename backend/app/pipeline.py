@@ -13,7 +13,7 @@
 """
 import json
 
-from . import db, jobs
+from . import context_mgr as cm, db, jobs
 
 # ---------------- 关系类型闭集（语义化） ----------------
 RELATION_DESIGN = "design"        # 设计 →（流程设计师设计编排）
@@ -452,20 +452,89 @@ def create_run(conn, pipeline_id, job_id=None) -> int:
     return cur.lastrowid
 
 
-def store_handoff(conn, run_id, node_id, handoff) -> int:
+def store_handoff(conn, run_id, node_id, kind, content, refined=False,
+                  raw_chars=0) -> int:
+    """存结构化交接物（kind 打包 + 精炼元数据），供下游按 kind 注入。"""
+    packed = cm.pack_handoff(kind, content, refined=refined, raw_chars=raw_chars)
     cur = conn.execute(
         "INSERT INTO pipeline_run_handoffs(run_id, node_id, handoff, created_at)"
-        " VALUES(?,?,?,?)", (run_id, node_id, str(handoff or ""), db.now()))
+        " VALUES(?,?,?,?)", (run_id, node_id, packed, db.now()))
     conn.commit()
     return cur.lastrowid
 
 
+def _persona_name(conn, persona_id) -> str:
+    if not persona_id:
+        return ""
+    r = conn.execute("SELECT name FROM identities WHERE id=?",
+                     (persona_id,)).fetchone()
+    return r["name"] if r else ""
+
+
+def _node_out_kind(node, relations) -> str:
+    """推断节点出站交接物 kind：优先取非 ask 出边的 handoff_type，其次按步骤名。"""
+    out_edges = [r for r in relations if r["from_node_id"] == node["id"]
+                 and r["relation_type"] != RELATION_ASK]
+    for r in out_edges:
+        ht = (r.get("handoff_type") or "").strip()
+        if ht:
+            return cm.normalize_kind(ht)
+    return cm.kind_for_step(node.get("step_name") or node.get("node_key") or "")
+
+
+def refine_node_output(conn, node, output: str, relations,
+                       provider: str = "llm2") -> dict:
+    """节点产出的交接物治理：标 kind + 超预算由该数字人自缩减。
+
+    返回 {"kind","content","refined","raw_chars"}；LLM 精炼失败有确定性截断兜底。
+    """
+    kind = _node_out_kind(node, relations)
+    persona_id = node.get("persona_id")
+    if persona_id:
+        res = cm.refine_handoff(conn, persona_id, _persona_name(conn, persona_id),
+                                kind, output, provider=provider)
+        return res
+    return {"kind": kind, "content": output, "refined": False,
+            "raw_chars": len(output or ""), "chars": len(output or ""),
+            "error": None}
+
+
+def _forward_relations(relations) -> list[dict]:
+    """正向流转关系（排除 ask 询问反向边——那不决定数据流向）。"""
+    return [r for r in relations if r.get("relation_type") != RELATION_ASK]
+
+
+def _ancestor_node_ids(node_id, relations, nodes) -> list[int]:
+    """沿正向边收集 node 的全部祖先节点 id（拓扑上游闭包，不含自身）。
+
+    直接上游 + 间接上游（如 reviewer 需要拿需求方文本，即使中间隔着设计/审查）。
+    ask（询问）是反向边不参与数据传递；design（流程设计师供给）也纳入。
+    """
+    ids = set()
+    frontier = [r["from_node_id"] for r in _forward_relations(relations)
+                if r["to_node_id"] == node_id]
+    while frontier:
+        cur = frontier.pop()
+        if cur in ids:
+            continue
+        ids.add(cur)
+        # 继续向上：cur 的祖先 = 以 cur 为 to 的边的 from
+        frontier += [r["from_node_id"] for r in _forward_relations(relations)
+                     if r["to_node_id"] == cur]
+    order = [n["id"] for n in nodes if n["id"] in ids]
+    return order
+
+
 def collect_inputs(conn, run_id, node, nodes, relations) -> list[str]:
-    """收集该节点的所有上游节点的交接物（按 relations 的 from → to）。"""
+    """收集该节点的全部祖先节点交接物（跨级上下文）。
+
+    与老版本（只收直接上游）的差异：pipeline 数据契约是「下游能看见上游全部
+    产物」——reviewer 需要需求方文本时，即使中间隔着设计/编码，也沿正向边
+    闭包收集。每条交接物带 kind（context_mgr 打包），下游 shape_inputs 按
+    kind 分组 + 预算裁剪，避免无界注入。
+    """
     inputs = []
-    upstream = [r["from_node_id"] for r in relations
-                if r["to_node_id"] == node["id"]]
-    for uid in upstream:
+    for uid in _ancestor_node_ids(node["id"], relations, nodes):
         rows = conn.execute(
             "SELECT handoff FROM pipeline_run_handoffs WHERE run_id=? AND node_id=?"
             " ORDER BY id", (run_id, uid)).fetchall()
@@ -511,8 +580,12 @@ def _run_deterministic(conn, node, inputs, parent_job_id) -> str:
                       ensure_ascii=False)
 
 
-def _run_nominate(conn, node, inputs) -> str:
-    """nominate 节点执行 = 数字人 chat.answer（自带 tool-use loop）。"""
+def _run_nominate(conn, node, inputs, relations=None) -> str:
+    """nominate 节点执行 = 数字人 chat.answer（自带 tool-use loop）。
+
+    inputs 为上游交接物原始文本；按 kind 分组裁剪后注入（context_mgr），
+    数字人只看到自己该看的、且每 kind 在预算内。
+    """
     from . import chat
     persona_id = node.get("persona_id")
     step = (node.get("step_name") or node.get("node_key") or "").strip()
@@ -521,7 +594,13 @@ def _run_nominate(conn, node, inputs) -> str:
                           ensure_ascii=False)
     msg = f"【编排任务】{step}\n"
     if inputs:
-        msg += "\n上游交接物：\n" + "\n".join(f"- {x[:500]}" for x in inputs)
+        shaped = cm.shape_inputs(inputs)
+        # 角色入站白名单：数字人只注入它该看的 kind（调试看需求/代码/报告…）
+        pname = _persona_name(conn, persona_id)
+        allow = cm.allowed_kinds_for(pname, [it["kind"] for it in shaped])
+        allow_set = set(allow)
+        shaped = [it for it in shaped if it["kind"] in allow_set]
+        msg += "\n上游交接物（按类型）：\n" + cm.render_inputs(shaped)
     msg += "\n请完成本步骤并产出可传递给下游的交接物。"
     r = chat.answer(conn, persona_id, msg, use_ontology=True, use_rag=True,
                     provider="llm2")
@@ -557,10 +636,17 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
         if node["kind"] == KIND_DETERMINISTIC:
             output = _run_deterministic(conn, node, inputs, job_id)
         else:
-            output = _run_nominate(conn, node, inputs)
-        store_handoff(conn, run_id, node["id"], output)
+            output = _run_nominate(conn, node, inputs, p["relations"])
+        # 上下文管理：标 kind + 超预算由该数字人自缩减后落库（含精炼元数据）
+        rr = refine_node_output(conn, node, output, p["relations"])
+        store_handoff(conn, run_id, node["id"], rr["kind"], rr["content"],
+                      refined=rr.get("refined", False),
+                      raw_chars=rr.get("raw_chars", len(output or "")))
         jobs.emit(conn, job_id, "pipeline.node",
-                  {"node_key": node["node_key"], "status": "done", "index": i})
+                  {"node_key": node["node_key"], "status": "done", "index": i,
+                   "kind": rr["kind"], "chars": len(rr["content"] or ""),
+                   "refined": rr.get("refined", False),
+                   "raw_chars": rr.get("raw_chars", 0)})
         jobs.update_progress(conn, job_id, i + 1, len(order))
         conn.execute("UPDATE pipeline_runs SET current_node_id=?, status='running'"
                      " WHERE id=?", (node["id"], run_id))

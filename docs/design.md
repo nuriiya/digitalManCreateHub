@@ -291,6 +291,43 @@
 - 运行 = job；跨节点 handoff 记录 schema；对话模式可改流程（LLM 提名 change → 批准/拒绝）。
 - 前端 PipelinePage：深色 SVG（节点深底亮字 + kind 配色 + 审核门 + 询问回退 + 自适应布局）。
 
+#### 5.3.1 上下文管理器（context_mgr.py · 平台通用件）
+
+纯代码层默认契约，不建 DB 实体；管住「谁给我什么 / 我给谁什么 / 太长先压缩」，供
+pipeline 引擎 / capability reviewer / chat 共用：
+
+- **交接物带 kind**：`pack_handoff` 把节点产出打包为 JSON（kind + content + chars +
+  refined + raw_chars），`unpack_handoff` 解包并兼容历史纯文本。kind 闭集：需求规格 /
+  技术方案 / 代码实现 / 审查意见 / 失败测试报告 / 任务要求 / 隐藏测试断言 / 调研报告 /
+  交接物（generic）。自由文本 handoff_type 经 `normalize_kind` / `KIND_ALIASES` 归一化。
+- **预算表**：`KIND_BUDGET`（出站）与 `KIND_INPUT_BUDGET`（入站注入）每 kind 字符上限；
+  `budget_for` 未收录回退 DEFAULT_BUDGET。
+- **精炼器 refine_handoff**：节点产出超预算 → 由该数字人同模型二次生成「≤预算字交接
+  摘要」；LLM 失败/超预算仍超 → `truncate_head_tail` 确定性兜底（保头尾去中段）。
+  精炼发生在**产出侧**（上游数字人自缩减后再交下游），非下游硬截断。
+- **角色入站白名单** `ROLE_INPUT_KINDS`：按 identity.name 子串匹配（调试 / 测试 / 审查 /
+  代码 / 设计 / 需求），命中 kind 才注入；未知角色全收。纯代码默认，后续可落
+  persona_interfaces 表个性化。
+- **shape_inputs / render_inputs**：下游入站按 kind 分组合并 + 预算裁剪 → 渲染为
+  `【kind】…` 分组注入文本。
+
+#### 5.3.2 pipeline 引擎接入（数据上下文传递）
+
+- 节点出站 kind：`_node_out_kind` 优先取非 ask 出边 handoff_type（经 normalize），
+  其次按 step_name 推断（NODE_OUT_KIND_BY_STEP）。
+- 产出治理 `refine_node_output`：每次节点执行后标 kind + 超预算自缩减 → `store_handoff`
+  存打包交接物（含 refined / raw_chars 元数据）。
+- **全祖先收集** `_ancestor_node_ids`：collect_inputs 不再只看直接上游，而是沿正向边
+  闭包收集全部祖先产物（reviewer 能看到需求方文本，即使隔着设计/编码）。ask 反向边
+  不参与数据流。
+- 下游注入 `_run_nominate`：shape_inputs（按 kind 分组 + 预算）→ 角色白名单过滤 →
+  render_inputs（【kind】标签）→ 拼入 chat.answer，替换旧版「一律 500 字符截断」。
+- **4 元消融第 5 组实证**（results_pipe1_fed，2026-09-09）：reviewer 喂饱（任务
+  docstring + 隐藏测试断言 + 全量失败输出）后 pass 7/12 与未喂饱持平——R1 诊断质量
+  显著提升（精确引用断言 vs 泛泛而谈），但 writer 二次修正成新瓶颈（修正代码崩成
+  61-73 字空壳）。结论：单靠喂饱 reviewer 不够，需 writer 修正环节也接入上下文
+  （或 reviewer 直接产出补丁而非建议）。
+
 ### 5.4 调研链路（research.py，持续调研）
 
 多源搜索 → 置信度分级 → 跨源聚合排序 → 入库 RAG：

@@ -86,6 +86,18 @@
 
 题源：HumanEval 164（可执行真值）+ 项目相关题（capability_tasks.json / capability_tasks_project.json）。
 
+**消融矩阵实证基线**（12 道项目题 × qwen2.5:7b-32k，2026-09-09 五组）：
+| 组 | 形态 | pass | 说明 |
+|---|---|---|---|
+| A | 单数字人 + 本体注入 | **9/12** | 当前最优；本体规则即考题答案 |
+| B | 单数字人 − 本体 | 7/12 | 本体轴增益 +2 |
+| C | pipeline（writer↔reviewer）+ 本体 | 7/12 | reviewer 同模型转述有损 |
+| D | pipeline − 本体 | 7/12 | 与 B 持平，轮次 3→2 微改善 |
+| E | pipeline + 本体 + **reviewer 喂饱**（docstring+断言+全量输出） | 7/12 | R1 诊断质量↑，writer 二次修正成新瓶颈 |
+
+结论：reviewer 信息饥饿非唯一瓶颈（E 不升）；瓶颈已转移到 writer 读诊断后的修正环节，
+需 writer 修正接入上下文或 reviewer 直接产补丁（results_pipe1_fed/，design §5.3.2）。
+
 ## T-D 训练师迭代（Trainer）
 
 | 指标 | 定义 | 用途 |

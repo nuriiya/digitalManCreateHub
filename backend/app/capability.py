@@ -290,15 +290,35 @@ def _reviewer_system(conn, reviewer_id: int, use_ontology: bool) -> str:
 
 def _review_diagnose(conn, reviewer_id: int, code: str, output: str,
                      provider: str, ollama_model: str | None,
-                     use_ontology: bool) -> str:
-    """reviewer（如调试工程师）读 writer 代码 + 沙箱失败 → 返回修复建议。"""
+                     use_ontology: bool, task: dict | None = None) -> str:
+    """reviewer（如调试工程师）读 writer 代码 + 沙箱失败 → 返回修复建议。
+
+    上下文管理：按 kind 注入（context_mgr 打包/预算）——
+      - 【任务要求】能力题 prompt（签名+docstring）：reviewer 得先知道题目要求什么；
+      - 【隐藏测试断言】test 源码：reviewer 能直接看到"断言期待什么"，
+        不再靠猜（这是 4 元消融 pipeline 丢分的根因之一）；
+      - 【代码实现】writer 提交的实现；
+      - 【失败测试报告】沙箱完整输出（取消 1500 截断猜测，按预算裁剪）。
+    """
+    from . import context_mgr as cm
     system = _reviewer_system(conn, reviewer_id, use_ontology)
-    user = (
-        "代码工程师提交的实现如下：\n\n```python\n"
-        f"{code[:3000]}\n```\n\n"
-        "运行隐藏测试失败，输出：\n\n```\n"
-        f"{str(output)[:1500]}\n```\n\n"
-        "请定位根因并给出可执行的修改建议（只分析，不要写完整实现）。")
+    lines = ["代码工程师提交的实现如下：\n\n```python", code[:3000],
+             "```\n"]
+    # 任务要求 + 隐藏测试断言优先注入（reviewer 关键上下文，不得截断到不可读）
+    task_prompt = (task or {}).get("prompt") or ""
+    task_test = (task or {}).get("test") or ""
+    if task_prompt:
+        cap = cm.budget_for(cm.KIND_TASK)
+        lines.append(f"\n【任务要求】题目 docstring（重要，判定标准在此）\n"
+                     f"```\n{task_prompt[:cap]}\n```")
+    if task_test:
+        cap = cm.budget_for(cm.KIND_TEST_ASSERT)
+        lines.append(f"\n【隐藏测试断言】断言源码（reviewer 可自行判断期望 vs 实际）\n"
+                     f"```\n{task_test[:cap]}\n```")
+    lines.append(f"\n【失败测试报告】沙箱运行失败输出\n```\n{str(output)[:4000]}\n```")
+    lines.append("\n请定位根因并给出可执行的修改建议（引用断言证据，只分析，"
+                 "不要写完整实现）。")
+    user = "\n".join(lines)
     try:
         return _call_channel(provider,
                              [{"role": "system", "content": system},
@@ -331,7 +351,8 @@ def _solve_pipeline(conn, writer_id: int, reviewer_id: int, task: dict,
         diag = ""
         if verdict != "pass" and rnd < MAX_REACTIVE_ROUNDS:
             diag = _review_diagnose(conn, reviewer_id, code, output,
-                                    provider, ollama_model, use_ontology)
+                                    provider, ollama_model, use_ontology,
+                                    task=task)
             feedback = diag or output  # reviewer 失败则回退裸堆栈
         rounds.append({"round": rnd, "verdict": verdict, "output": output,
                        "code": code,

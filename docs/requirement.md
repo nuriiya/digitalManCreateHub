@@ -117,6 +117,10 @@
 | R-7.6 | 对话生成 pipeline（LLM 设计节点+关系 → draft） | 已实现 | 见 design §5.2 |
 | R-7.7 | 深色 SVG 编排图 + 审核门 + ask | 已实现 | PipelinePage |
 | R-7.8 | 训练师接入 pipeline（train on pipeline） | 已实现 | TrainerPanel |
+| R-7.9 | 上下文管理器（每数字人通用）：交接物带 kind + 预算 + 超限自缩减 | 已实现 | context_mgr（design §5.3.1） |
+| R-7.10 | 节点数据契约：全祖先收集 + 角色入站白名单 + 按 kind 注入 | 已实现 | design §5.3.2（collect_inputs/refine_node_output） |
+| R-7.11 | reviewer 关键上下文：任务 docstring + 隐藏测试断言 + 全量失败输出 | 已实现 | capability._review_diagnose |
+| R-7.12 | 流程图接口体现：节点入站/出站 kind + 边传递内容标注 | 已实现 | PipelinePage 接口行 + label |
 
 ## R-8 调研与知识入库（design §5.4）
 

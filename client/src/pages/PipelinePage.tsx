@@ -19,6 +19,43 @@ const KIND_LABEL: Record<string, string> = {
   nominate: '提名节点', deterministic: '确定性节点',
 }
 
+const NODE_H = 88          // 节点矩形高（含上方标题区 + 底部接口行）
+const IFACE_BAND = 30      // 底部接口条高度（接收/产出 kind 标签）
+const REL_KIND_NAME: Record<string, string> = {
+  需求: '需求规格', 需求规格: '需求规格', 需求文档: '需求规格',
+  技术方案: '技术方案', 设计: '技术方案', 设计文档: '技术方案',
+  代码: '代码实现', 代码实现: '代码实现', 审查通过代码: '代码实现', 修改后代码: '代码实现',
+  审查意见: '审查意见', 代码审查: '审查意见',
+  失败测试报告: '失败测试报告', 测试报告: '失败测试报告', 测试输出: '失败测试报告',
+}
+const KIND_COLOR: Record<string, string> = {
+  需求规格: '#5DCAA8', 技术方案: '#7FB4FF', 代码实现: '#FFC24D',
+  审查意见: '#FF9F7B', 失败测试报告: '#FF6B8A',
+}
+
+// 归一化交接物类型（与 backend context_mgr.normalize_kind 保持一致的子集）
+const normKind = (raw: string | null | undefined): string => {
+  const r = (raw || '').trim()
+  return REL_KIND_NAME[r] || r || '交接物'
+}
+// 从 relations 推导某节点的入站/出站 kind 列表
+const nodeIfaceKinds = (cur: Pipeline, n: PipelineNode) => {
+  const inKinds: string[] = []
+  const outKinds: string[] = []
+  cur.relations.forEach((r) => {
+    if (r.relation_type === 'ask') return
+    if (r.to_node_id === n.id) {
+      const k = normKind(r.handoff_type)
+      if (!inKinds.includes(k)) inKinds.push(k)
+    }
+    if (r.from_node_id === n.id) {
+      const k = normKind(r.handoff_type)
+      if (!outKinds.includes(k)) outKinds.push(k)
+    }
+  })
+  return { inKinds, outKinds }
+}
+
 // 估算文本渲染宽度（中文全角按 1 个字号宽，英文半角按 0.6 个字号宽）
 function textWidth(s: string, fontSize: number): number {
   let w = 0
@@ -28,16 +65,19 @@ function textWidth(s: string, fontSize: number): number {
   return w
 }
 
-// 计算节点框宽（根据 node_key / step_name / kind 三行文字自适应，最小 100）
-function nodeBoxWidth(n: PipelineNode, personaName: (id: number | null) => string): number {
+// 计算节点框宽（根据 node_key / step_name / kind + 接口行文本自适应，最小 120）
+function nodeBoxWidth(p: Pipeline, n: PipelineNode, personaName: (id: number | null) => string): number {
   const label = n.step_name || personaName(n.persona_id)
+  const { inKinds, outKinds } = nodeIfaceKinds(p, n)
   const lines = [
     { text: n.node_key, fs: 12 },
     { text: label, fs: 11 },
     { text: KIND_LABEL[n.kind] || n.kind, fs: 10 },
+    { text: `入站 ${inKinds.join('·')}`, fs: 10 },
+    { text: `产出 ${outKinds.join('·')}`, fs: 10 },
   ]
   const maxText = Math.max(...lines.map((l) => textWidth(l.text, l.fs)))
-  return Math.max(100, Math.min(240, maxText + 28))
+  return Math.max(120, Math.min(280, maxText + 28))
 }
 
 // 简单拓扑分层布局（DAG），节点宽度自适应、层内垂直排布
@@ -80,16 +120,16 @@ function layoutPipeline(
 
   const nodeById = new Map(p.nodes.map((n) => [n.id, n]))
   const widths = layers.map((layer) =>
-    Math.max(...layer.map((id) => nodeBoxWidth(nodeById.get(id)!, personaName))))
-  const H_GAP = 40   // 节点垂直间距
-  const V_GAP = 50   // 层水平间距
+    Math.max(...layer.map((id) => nodeBoxWidth(p, nodeById.get(id)!, personaName))))
+  const H_GAP = 46   // 节点垂直间距（含接口条，需 > IFACE_BAND）
+  const V_GAP = 60   // 层水平间距
   let x = 40
   layers.forEach((layer, li) => {
     const w = widths[li]
     let y = 40
     layer.forEach((id) => {
       pos[id] = { x, y, w }
-      y += 60 + H_GAP
+      y += NODE_H + H_GAP
     })
     x += w + V_GAP
   })
@@ -400,8 +440,8 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
 
 // 自绘 SVG 流程图（DAG）
 function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Record<number, { x: number; y: number; w: number }>; personaName: (id: number | null) => string }) {
-  const W = Math.max(640, ...cur.nodes.map((n) => (layout[n.id]?.x ?? 0) + (layout[n.id]?.w ?? 100)).concat([0])) + 60
-  const H = Math.max(300, ...cur.nodes.map((n) => layout[n.id]?.y ?? 0).concat([0])) + 120
+  const W = Math.max(700, ...cur.nodes.map((n) => (layout[n.id]?.x ?? 0) + (layout[n.id]?.w ?? 100)).concat([0])) + 60
+  const H = Math.max(320, ...cur.nodes.map((n) => (layout[n.id]?.y ?? 0) + NODE_H + 90).concat([0])) + 40
   // 文字超宽时截断（追加 …）
   const clip = (s: string, fs: number, maxW: number) => {
     if (textWidth(s, fs) <= maxW) return s
@@ -424,22 +464,37 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           const a = layout[r.from_node_id]; const b = layout[r.to_node_id]
           if (!a || !b) return null
           const ax = a.x + a.w; const bx = b.x
-          const mx = (ax + bx) / 2; const my = (a.y + b.y) / 2
-          // 关系样式：审核门(review)=亮红粗线+菱形门；询问(ask)=亮蓝虚线；其余浅灰
+          const mx = (ax + bx) / 2
+          // 审核门(review)=亮红粗线+菱形门；询问(ask)=亮蓝虚线走低轨道（错开主干）；
+          // 其余浅灰。箭头接在目标节点上沿（+IFACE_BAND 以下是接口区，不接）。
           const isGate = r.relation_type === 'review'
           const isAsk = r.relation_type === 'ask'
           const stroke = isGate ? '#FF6B6B' : isAsk ? '#5DA8FF' : '#A0A0A8'
           const sw = isGate ? 2.4 : 1.6
           const dash = isAsk ? '6,4' : undefined
-          const label = REL_TYPE_LABEL[r.relation_type] || r.relation_type
+          const sameLine = Math.abs(a.y - b.y) < 4
+          // 主干 y：同层横向连接走节点中部；跨层（同列纵向）用中点偏上走线
+          const yA = isAsk ? a.y + NODE_H - 8 : a.y + NODE_H / 2 - 4
+          const yB = isAsk ? b.y + NODE_H - 8 : b.y + NODE_H / 2 - 4
+          // ask 反向边：从下游底部绕回上游底部（低轨道），不穿过节点中部
+          const viaY = isAsk ? Math.max(a.y, b.y) + NODE_H + 14 : (a.y + b.y) / 2
+          const dPath = isAsk
+            ? `M ${ax} ${yA} C ${mx} ${viaY}, ${mx} ${viaY}, ${bx} ${yB}`
+            : (sameLine
+              ? `M ${ax} ${yA} L ${bx - 6} ${yB}`
+              : `M ${ax} ${yA} C ${mx} ${yA}, ${mx} ${yB}, ${bx} ${yB}`)
+          // 传递内容：优先展示交接物 kind（handoff_type），无则关系类型
+          const label = r.handoff_type ? normKind(r.handoff_type) : (REL_TYPE_LABEL[r.relation_type] || r.relation_type)
+          const labelY = isGate ? viaY - 34 : (isAsk ? viaY - 6 : viaY - 10)
+          const lw = textWidth(label, 10.5)
           return (
             <g key={r.id}>
-              <path d={`M ${ax} ${a.y + 30} C ${mx} ${a.y + 30}, ${mx} ${b.y + 30}, ${bx} ${b.y + 30}`} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
+              <path d={dPath} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
               {isGate && (
-                <rect x={mx - 8} y={my - 8} width="16" height="16" transform={`rotate(45 ${mx} ${my})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.5" opacity="0.95" />
+                <rect x={mx - 8} y={viaY - 8} width="16" height="16" transform={`rotate(45 ${mx} ${viaY})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.5" opacity="0.95" />
               )}
-              <rect x={mx - (label.length * 5) - 4} y={my - (isGate ? 14 : 8) - 12} width={label.length * 10 + 8} height="16" rx="3" fill="rgba(20,24,33,0.85)" />
-              <text x={mx} y={my - (isGate ? 14 : 8)} textAnchor="middle" fontSize="11" fontWeight="500" fill={stroke}>{label}{r.handoff_type ? `·${r.handoff_type}` : ''}</text>
+              <rect x={mx - lw / 2 - 6} y={labelY - 9} width={lw + 12} height="18" rx="4" fill="rgba(20,24,33,0.92)" stroke={stroke} strokeWidth="0.5" />
+              <text x={mx} y={labelY} textAnchor="middle" fontSize="10.5" fontWeight="500" fill={stroke}>{label}</text>
             </g>
           )
         })}
@@ -451,12 +506,19 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           const title = '#F0F0F5'
           const label = n.step_name || personaName(n.persona_id)
           const cx = p.x + p.w / 2
+          const { inKinds, outKinds } = nodeIfaceKinds(cur, n)
+          const iface = (s: string, maxW: number) => clip(s, 10, maxW)
           return (
             <g key={n.id}>
-              <rect x={p.x} y={p.y} width={p.w} height="60" rx="10" fill={fill} stroke={stroke} strokeWidth="1.2" />
-              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="12" fontWeight="600" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
-              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11" fill="#B8B8C5">{clip(label, 11, p.w - 16)}</text>
-              <text x={cx} y={p.y + 55} textAnchor="middle" fontSize="10" fill={stroke}>{KIND_LABEL[n.kind]}</text>
+              <rect x={p.x} y={p.y} width={p.w} height={NODE_H} rx="10" fill={fill} stroke={stroke} strokeWidth="1.2" />
+              <text x={cx} y={p.y + 22} textAnchor="middle" fontSize="12" fontWeight="600" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
+              <text x={cx} y={p.y + 38} textAnchor="middle" fontSize="11" fill="#B8B8C5">{clip(label, 11, p.w - 16)}</text>
+              <text x={cx} y={p.y + 52} textAnchor="middle" fontSize="10" fill={stroke}>{KIND_LABEL[n.kind]}</text>
+              <line x1={p.x + 6} y1={p.y + 60} x2={p.x + p.w - 6} y2={p.y + 60} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+              <text x={p.x + 8} y={p.y + NODE_H - 16} fontSize="10" fill="#8FA3B8">收</text>
+              <text x={p.x + 18} y={p.y + NODE_H - 16} fontSize="10" fill="#C9D4DE">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 28)}</text>
+              <text x={p.x + 8} y={p.y + NODE_H - 3} fontSize="10" fill="#8FA3B8">出</text>
+              <text x={p.x + 18} y={p.y + NODE_H - 3} fontSize="10" fill="#C9D4DE">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 28)}</text>
             </g>
           )
         })}
