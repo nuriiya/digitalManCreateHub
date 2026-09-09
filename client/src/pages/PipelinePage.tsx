@@ -19,8 +19,8 @@ const KIND_LABEL: Record<string, string> = {
   nominate: '提名节点', deterministic: '确定性节点',
 }
 
-const NODE_H = 88          // 节点矩形高（含上方标题区 + 底部接口行）
-const IFACE_BAND = 30      // 底部接口条高度（接收/产出 kind 标签）
+const NODE_H = 100         // 节点矩形高（标题区 + 接口行 + 分隔线）
+const IFACE_BAND = 42      // 底部接口条高度（收/出 两行 kind 标签）
 const REL_KIND_NAME: Record<string, string> = {
   需求: '需求规格', 需求规格: '需求规格', 需求文档: '需求规格',
   技术方案: '技术方案', 设计: '技术方案', 设计文档: '技术方案',
@@ -77,7 +77,7 @@ function nodeBoxWidth(p: Pipeline, n: PipelineNode, personaName: (id: number | n
     { text: `产出 ${outKinds.join('·')}`, fs: 10 },
   ]
   const maxText = Math.max(...lines.map((l) => textWidth(l.text, l.fs)))
-  return Math.max(120, Math.min(280, maxText + 28))
+  return Math.max(150, Math.min(300, maxText + 32))
 }
 
 // 简单拓扑分层布局（DAG），节点宽度自适应、层内垂直排布
@@ -121,8 +121,8 @@ function layoutPipeline(
   const nodeById = new Map(p.nodes.map((n) => [n.id, n]))
   const widths = layers.map((layer) =>
     Math.max(...layer.map((id) => nodeBoxWidth(p, nodeById.get(id)!, personaName))))
-  const H_GAP = 46   // 节点垂直间距（含接口条，需 > IFACE_BAND）
-  const V_GAP = 60   // 层水平间距
+  const H_GAP = 52   // 节点垂直间距（含接口条）
+  const V_GAP = 64   // 层水平间距
   let x = 40
   layers.forEach((layer, li) => {
     const w = widths[li]
@@ -469,9 +469,10 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           // 其余浅灰。箭头接在目标节点上沿（+IFACE_BAND 以下是接口区，不接）。
           const isGate = r.relation_type === 'review'
           const isAsk = r.relation_type === 'ask'
-          const stroke = isGate ? '#FF6B6B' : isAsk ? '#5DA8FF' : '#A0A0A8'
-          const sw = isGate ? 2.4 : 1.6
-          const dash = isAsk ? '6,4' : undefined
+          const stroke = isGate ? '#FF6B6B' : isAsk ? '#7BAFFF' : '#B0B0BA'
+          const sw = isGate ? 2.6 : 1.8
+          const dash = isAsk ? '5,5' : undefined
+          const askOpacity = isAsk ? 0.78 : 1
           const sameLine = Math.abs(a.y - b.y) < 4
           // 主干 y：同层横向连接走节点中部；跨层（同列纵向）用中点偏上走线
           const yA = isAsk ? a.y + NODE_H - 8 : a.y + NODE_H / 2 - 4
@@ -485,16 +486,16 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
               : `M ${ax} ${yA} C ${mx} ${yA}, ${mx} ${yB}, ${bx} ${yB}`)
           // 传递内容：优先展示交接物 kind（handoff_type），无则关系类型
           const label = r.handoff_type ? normKind(r.handoff_type) : (REL_TYPE_LABEL[r.relation_type] || r.relation_type)
-          const labelY = isGate ? viaY - 34 : (isAsk ? viaY - 6 : viaY - 10)
-          const lw = textWidth(label, 10.5)
+          const labelY = isGate ? viaY - 36 : (isAsk ? viaY - 8 : viaY - 12)
+          const lw = textWidth(label, 11.5)
           return (
-            <g key={r.id}>
+            <g key={r.id} opacity={askOpacity}>
               <path d={dPath} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
               {isGate && (
-                <rect x={mx - 8} y={viaY - 8} width="16" height="16" transform={`rotate(45 ${mx} ${viaY})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.5" opacity="0.95" />
+                <rect x={mx - 9} y={viaY - 9} width="18" height="18" transform={`rotate(45 ${mx} ${viaY})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.6" opacity="0.98" />
               )}
-              <rect x={mx - lw / 2 - 6} y={labelY - 9} width={lw + 12} height="18" rx="4" fill="rgba(20,24,33,0.92)" stroke={stroke} strokeWidth="0.5" />
-              <text x={mx} y={labelY} textAnchor="middle" fontSize="10.5" fontWeight="500" fill={stroke}>{label}</text>
+              <rect x={mx - lw / 2 - 7} y={labelY - 11} width={lw + 14} height="22" rx="4" fill="rgba(8,10,16,0.96)" stroke={stroke} strokeWidth="0.8" />
+              <text x={mx} y={labelY + 4} textAnchor="middle" fontSize="11.5" fontWeight="500" fill={stroke}>{label}</text>
             </g>
           )
         })}
@@ -507,18 +508,18 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
           const label = n.step_name || personaName(n.persona_id)
           const cx = p.x + p.w / 2
           const { inKinds, outKinds } = nodeIfaceKinds(cur, n)
-          const iface = (s: string, maxW: number) => clip(s, 10, maxW)
+          const iface = (s: string, maxW: number) => clip(s, 10.5, maxW)
           return (
             <g key={n.id}>
-              <rect x={p.x} y={p.y} width={p.w} height={NODE_H} rx="10" fill={fill} stroke={stroke} strokeWidth="1.2" />
-              <text x={cx} y={p.y + 22} textAnchor="middle" fontSize="12" fontWeight="600" fill={title}>{clip(n.node_key, 12, p.w - 16)}</text>
-              <text x={cx} y={p.y + 38} textAnchor="middle" fontSize="11" fill="#B8B8C5">{clip(label, 11, p.w - 16)}</text>
-              <text x={cx} y={p.y + 52} textAnchor="middle" fontSize="10" fill={stroke}>{KIND_LABEL[n.kind]}</text>
-              <line x1={p.x + 6} y1={p.y + 60} x2={p.x + p.w - 6} y2={p.y + 60} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-              <text x={p.x + 8} y={p.y + NODE_H - 16} fontSize="10" fill="#8FA3B8">收</text>
-              <text x={p.x + 18} y={p.y + NODE_H - 16} fontSize="10" fill="#C9D4DE">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 28)}</text>
-              <text x={p.x + 8} y={p.y + NODE_H - 3} fontSize="10" fill="#8FA3B8">出</text>
-              <text x={p.x + 18} y={p.y + NODE_H - 3} fontSize="10" fill="#C9D4DE">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 28)}</text>
+              <rect x={p.x} y={p.y} width={p.w} height={NODE_H} rx="12" fill={fill} stroke={stroke} strokeWidth="1.6" />
+              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="13" fontWeight="700" fill={title}>{clip(n.node_key, 12, p.w - 18)}</text>
+              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11.5" fill="#D8D8E4">{clip(label, 11, p.w - 18)}</text>
+              <text x={cx} y={p.y + 56} textAnchor="middle" fontSize="10.5" fontWeight="500" fill={stroke}>{KIND_LABEL[n.kind]}</text>
+              <line x1={p.x + 8} y1={p.y + 64} x2={p.x + p.w - 8} y2={p.y + 64} stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
+              <text x={p.x + 10} y={p.y + 79} fontSize="10.5" fontWeight="700" fill="#8FB3D6">收</text>
+              <text x={p.x + 24} y={p.y + 79} fontSize="11" fill="#E5ECF2">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 36)}</text>
+              <text x={p.x + 10} y={p.y + 95} fontSize="10.5" fontWeight="700" fill="#D6B988">出</text>
+              <text x={p.x + 24} y={p.y + 95} fontSize="11" fill="#E5ECF2">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 36)}</text>
             </g>
           )
         })}
