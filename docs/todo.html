@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>数字人全链路平台 · 愿景与路线图</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --line:#262b35;
+    --txt:#e6e9ef; --muted:#8b93a1; --dim:#5f6775;
+    --blue:#4f8cff; --blue-soft:rgba(79,140,255,.14);
+    --green:#2fd17c; --green-soft:rgba(47,209,124,.14);
+    --purple:#9f7cff; --purple-soft:rgba(159,124,255,.14);
+    --orange:#ffab4d; --orange-soft:rgba(255,171,77,.13);
+    --red:#ff6b6b; --red-soft:rgba(255,107,107,.13);
+    --cyan:#35c9dd; --cyan-soft:rgba(53,201,221,.13);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.55;padding:28px 22px 60px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1,h2,h3{font-weight:600}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .muted{color:var(--muted)}
+  .dim{color:var(--dim)}
+
+  /* ---------- header ---------- */
+  header{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px}
+  .logo{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4f8cff,#9f7cff);display:flex;align-items:center;justify-content:center;font-size:22px;flex:none;box-shadow:0 4px 18px rgba(79,140,255,.35)}
+  header h1{font-size:22px}
+  header .tag{background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:3px 10px;border-radius:20px;font-size:12px}
+  .sub{margin-bottom:22px;color:var(--muted);max-width:820px}
+
+  /* ---------- overview strip ---------- */
+  .overview{display:grid;grid-template-columns:340px 1fr;gap:16px;margin:18px 0 26px}
+  .ring-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+  .ring-row{display:flex;align-items:center;gap:18px}
+  .ring{width:110px;height:110px;position:relative;flex:none}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .num{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .num b{font-size:26px}
+  .ring .num span{font-size:10px;color:var(--muted)}
+  .ring-legend{flex:1}
+  .ring-legend .lg-row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin:3px 0}
+  .ring-legend .bar{height:6px;border-radius:3px;background:var(--panel2);overflow:hidden;margin:2px 0 6px}
+  .ring-legend .bar i{display:block;height:100%;border-radius:3px}
+  .vision{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .kpi b{font-size:24px;display:block}
+  .kpi span{font-size:12px;color:var(--muted)}
+  .kpi.g b{color:var(--green)} .kpi.o b{color:var(--orange)} .kpi.p b{color:var(--purple)}
+  .kpi.c b{color:var(--cyan)} .kpi.b b{color:var(--blue)} .kpi.r b{color:var(--red)}
+  .kpi small{display:block;font-size:11px;color:var(--dim);margin-top:4px;line-height:1.4}
+
+  /* ---------- sections ---------- */
+  .sec{margin:34px 0 10px}
+  .sec h2{display:flex;align-items:center;gap:10px;font-size:17px;margin-bottom:4px}
+  .sec h2 .dot{width:8px;height:8px;border-radius:50%}
+  .sec .hint{color:var(--dim);font-size:12.5px;margin-bottom:14px}
+
+  /* ---------- vision ---------- */
+  .vision-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .vcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;position:relative;overflow:hidden}
+  .vcard::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--accent,var(--blue))}
+  .vcard h3{font-size:14px;margin-bottom:6px;color:var(--txt)}
+  .vcard p{font-size:12.5px;color:var(--muted)}
+  .vcard .milestone{display:inline-block;margin-top:10px;font-size:11px;padding:2px 9px;border-radius:12px;background:var(--soft,var(--blue-soft));color:var(--accent,var(--blue))}
+  .vcard.m1{--accent:var(--green);--soft:var(--green-soft)}
+  .vcard.m2{--accent:var(--purple);--soft:var(--purple-soft)}
+  .vcard.m3{--accent:var(--orange);--soft:var(--orange-soft)}
+  .vcard .progress{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-top:12px}
+  .vcard .progress i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+
+  /* ---------- module bars ---------- */
+  .mod-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 26px}
+  .mod{padding:9px 0;border-bottom:1px dashed var(--line)}
+  .mod .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+  .mod .top b{font-size:13px;font-weight:600}
+  .mod .top .pct{font-size:13px;font-weight:600}
+  .mod .bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden}
+  .mod .bar i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--blue),#6fa3ff);width:0;transition:width 1s cubic-bezier(.22,.61,.36,1)}
+  .mod .note{font-size:11.5px;color:var(--dim);margin-top:4px}
+
+  /* ---------- roadmap ---------- */
+  .road{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .rd-col h3{font-size:14px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .rd-col h3 .dot{width:8px;height:8px;border-radius:50%}
+  .rd-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:12px;transition:border-color .15s}
+  .rd-card:hover{border-color:var(--line2,#3a4250)}
+  .rd-card .rd-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px}
+  .rd-card .rd-head b{font-size:13.5px}
+  .pill{font-size:10.5px;padding:1px 8px;border-radius:10px;flex:none;white-space:nowrap}
+  .pill.p0{background:var(--red-soft);color:var(--red)}
+  .pill.p1{background:var(--orange-soft);color:var(--orange)}
+  .pill.p2{background:var(--blue-soft);color:var(--blue)}
+  .pill.note{background:var(--panel2);color:var(--muted)}
+  .pill.wip{background:var(--purple-soft);color:var(--purple)}
+  .rd-card .rd-desc{font-size:12.5px;color:var(--muted);margin:6px 0 10px;line-height:1.5}
+  .rd-card .rd-desc .goal{color:var(--txt)}
+  .rd-card .bar{height:7px;border-radius:4px;background:var(--panel2);overflow:hidden}
+  .rd-card .bar i{display:block;height:100%;border-radius:4px;width:0;transition:width 1s cubic-bezier(.22,.61,.36,1)}
+  .rd-card .rd-foot{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--dim)}
+  .b-blue i{background:linear-gradient(90deg,#4f8cff,#7cabff)}
+  .b-purple i{background:linear-gradient(90deg,#9f7cff,#bd9fff)}
+  .b-green i{background:linear-gradient(90deg,#2fd17c,#5fdfa0)}
+  .b-orange i{background:linear-gradient(90deg,#ffab4d,#ffc37a)}
+  .b-red i{background:linear-gradient(90deg,#ff6b6b,#ff9797)}
+  .b-cyan i{background:linear-gradient(90deg,#35c9dd,#5fdceb)}
+
+  /* ---------- doc link ---------- */
+  .docs{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .doclink{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:12.5px;color:var(--muted)}
+  .doclink b{display:block;color:var(--txt);font-size:13px;margin-bottom:2px}
+
+  .foot{margin-top:40px;text-align:center;color:var(--dim);font-size:12px;border-top:1px solid var(--line);padding-top:18px}
+  @media(max-width:920px){.overview{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}.mod-grid,.road,.docs,.vision-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">◆</div>
+    <div>
+      <h1>数字人全链路平台 · 愿景与路线图</h1>
+      <div class="tag muted" style="display:inline-block;margin-top:4px">Vision &amp; Roadmap · 更新于 2026-09-09</div>
+    </div>
+  </header>
+  <p class="sub">以「部门文档 → RAG → 本体 → 数字人」为主链，把非结构化知识组装成 <b>可审批、可测试、可版本回滚、可编排协作、可调用 MCP</b> 的六元组数字人，最终演进为：<b>基础数字人（Spec 编译）+ 专业数字人（知识包合成）</b>双路径 + 反思层自进化的完整平台。</p>
+
+  <!-- ============ 总览 ============ -->
+  <div class="overview">
+    <div class="ring-card">
+      <div class="ring-row">
+        <div class="ring">
+          <svg width="110" height="110" viewBox="0 0 110 110">
+            <circle cx="55" cy="55" r="46" fill="none" stroke="#262b35" stroke-width="11"/>
+            <circle id="ringArc" cx="55" cy="55" r="46" fill="none" stroke="url(#gradA)" stroke-width="11" stroke-linecap="round"
+                    stroke-dasharray="289" stroke-dashoffset="289"/>
+            <defs><linearGradient id="gradA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#2fd17c"/></linearGradient></defs>
+          </svg>
+          <div class="num"><b id="totalPct">0%</b><span>愿景总进度</span></div>
+        </div>
+        <div class="ring-legend">
+          <div class="lg-row"><span>核心平台（已可交付试用）</span><b id="corePct" style="color:#2fd17c">0%</b></div>
+          <div class="bar"><i style="width:0%;background:#2fd17c" data-w="90%"></i></div>
+          <div class="lg-row"><span>双路径完整形态（目标态）</span><b id="twinPct" style="color:#9f7cff">0%</b></div>
+          <div class="bar"><i style="width:0%;background:#9f7cff" data-w="52%"></i></div>
+        </div>
+      </div>
+      <div class="vision">愿景一句话：<b>让每个部门都能把自己的文档「养」成一群可信、可测、可协作的数字人</b> —— 用户永远是唯一终审点，LLM 永远只提名。</div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi g"><b>95%</b><span>功能需求已实现</span><small>docs/requirement.md · 87 条 REQ 中 83 条已实现</small></div>
+      <div class="kpi o"><b>10</b><span>未实现设计项</span><small>docs/design.md §9 · 含基础数字人 Spec 编译 N1–N7 等</small></div>
+      <div class="kpi p"><b>14</b><span>已落地子系统</span><small>RAG / 本体治理 / 对话 / 评测 / 训练 / MCP / 编排 / 平台工程 …</small></div>
+      <div class="kpi c"><b>7</b><span>架构 SVG 图已入库</span><small>docs/design.md 内嵌，XML 校验通过</small></div>
+      <div class="kpi b"><b>164+</b><span>可执行能力题</span><small>HumanEval 164 + 项目相关题，容器跑 assert 判定</small></div>
+      <div class="kpi r"><b>3</b><span>铁律守卫</span><small>LLM 无终审权 · 不知道就说不知道 · 证据可引</small></div>
+    </div>
+  </div>
+
+  <!-- ============ 愿景分层 ============ -->
+  <div class="sec"><h2><span class="dot" style="background:#2fd17c"></span>愿景 · 三层里程碑</h2><div class="hint">每层都真实可用，下一层建在上一层之上。</div>
+    <div class="vision-grid">
+      <div class="vcard m1">
+        <h3>M1 · 核心平台（专业数字人）</h3>
+        <p>部门文档一键入库 → 本体分解 → 数字人装配 → 对话/考核/评测/版本回滚。能力通过的工具沉淀为可复用代码。</p>
+        <span class="milestone">已实现 ≈ 90%</span>
+        <div class="progress"><i style="width:90%"></i></div>
+      </div>
+      <div class="vcard m2">
+        <h3>M2 · 双路径形态（+基础数字人）</h3>
+        <p>Spec 编译路径落地：平台通用本体库 + 编译器 + 元本体校验，让平台方也能「写 Spec 造数字人」，与 RAG 知识包路径汇入同一审批测试闭环。</p>
+        <span class="milestone">未开始 ≈ 5%</span>
+        <div class="progress"><i style="width:5%"></i></div>
+      </div>
+      <div class="vcard m3">
+        <h3>M3 · 反思自进化 + 规模化</h3>
+        <p>Reflection 复盘-回流-重编译闭环；定时调度器驱动「持续调研 → 入库 → 本体更新」；多数字人协作编排成为日常工作流。</p>
+        <span class="milestone">未开始 ≈ 3%</span>
+        <div class="progress"><i style="width:3%"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 已完成 ============ -->
+  <div class="sec"><h2><span class="dot" style="background:#4f8cff"></span>已实现子系统 · 进度</h2><div class="hint">数字 = 主干功能落地的诚实估算（对照 requirement 状态）。</div>
+    <div class="mod-grid">
+      <div class="mod"><div class="top"><b>RAG 摄取与检索（PG + pgvector）</b><span class="pct" style="color:#2fd17c">95%</span></div><div class="bar"><i data-w="95%"></i></div><div class="note">分段→摘要+标签→聚合→embedding→回取原文；去重/覆盖契约；缺：定时增量调度</div></div>
+      <div class="mod"><div class="top"><b>本体分解器与治理链</b><span class="pct" style="color:#2fd17c">90%</span></div><div class="bar"><i data-w="90%"></i></div><div class="note">EDC 候选→三关→二次编排→装配；组织架构 type 优先级；角色子树聚焦</div></div>
+      <div class="mod"><div class="top"><b>数字人对话（SSE 流式）</b><span class="pct" style="color:#2fd17c">93%</span></div><div class="bar"><i data-w="93%"></i></div><div class="note">确定性路由 + 动态检索窗口 + 概念兜底 + 动作循环 + MCP 绑定 + markdown</div></div>
+      <div class="mod"><div class="top"><b>Benchmark 四组对照 + 版本管理</b><span class="pct" style="color:#2fd17c">90%</span></div><div class="bar"><i data-w="90%"></i></div><div class="note">G0–G3 / 准确率·幻觉率·拒答率 / 边际 pp / 归因→merge→回滚</div></div>
+      <div class="mod"><div class="top"><b>能力测试沙箱 + 反应式循环</b><span class="pct" style="color:#2fd17c">85%</span></div><div class="bar"><i data-w="85%"></i></div><div class="note">容器跑 assert 判定；写→测→改 ≤3 轮；HumanEval 164 真值</div></div>
+      <div class="mod"><div class="top"><b>训练师闭环</b><span class="pct" style="color:#2fd17c">82%</span></div><div class="bar"><i data-w="82%"></i></div><div class="note">选训练集→基线→失败归因→补本体→复测 improvement；前端只能经训练师改本体</div></div>
+      <div class="mod"><div class="top"><b>MCP 沙盒 + 生成 + execute</b><span class="pct" style="color:#2fd17c">80%</span></div><div class="bar"><i data-w="80%"></i></div><div class="note">docker 隔离注册/审批/启停；自动导入；stdio JSON-RPC；对话页「生成 MCP」气泡</div></div>
+      <div class="mod"><div class="top"><b>Pipeline 编排（审核门 / ask）</b><span class="pct" style="color:#2fd17c">88%</span></div><div class="bar"><i data-w="88%"></i></div><div class="note">节点/关系/运行/交接；review 红门 + ask 蓝虚线反向边；对话改流程；深色 SVG 图</div></div>
+      <div class="mod"><div class="top"><b>调研链路（多源 → RAG）</b><span class="pct" style="color:#2fd17c">75%</span></div><div class="bar"><i data-w="75%"></i></div><div class="note">OpenAlex/DBLP/Scholar 搜索 → 置信度分级 → 聚合 → 入库；缺：定时化（⑥）</div></div>
+      <div class="mod"><div class="top"><b>平台工程（PG 全量 / 任务 / 认证 / 备份）</b><span class="pct" style="color:#2fd17c">90%</span></div><div class="bar"><i data-w="90%"></i></div><div class="note">jobs+事件+checkpoint；互斥闸门；全量导出可 git 提交；双通道 LLM</div></div>
+      <div class="mod"><div class="top"><b>前端（8 页深色 dashboard）</b><span class="pct" style="color:#2fd17c">92%</span></div><div class="bar"><i data-w="92%"></i></div><div class="note">对话/测试/中心管理/RAG/本体图谱/pipeline/MCP/设置；no-cache 发布</div></div>
+      <div class="mod"><div class="top"><b>部署（全 docker 一键）</b><span class="pct" style="color:#2fd17c">92%</span></div><div class="bar"><i data-w="92%"></i></div><div class="note">start1.ps1/start.sh dev|prod；镜像复用秒起 + -Rebuild；脚本 ASCII-only</div></div>
+    </div>
+  </div>
+
+  <!-- ============ Roadmap ============ -->
+  <div class="sec"><h2><span class="dot" style="background:#ffab4d"></span>现在没做的 · Roadmap</h2><div class="hint">按 design.md §9 与 requirement R-12 逐条列出；进度条是「已具备可复用件」的估算，非承诺排期。</div>
+    <div class="road">
+      <div class="rd-col">
+        <h3><span class="dot" style="background:#9f7cff"></span>进行中 / 半成品</h3>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.3 · Reflection 复盘-回流闭环</b><span class="pill wip">部分</span></div>
+          <div class="rd-desc"><span class="goal">AI 独自复盘自己的对话 Trace → 产出洞察与改进提名 → 回流自身 Spec 重编译（禁热更）。</span><br/>现状：六元组中 reflection 已定义、设计已定，但复盘入口与回流装配未编码。</div>
+          <div class="bar b-purple"><i data-w="12%"></i></div>
+          <div class="rd-foot"><span>P1 · design §9.3</span><span>12%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>N2 · 装配取源分支（平台通用本体库）</b><span class="pill wip">复用件就绪</span></div>
+          <div class="rd-desc"><span class="goal">assembly 现仅从 candidates 表取源；增加「从平台通用本体库取源」分支。</span><br/>现状：assembly 三段筛可复用，差源适配 + 库表。</div>
+          <div class="bar b-purple"><i data-w="15%"></i></div>
+          <div class="rd-foot"><span>P1 · design §9.1 N2</span><span>15%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>N7 · 工具工厂编译器（自生长固化）</b><span class="pill wip">雏形已现</span></div>
+          <div class="rd-desc"><span class="goal">工具自生长走「编译式固化」：生成 → 沙箱 UT → 三关 → 审批 → 版本化。</span><br/>现状：capability promote_to_tool + mcp_repo git 已具雏形（能力通过→git commit）。</div>
+          <div class="bar b-purple"><i data-w="25%"></i></div>
+          <div class="rd-foot"><span>P1 · design §9.1 N7</span><span>25%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>exact-calculator MCP 补实现</b><span class="pill wip">只有定义</span></div>
+          <div class="rd-desc"><span class="goal">该 MCP 已有导入 JSON（含 input_schema），缺 server.py 实现代码。</span><br/>对照：mcp-paper 已含实现可跑；此例是「生成 MCP 只出骨架」的边界样例。</div>
+          <div class="bar b-purple"><i data-w="30%"></i></div>
+          <div class="rd-foot"><span>P1 · design §9.4</span><span>30%</span></div>
+        </div>
+      </div>
+
+      <div class="rd-col">
+        <h3><span class="dot" style="background:#ff6b6b"></span>未开始 / 设计已定</h3>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.1 · 平台通用本体库（N1）</b><span class="pill p0">P0 缺口</span></div>
+          <div class="rd-desc"><span class="goal">基础数字人的 ontology 给养源：手工定义入口（落库即权威）+ 自适应扩充 + 版本快照回滚。</span><br/>现状：无表无入口；persona_ontology_versions 版本机制可复用。</div>
+          <div class="bar b-red"><i data-w="5%"></i></div>
+          <div class="rd-foot"><span>design §9.1 N1 · 与监管本体待办合并</span><span>5%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.2 · Spec 编译器（N3）</b><span class="pill p0">P0 缺口</span></div>
+          <div class="rd-desc"><span class="goal">元本体校验（4 规则 + 拒绝出口）+ 编译五类产物：prompt / tools schema / SHACL / 状态机 / 数据模型迁移。</span><br/>现状：文档已定五步（Spec 编写→元本体校验→编译→冒烟→版本注册），代码为零。</div>
+          <div class="bar b-red"><i data-w="3%"></i></div>
+          <div class="rd-foot"><span>design §9.1 N3 · 真正的新增工作量</span><span>3%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.4 · 定时调度器</b><span class="pill p0">依赖项</span></div>
+          <div class="rd-desc"><span class="goal">「持续调研（⑥定时拉取）」与「定时扫描增量入库」都依赖它；APScheduler 设计已定。</span><br/>现状：无调度代码。阻塞 M3 的「无人值守」目标。</div>
+          <div class="bar b-red"><i data-w="5%"></i></div>
+          <div class="rd-foot"><span>design §9.2 U1</span><span>5%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.5 · 分时用模（白天本地/夜间公司）</b><span class="pill p1">P1</span></div>
+          <div class="rd-desc"><span class="goal">任务启动时按时间窗领取客户端，运行中不中断；model.switched 事件。</span><br/>现状：llm_mode（cloud/local）已实现，时间窗路由未做。</div>
+          <div class="bar b-red"><i data-w="5%"></i></div>
+          <div class="rd-foot"><span>design §9.2 U2</span><span>5%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>R-12.6 · OCR（扫描件 PDF）</b><span class="pill note">明确不做</span></div>
+          <div class="rd-desc"><span class="goal">检测空文本层 → 标记 needs_ocr → 跳过上报；OCR 不在本期范围。</span></div>
+          <div class="bar b-red"><i data-w="0%"></i></div>
+          <div class="rd-foot"><span>design §9.2 U3</span><span>0%</span></div>
+        </div>
+
+        <div class="rd-card">
+          <div class="rd-head"><b>N5 · 引用禁改写校验 / N6 · 技能包挂载位</b><span class="pill p1">P1</span></div>
+          <div class="rd-desc"><span class="goal">专业数字人改写平台本体直接拦截（引用悬空拒绝创建）；六元语支持「基础骨架 + 部门技能包」混合形态。</span></div>
+          <div class="bar b-red"><i data-w="0%"></i></div>
+          <div class="rd-foot"><span>design §9.1 N5/N6 · A-2（基础能否带 RAG）待定</span><span>0%</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 文档 ============ -->
+  <div class="sec"><h2><span class="dot" style="background:#35c9dd"></span>配套文档（改设计必须三件套联动）</h2><div class="hint">变更流程铁律见 design.md §10。</div>
+    <div class="docs">
+      <div class="doclink"><b>docs/design.md</b>全量设计 · 7 张 SVG · §9 未实现清单 · §10 变更流程</div>
+      <div class="doclink"><b>docs/requirement.md</b>87 条 REQ 与 design § 双向追溯 · 每条带状态与验收</div>
+      <div class="doclink"><b>docs/test-metrics.md</b>Test Metrics 指标族 T-A~T-G · 公式与阈值</div>
+    </div>
+  </div>
+
+  <div class="foot">数字人全链路平台 · 三铁律：LLM 无终审权 · 不知道就说不知道 · 证据可引 —— 代码定路径，LLM 只做节点，用户唯一终审。</div>
+</div>
+
+<script>
+  // 进度条进场动画
+  function runBars(){
+    document.querySelectorAll('.bar i[data-w]').forEach(function(el){
+      if(!el.dataset.done){ el.style.width = el.dataset.w; el.dataset.done = '1'; }
+    });
+  }
+  // 总进度环（愿景 = M1×0.62 + M2×0.26 + M3×0.12 加权）
+  function drawRing(){
+    var total = 60, C = 2*Math.PI*46;
+    var el = document.getElementById('ringArc');
+    var n = document.getElementById('totalPct');
+    var start = null;
+    function step(ts){
+      if(!start) start = ts;
+      var p = Math.min((ts-start)/1100, 1);
+      var ease = 1-Math.pow(1-p,3);
+      var v = total*ease;
+      el.setAttribute('stroke-dashoffset', C*(1-v/100));
+      n.textContent = Math.round(v)+'%';
+      if(p<1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  function kpiCount(){
+    var c1=document.getElementById('corePct'), c2=document.getElementById('twinPct');
+    var s=null;
+    function step(ts){ if(!s)s=ts; var p=Math.min((ts-s)/1000,1); var e=1-Math.pow(1-p,3);
+      c1.textContent=Math.round(90*e)+'%'; c2.textContent=Math.round(52*e)+'%'; if(p<1)requestAnimationFrame(step); }
+    requestAnimationFrame(step);
+  }
+  window.addEventListener('load', function(){ runBars(); drawRing(); kpiCount(); });
+</script>
+</body>
+</html>
