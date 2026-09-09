@@ -2099,10 +2099,15 @@ def capability_run(task_id: int, body: CapabilityRunBody):
 
 @app.post("/api/capability/run_for_identity")
 def capability_run_identity(body: dict):
-    """数字人解题 + 可执行验证：数字人生成代码，跑 assert 判定。"""
+    """数字人解题 + 可执行验证：数字人生成代码，跑 assert 判定。
+
+    provider: llm2(GLM 默认) / llm(V4-Flash) / ollama(本地 qwen，配
+    ollama_model 如 "qwen2.5:7b-32k")。reactive 数字人走写→测→改循环。
+    """
     return capability.run_for_identity(
         db.get_conn(), int(body.get("identity_id") or 0),
-        int(body.get("task_id") or 0), body.get("provider", "llm2"))
+        int(body.get("task_id") or 0), body.get("provider", "llm2"),
+        ollama_model=body.get("ollama_model"))
 
 
 @app.get("/api/capability/stats")

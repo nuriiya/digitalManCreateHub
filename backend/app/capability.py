@@ -160,7 +160,8 @@ def _extract_code(reply: str) -> str:
 
 
 def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
-                         provider="llm", feedback: str | None = None) -> str:
+                         provider="llm", feedback: str | None = None,
+                         ollama_model: str | None = None) -> str:
     """能力题解题专用：全量注入数字人本体 + 身份，直接生成代码。
 
     与 chat._generate 的「字面匹配检索」不同——能力题的 prompt 是函数签名
@@ -170,6 +171,9 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
 
     feedback 非空时（反应式循环的「写→测→改」），把上次测试失败信息注入，
     要求数字人据此修正。返回数字人生成的代码原文（可能带解释/markdown）。
+
+    provider: "llm"(V4-Flash) / "llm2"(GLM) / "ollama"(本地 qwen 等，需
+    ollama_model)。ollama 走 chat_ollama（temperature 0 保持可复现）。
     """
     from . import llm, chat as chat_mod
     ident = chat_mod._identity(conn, identity_id)
@@ -217,6 +221,9 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
                          "请分析失败原因，修正代码。仍然只输出纯 Python 代码，不要解释。"})
     if provider == "llm":
         return llm.chat(messages, temperature=0.0)
+    if provider == "ollama":
+        return llm.chat_ollama(messages, temperature=0.0,
+                               model=ollama_model or chat.DEFAULT_OLLAMA_MODEL)
     return llm.chat2(messages)
 
 
@@ -230,7 +237,8 @@ def _is_reactive(conn, identity_id: int) -> bool:
     return bool(r and r["reactive"])
 
 
-def _solve_reactively(conn, identity_id: int, task: dict, provider: str) -> dict:
+def _solve_reactively(conn, identity_id: int, task: dict, provider: str,
+                      ollama_model: str | None = None) -> dict:
     """反应式解题（写→测→改）：生成→run_test→观察→红则带堆栈重新生成。
 
     终止条件确定性化：run_test 绿 = 硬停止信号；跑满 MAX_REACTIVE_ROUNDS 仍红
@@ -241,14 +249,16 @@ def _solve_reactively(conn, identity_id: int, task: dict, provider: str) -> dict
     for rnd in range(1, MAX_REACTIVE_ROUNDS + 1):
         feedback = rounds[-1]["output"] if rounds else None
         reply = _solve_with_ontology(conn, identity_id, task["prompt"],
-                                     provider, feedback=feedback)
+                                     provider, feedback=feedback,
+                                     ollama_model=ollama_model)
         code = _extract_code(reply) if reply else ""
         if not code.strip():
             return {"error": "generation failed: empty code"}
         r = run_test_sandbox(code, task["test"], task["entry_point"])
         verdict = r["verdict"]
         output = r["output"]
-        rounds.append({"round": rnd, "verdict": verdict, "output": output})
+        rounds.append({"round": rnd, "verdict": verdict, "output": output,
+                       "code": code})
         if verdict == "pass":
             return {"code": code, "verdict": "pass", "rounds": rounds,
                     "output": output}
@@ -256,7 +266,8 @@ def _solve_reactively(conn, identity_id: int, task: dict, provider: str) -> dict
             "output": rounds[-1]["output"] if rounds else ""}
 
 
-def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
+def run_for_identity(conn, identity_id, task_id, provider="llm2",
+                     ollama_model: str | None = None) -> dict:
     """让数字人（identity）针对能力题生成代码，再可执行验证。
 
     数字人解题 = 全量注入它的本体+prompt 生成代码（闭卷作答），判定 = 跑
@@ -265,6 +276,9 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
     reactive=True 的数字人走「写→测→改」反应式循环：生成→run_test→观察→
     红则带失败堆栈重新生成，直到绿或 MAX_REACTIVE_ROUNDS。reactive=False
     的数字人单次生成（知识型数字人无需执行循环）。
+
+    provider: "llm2"(GLM 默认) / "llm"(V4-Flash) / "ollama"(本地 qwen 等，
+    需 ollama_model，如 "qwen2.5:7b-32k")。
     """
     task = get_task(conn, task_id)
     if not task:
@@ -272,7 +286,8 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
 
     if _is_reactive(conn, identity_id):
         try:
-            sol = _solve_reactively(conn, identity_id, task, provider)
+            sol = _solve_reactively(conn, identity_id, task, provider,
+                                    ollama_model=ollama_model)
         except Exception as e:  # noqa: BLE001
             return {"error": f"reactive solve failed: {e}"}
         if "error" in sol:
@@ -291,7 +306,8 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2") -> dict:
                 "reply": sol["code"][:2000]}
 
     try:
-        reply = _solve_with_ontology(conn, identity_id, task["prompt"], provider)
+        reply = _solve_with_ontology(conn, identity_id, task["prompt"], provider,
+                                     ollama_model=ollama_model)
     except Exception as e:  # noqa: BLE001
         return {"error": f"generation failed: {e}"}
     if not reply:
