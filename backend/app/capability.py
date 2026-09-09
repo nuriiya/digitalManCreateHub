@@ -161,7 +161,8 @@ def _extract_code(reply: str) -> str:
 
 def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
                          provider="llm", feedback: str | None = None,
-                         ollama_model: str | None = None) -> str:
+                         ollama_model: str | None = None,
+                         use_ontology: bool = True) -> str:
     """能力题解题专用：全量注入数字人本体 + 身份，直接生成代码。
 
     与 chat._generate 的「字面匹配检索」不同——能力题的 prompt 是函数签名
@@ -174,6 +175,9 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
 
     provider: "llm"(V4-Flash) / "llm2"(GLM) / "ollama"(本地 qwen 等，需
     ollama_model)。ollama 走 chat_ollama（temperature 0 保持可复现）。
+
+    use_ontology=False：A/B 消融——不注入 anchors/ontology 段（隔离变量只
+    剩「本体是否在场」），身份与输出铁律保留，便于量化本体注入的增益。
     """
     from . import llm, chat as chat_mod
     ident = chat_mod._identity(conn, identity_id)
@@ -193,22 +197,23 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
         "2. 代码必须是完整可运行的定义（def/import 齐全），语法正确、引号括号成对闭合。",
         "3. 严格按 docstring 的约定实现，注意边界条件（空输入/单元素/去重/截断等）。",
     ]
-    if anchors:
-        lines.append("")
-        lines.append("【锚点本体 · 核心能力】")
-        for a in anchors:
-            lines.append(chat_mod._fmt_anchor(a))
-    if ontology:
-        lines.append("")
-        lines.append("【你的编程规范本体（必须遵守）】")
-        for o in ontology:
-            defn = (o.get("definition") or "").strip()
-            lines.append(f"- {o['name']}" + (f"：{defn}" if defn else ""))
-    prompt_text = (ident.get("prompt") or "").strip()
-    if prompt_text:
-        lines.append("")
-        lines.append("【你的补充规范】")
-        lines.append(prompt_text)
+    if use_ontology:
+        if anchors:
+            lines.append("")
+            lines.append("【锚点本体 · 核心能力】")
+            for a in anchors:
+                lines.append(chat_mod._fmt_anchor(a))
+        if ontology:
+            lines.append("")
+            lines.append("【你的编程规范本体（必须遵守）】")
+            for o in ontology:
+                defn = (o.get("definition") or "").strip()
+                lines.append(f"- {o['name']}" + (f"：{defn}" if defn else ""))
+        prompt_text = (ident.get("prompt") or "").strip()
+        if prompt_text:
+            lines.append("")
+            lines.append("【你的补充规范】")
+            lines.append(prompt_text)
     system = "\n".join(lines)
 
     messages = [{"role": "system", "content": system},
@@ -238,7 +243,8 @@ def _is_reactive(conn, identity_id: int) -> bool:
 
 
 def _solve_reactively(conn, identity_id: int, task: dict, provider: str,
-                      ollama_model: str | None = None) -> dict:
+                      ollama_model: str | None = None,
+                      use_ontology: bool = True) -> dict:
     """反应式解题（写→测→改）：生成→run_test→观察→红则带堆栈重新生成。
 
     终止条件确定性化：run_test 绿 = 硬停止信号；跑满 MAX_REACTIVE_ROUNDS 仍红
@@ -250,7 +256,8 @@ def _solve_reactively(conn, identity_id: int, task: dict, provider: str,
         feedback = rounds[-1]["output"] if rounds else None
         reply = _solve_with_ontology(conn, identity_id, task["prompt"],
                                      provider, feedback=feedback,
-                                     ollama_model=ollama_model)
+                                     ollama_model=ollama_model,
+                                     use_ontology=use_ontology)
         code = _extract_code(reply) if reply else ""
         if not code.strip():
             return {"error": "generation failed: empty code"}
@@ -267,7 +274,8 @@ def _solve_reactively(conn, identity_id: int, task: dict, provider: str,
 
 
 def run_for_identity(conn, identity_id, task_id, provider="llm2",
-                     ollama_model: str | None = None) -> dict:
+                     ollama_model: str | None = None,
+                     use_ontology: bool = True) -> dict:
     """让数字人（identity）针对能力题生成代码，再可执行验证。
 
     数字人解题 = 全量注入它的本体+prompt 生成代码（闭卷作答），判定 = 跑
@@ -279,6 +287,7 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2",
 
     provider: "llm2"(GLM 默认) / "llm"(V4-Flash) / "ollama"(本地 qwen 等，
     需 ollama_model，如 "qwen2.5:7b-32k")。
+    use_ontology=False：A/B 消融（不注入本体段），量化本体注入增益。
     """
     task = get_task(conn, task_id)
     if not task:
@@ -287,7 +296,8 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2",
     if _is_reactive(conn, identity_id):
         try:
             sol = _solve_reactively(conn, identity_id, task, provider,
-                                    ollama_model=ollama_model)
+                                    ollama_model=ollama_model,
+                                    use_ontology=use_ontology)
         except Exception as e:  # noqa: BLE001
             return {"error": f"reactive solve failed: {e}"}
         if "error" in sol:
@@ -303,11 +313,13 @@ def run_for_identity(conn, identity_id, task_id, provider="llm2",
                 "entry_point": task["entry_point"],
                 "verdict": sol["verdict"], "output": sol["output"][:2000],
                 "rounds": sol["rounds"], "reactive": True,
+                "use_ontology": use_ontology,
                 "reply": sol["code"][:2000]}
 
     try:
         reply = _solve_with_ontology(conn, identity_id, task["prompt"], provider,
-                                     ollama_model=ollama_model)
+                                     ollama_model=ollama_model,
+                                     use_ontology=use_ontology)
     except Exception as e:  # noqa: BLE001
         return {"error": f"generation failed: {e}"}
     if not reply:

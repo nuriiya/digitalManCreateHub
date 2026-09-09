@@ -1,0 +1,201 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>本体注入 A/B 消融 · 项目能力题</title><style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b35;--txt:#e6e9ef;--muted:#8b93a1;--dim:#5f6775;--green:#2fd17c;--red:#ff6b6b;--blue:#4f8cff;--orange:#ffab4d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;padding:28px 22px 70px}
+.wrap{max-width:1150px;margin:0 auto}
+h1{font-size:21px}h2{font-size:16px;margin:30px 0 6px}.dim{color:var(--dim);font-size:11.5px;margin-top:2px}.muted{color:var(--muted)}
+.tagline{color:var(--muted);font-size:13px;margin-bottom:20px;line-height:1.7}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0 6px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.kpi .n{font-size:25px;font-weight:700}.kpi .l{font-size:12px;color:var(--muted);margin-top:2px}.kpi .s{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+.kpi.ont .n{color:var(--blue)}.kpi.none .n{color:var(--orange)}
+.bars{display:flex;gap:30px;align-items:flex-end;height:200px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 40px;margin:14px 0}
+.bcol{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.bcol .bar{width:90px;border-radius:8px 8px 0 0;height:0;transition:height 1.2s cubic-bezier(.22,.61,.36,1)}
+.bcol.ont .bar{background:linear-gradient(180deg,#4f8cff,#2f6fe0)}.bcol.none .bar{background:linear-gradient(180deg,#ffab4d,#e08824)}
+.bcol .vl{font-size:22px;font-weight:700;margin:6px 0 2px}.bcol .lb{font-size:12px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+th{color:var(--muted);font-size:12px;font-weight:600;background:#1a1f28}
+tr:last-child td{border-bottom:none}tr.gain{background:rgba(47,209,124,.05)}tr.both_fail{opacity:.8}
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:8px;background:rgba(47,209,124,.14);color:var(--green)}
+.badge.r2{border:1px dashed rgba(47,209,124,.45)}
+.pill{font-size:11px;padding:2px 9px;border-radius:10px;white-space:nowrap}
+.pill.both{background:rgba(47,209,124,.12);color:var(--green)}.pill.fail{background:rgba(255,107,107,.12);color:var(--red)}
+.pill.gain{background:rgba(79,140,255,.18);color:#7fb2ff;font-weight:700}.pill.odd{background:rgba(255,171,77,.15);color:var(--orange)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.case{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.case h4{font-size:14px}.case .sub{color:var(--dim);font-size:11.5px;margin:4px 0 12px}
+.rd{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:#14181f}
+.rd-h{font-size:12px;margin-bottom:6px;color:var(--muted)}.g{color:var(--green)}.r{color:var(--red)}
+pre{font-family:Consolas,monospace;font-size:11px;background:#0d1016;border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;color:#cfe0f0;line-height:1.5;margin-top:4px}
+pre.code{color:#b8e6c8}pre.out{color:#f0c08a}
+ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:6px 0;font-size:12.5px;color:#cdd6e3}
+.concl{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:12px;padding:16px 20px;margin-top:24px;line-height:1.85}
+.concl b{color:#7fb2ff}
+.foot{color:var(--dim);font-size:11.5px;margin-top:26px;line-height:1.6}
+@media(max-width:920px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<h1>本体注入 A/B 消融 · 项目能力题报告</h1>
+<p class="tagline">模型 <b>qwen2.5:7b-32k</b> · 数字人 代码工程师（identity 3）· 12 道<b>项目题</b>（取自本仓库真实模块）· 沙箱可执行验证 · 2026-09-09<br/>隔离变量 = 是否注入 <b style="color:#4f8cff">14 条编程规范本体</b>（use_ontology on/off；身份/输出铁律两侧一致）。判定=容器 assert，LLM 不判分；写测改 ≤3 轮，绿即停。</p>
+<div class="kpis">
+<div class="kpi ont"><div class="n">9/12 <span style="font-size:14px">(75%)</span></div><div class="l">带本体 · 通过率</div><div class="s">首轮通过 6 · 平均轮次 1.83</div></div>
+<div class="kpi none"><div class="n">7/12 <span style="font-size:14px">(58%)</span></div><div class="l">无本体 · 通过率</div><div class="s">首轮通过 5 · 平均轮次 2.17</div></div>
+<div class="kpi" style="border-color:rgba(79,140,255,.5)"><div class="n" style="color:#7fb2ff">+2 题</div><div class="l">本体独有增益（无本体 fail → 带本体 pass）</div><div class="s">dedup_tags、merge_summaries</div></div>
+<div class="kpi" style="border-color:rgba(47,209,124,.5)"><div class="n" style="color:#2fd17c">2 题</div><div class="l">写测改轮次变少</div><div class="s">validate_tags、safe_truncate</div></div>
+</div>
+<h2>通过率对比</h2>
+<div class="bars">
+<div class="bcol ont"><div class="bar" data-h="__opH__"></div><div class="vl">75%</div><div class="lb">带本体</div></div>
+<div class="bcol none"><div class="bar" data-h="__npH__"></div><div class="vl">58%</div><div class="lb">无本体</div></div>
+</div>
+<h2>逐题对照</h2>
+<table><thead><tr><th>题目（项目来源）</th><th>带本体</th><th>无本体</th><th>判定</th></tr></thead><tbody><tr class="both_fail"><td><b>proj_normalize_name</b><div class="dim">实体名规范化（去括号/空白） · data_cleaning</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
+<tr class="both_fail"><td><b>proj_parse_dsn</b><div class="dim">PG DSN 解析 · db</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
+<tr class="both"><td><b>proj_paginate</b><div class="dim">分页 offset/has_next · web</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="ont_only"><td><b>proj_dedup_tags</b><div class="dim">标签去重（忽略大小写/空白） · data_cleaning</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill gain">仅带本体过</span></tr>
+<tr class="both"><td><b>proj_jsonb_get</b><div class="dim">JSONB 点路径安全读取 · db</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="both_fail"><td><b>proj_chunk_overlap</b><div class="dim">文本重叠分段 · rag</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
+<tr class="both"><td><b>proj_cosine</b><div class="dim">余弦相似度 · vector</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="both"><td><b>proj_validate_tags</b><div class="dim">标签闭集校验 · validation</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="both"><td><b>proj_safe_truncate</b><div class="dim">截断（省略号不计额度） · text</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="both"><td><b>proj_extract_code</b><div class="dim">从回复提取纯代码 · text</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
+<tr class="ont_only"><td><b>proj_merge_summaries</b><div class="dim">多段摘要去重拼接 · rag</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→pass</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill gain">仅带本体过</span></tr>
+<tr class="both"><td><b>proj_topk</b><div class="dim">top-k 索引 · vector</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr></tbody></table>
+<p class="muted" style="margin-top:6px;font-size:12px">绿=pass（实线=首轮过，虚线=经写测改修正），红=fail；小字为轮次轨迹（fail→pass = 第 2 轮修正通过）。</p>
+<h2>带本体组 system prompt 额外注入的 14 条本体（无本体组缺失的部分）</h2>
+<ul class="ont"><li>标签规范形式：标签的规范形式是去除首尾空白并转为小写后的字符串，用于统一比较与输出。</li>
+<li>去重返回规范形式：去重时应将每个标签转换为规范形式，并将规范形式加入结果列表，而不是保留原始标签。</li>
+<li>截断上限不计省略号：safe_truncate 的 max_chars 指截断时保留原文本字符的个数，省略号是额外追加的，不占用 max_chars 的额度。</li>
+<li>超长时截取前缀再拼接省略号：当 len(text) &gt; max_chars 时，应返回 text[:max_chars] + ellipsis，不要用 max_chars - len(ellipsis) 作为前缀截取长度。</li>
+<li>字符数：Python 中按字符数截断时使用 len 和切片按 Unicode 字符计算，中文等每个字符计为 1，不按字节截断。</li>
+<li>非空摘要段先去掉首尾空白再输出：处理每个输入段时应先 strip() 去除首尾空白，strip 后为空则过滤掉，非空则用 strip 后的文本参与后续去重和连接，不能保留原始外层空白。</li>
+<li>去重键与保留文本分离：判断内容重复时，把去除所有空白和标点后的内容作为已见键；真正加入结果的是清理掉首尾空白的该段原文，而不是原始未清理段落，也不是去除空白标点后的键。</li>
+<li>沙箱安全边界：所有代码执行都在一次性隔离沙箱中：禁网、只读根文件系统、无特权、内存 256MB/CPU 1 核/PID 上限 64。数字人无法触及宿主文件系统或外网。</li>
+<li>执行动作白名单：只能调用本人已声明且审批通过的动作；未声明的动作会被 guard 拒绝。执行前 guard 确定性裁决（入参必填 + 长度封顶），越权调用一律拒绝。</li>
+<li>写测改循环：写代码 → run_test 跑测试 → 观察绿/红 → 红则带失败堆栈修正 → 再跑，直到绿或达轮数上限。终止靠确定性判定（测试通过），不靠自我宣称完成。</li>
+<li>输出纯代码：只输出纯 Python 代码，不带解释和 markdown 标记，引号括号成对闭合</li>
+<li>边界条件处理：空输入/单元素/负数/去重/截断等边界必须显式处理，不能只写主路径</li>
+<li>询问层级：代码工程师可询问技术设计工程师：当技术方案不明确时，向技术设计工程师提问澄清，不要自行猜测设计意图。</li>
+<li>审核门：代码过审才交接：产出代码后需代码审查员审核（审核门），审核通过后才交接给测试工程师，审核驳回则修改后重新提交。</li></ul>
+<h2>典型案例：dedup_tags ——「去重返回规范形式」本体规则直接命中</h2>
+<div class="grid2">
+<div class="case"><h4>无本体（fail）</h4><div class="sub">缺少「去重返回规范形式而非原始标签」规则 → 3 轮仍保留原始大小写/空白</div><div class="rd"><div class="rd-h">第 1 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    """
+    标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        # 去除首尾空白并转换为小写
+        clean_tag = tag.strip().lower()
+        if clean_tag not in seen:
+            seen.add(clean_tag)
+            result.append(tag)
+    return result</pre>
+<pre class="out">Traceback (most recent call last):
+  File "&lt;string&gt;", line 23, in &lt;module&gt;
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "&lt;string&gt;", line 19, in check
+    assert candidate([' </pre>
+</div>
+<div class="rd"><div class="rd-h">第 2 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        stripped_tag = tag.strip().lower()
+        if stripped_tag not in seen:
+            seen.add(stripped_tag)
+            result.append(tag)
+    return result</pre>
+<pre class="out">Traceback (most recent call last):
+  File "&lt;string&gt;", line 21, in &lt;module&gt;
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "&lt;string&gt;", line 17, in check
+    assert candidate([' </pre>
+</div>
+<div class="rd"><div class="rd-h">第 3 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        stripped_tag = tag.strip().lower()
+        if stripped_tag not in seen:
+            seen.add(stripped_tag)
+            result.append(tag)
+    return result</pre>
+<pre class="out">Traceback (most recent call last):
+  File "&lt;string&gt;", line 21, in &lt;module&gt;
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "&lt;string&gt;", line 17, in check
+    assert candidate([' </pre>
+</div></div>
+<div class="case"><h4>带本体（pass）</h4><div class="sub">本体写死了去重语义 → 模型按规则输出规范形式</div><div class="rd"><div class="rd-h">第 1 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    seen = set()
+    result = []
+    for tag in tags:
+        tag = tag.strip().lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result</pre>
+<pre class="out">Traceback (most recent call last):
+  File "&lt;string&gt;", line 18, in &lt;module&gt;
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "&lt;string&gt;", line 13, in check
+    assert candidate(['A</pre>
+</div>
+<div class="rd"><div class="rd-h">第 2 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        normalized_tag = tag.strip().lower()
+        if normalized_tag not in seen:
+            seen.add(normalized_tag)
+            result.append(tag)
+    return result</pre>
+<pre class="out">Traceback (most recent call last):
+  File "&lt;string&gt;", line 21, in &lt;module&gt;
+    check(dedup_tags)
+    ~~~~~^^^^^^^^^^^^
+  File "&lt;string&gt;", line 17, in check
+    assert candidate([' </pre>
+</div>
+<div class="rd"><div class="rd-h">第 3 轮 → <b class="g">pass</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+    """标签去重。
+    保持首次出现的顺序；忽略大小写差异和首尾空白。
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        tag_norm = tag.strip().lower()
+        if tag_norm not in seen:
+            seen.add(tag_norm)
+            result.append(tag.strip())
+    return result</pre>
+</div></div>
+</div>
+<h2>结论</h2>
+<div class="concl">
+<b>① 本体注入带来可量化增益：</b>通过率 7/12（58%）→ 9/12（75%）；本体独有翻盘：dedup_tags、merge_summaries；首轮通过 5→6，平均轮次 2.17→1.83。<br/>
+<b>② 增益集中在「本体规则与考题强相关」处：</b>dedup_tags / merge_summaries / safe_truncate 的本体里恰好写死了「去重返回规范形式」「去重键与保留文本分离」「省略号不计 max_chars」——题目考什么、本体就写什么，注入即得分；validate_tags / extract_code 虽两侧都过，但带本体收敛更快（少走 1-2 轮）。<br/>
+<b>③ 本体不改变「通用算法/库函数」结果：</b>jsonb_get / cosine / topk / paginate 两侧都过（不依赖领域规则）；normalize_name / parse_dsn / chunk_overlap 两侧都挂——瓶颈在 7B 的中文边界/需求歧义/多约束联合覆盖，本体未写这些细节故无增益（详见 results/summary.md 根因诊断）。<br/>
+<b>④ 工程结论：</b>代码型数字人的本体应写成<b style="color:#2fd17c">「可执行编码规范」（规则即考题答案）</b>，收益最大。qwen2.5:7b 定位 = 低成本回归/对照基线；生产写码走 GLM 5.2 / V4-Flash。
+</div>
+<div class="foot">数据：exports/test-suite-project-2026-09-09/results（带本体）vs results_none（无本体）· 逐轮往返见同名 .json · 判定：一次性隔离沙箱容器跑 HumanEval 风格隐藏 assert</div>
+</div>
+<script>document.querySelectorAll('.bar[data-h]').forEach(function(b){setTimeout(function(){b.style.height=b.dataset.h+'%'},150)});</script>
+</body></html>

@@ -2103,11 +2103,13 @@ def capability_run_identity(body: dict):
 
     provider: llm2(GLM 默认) / llm(V4-Flash) / ollama(本地 qwen，配
     ollama_model 如 "qwen2.5:7b-32k")。reactive 数字人走写→测→改循环。
+    use_ontology=False 时做 A/B 消融（不注入本体段）。
     """
     return capability.run_for_identity(
         db.get_conn(), int(body.get("identity_id") or 0),
         int(body.get("task_id") or 0), body.get("provider", "llm2"),
-        ollama_model=body.get("ollama_model"))
+        ollama_model=body.get("ollama_model"),
+        use_ontology=bool(body.get("use_ontology", True)))
 
 
 @app.get("/api/capability/stats")
