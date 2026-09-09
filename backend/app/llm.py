@@ -11,10 +11,33 @@ must surface LLMError instead of silently self-judging with the same model
 (同源偏差 - the model rationalizes its own output).
 """
 import json
+import os
 import re
 import threading
 
 from . import netutil, settings_store
+
+
+def _http_client_kwargs(base_url: str) -> dict:
+    """Build the httpx client kwargs for the OpenAI SDK.
+
+    - Loopback (Ollama) -> trust_env=False (bypass the Windows system proxy,
+      which would 502 loopback requests — killed benchmark job #30).
+    - Remote + LLM_PROXY set -> route through LLM_PROXY explicitly (CN network
+      blocks direct access to api.deepseek.com / open.bigmodel.cn; inside the
+      docker container the host's mihomo proxy is reachable at
+      host.docker.internal:6789 and passed via the LLM_PROXY env var).
+    - Remote + no LLM_PROXY -> trust_env=True (honour the host's env proxy).
+    """
+    if netutil.is_local_url(base_url):
+        import httpx
+        return {"http_client": httpx.Client(trust_env=False)}
+    proxy = os.environ.get("LLM_PROXY", "").strip()
+    if proxy:
+        import httpx
+        return {"http_client": httpx.Client(proxy=proxy, trust_env=False)}
+    return {}
+
 
 # hook for UT: tests inject a fake callable (messages -> str)
 _fake_chat = None
@@ -242,13 +265,9 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
     def run() -> None:
         try:
             from openai import OpenAI
-            # loopback endpoints (Ollama) must NOT go through any proxy:
-            # httpx defaults to trust_env=True, which sends localhost through
-            # the system proxy -> 502 (killed benchmark job #30).
-            kwargs_client = {}
-            if netutil.is_local_url(s["base_url"]):
-                import httpx
-                kwargs_client["http_client"] = httpx.Client(trust_env=False)
+            # loopback (Ollama) must NOT go through any proxy; remote LLM
+            # endpoints route through LLM_PROXY when set (see helper docstring).
+            kwargs_client = _http_client_kwargs(s["base_url"])
             client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
                             timeout=idle_seconds, max_retries=0,
                             **kwargs_client)
@@ -329,11 +348,7 @@ def _iter_openai(s: dict, messages: list[dict], temperature: float,
     enforced by the caller if needed (see `_call_llm_with_usage` for the
     non-streaming counterpart).
     """
-    if netutil.is_local_url(s["base_url"]):
-        import httpx
-        kwargs_client = {"http_client": httpx.Client(trust_env=False)}
-    else:
-        kwargs_client = {}
+    kwargs_client = _http_client_kwargs(s["base_url"])
     from openai import OpenAI
     client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
                     timeout=float(s.get("timeout", 90)), max_retries=0,

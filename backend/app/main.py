@@ -2267,4 +2267,35 @@ def backup_import():
 DIST = Path(__file__).resolve().parent.parent.parent / "client" / "dist"
 if DIST.exists():
     from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=str(DIST), html=True), name="dist")
+
+    class _NoCacheStatic(StaticFiles):
+        """StaticFiles subclass that sets `Cache-Control: no-cache` on the
+        entry HTML (so a browser refresh always pulls the latest index.html
+        + new asset hashes) and a short `max-age=300` on hashed assets.
+
+        Subclassing StaticFiles (rather than wrapping it) keeps this a proper
+        ASGI callable — the wrapped-object approach raised
+        `TypeError: '_NoCacheStatic' object is not callable` because the
+        `__call__` dunder is looked up on the type, not through __getattr__.
+
+        Rationale: vite hashes asset filenames (e.g. index-n65jrv_5.js), but
+        a stale `index.html` referencing a stale hash keeps loading the old
+        bundle from the browser disk cache. Forcing HTML to revalidate on
+        every request means a normal F5 picks up new code without needing
+        DevTools "Disable cache" or Ctrl+Shift+R.
+        """
+
+        async def get_response(self, path: str, scope):
+            resp = await super().get_response(path, scope)
+            media = (resp.headers.get("content-type") or "").lower()
+            if media.startswith("text/html"):
+                # entry HTML: force revalidate on every request
+                resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+                resp.headers["Pragma"] = "no-cache"
+            elif media.startswith(
+                    ("text/css", "application/javascript", "text/javascript")):
+                # hashed assets: short max-age is enough (hash change = miss)
+                resp.headers["Cache-Control"] = "public, max-age=300"
+            return resp
+
+    app.mount("/", _NoCacheStatic(directory=str(DIST), html=True), name="dist")

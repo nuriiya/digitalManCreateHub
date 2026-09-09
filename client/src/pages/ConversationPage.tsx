@@ -387,7 +387,10 @@ export default function ConversationPage({ refreshKey }: Props) {
                 ))}
               </div>
             ))}
-            {sending && <div className="chat-msg assistant chat-typing">正在判断并回答…</div>}
+            {/* 占位 assistant 气泡已在 doSend 发起时立即 push 到 messages
+                （initial identity_name='系统' + content='判断路由中…'，
+                流式 token 累加时实时更新），不再渲染静态 typing 气泡
+                —— 否则会和占位气泡重复，造成视觉混乱。 */}
           </div>
 
           <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''} ${genPipelineMode ? 'pipe-on' : ''}`}>
