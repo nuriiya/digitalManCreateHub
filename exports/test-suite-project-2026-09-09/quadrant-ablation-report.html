@@ -1,0 +1,88 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>4 元消融：pipeline × 本体 · 项目能力题</title><style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b35;--txt:#e6e9ef;--muted:#8b93a1;--dim:#5f6775;--green:#2fd17c;--red:#ff6b6b;--blue:#4f8cff;--orange:#ffab4d;--purple:#9f7cff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;padding:28px 22px 70px}
+.wrap{max-width:1180px;margin:0 auto}
+h1{font-size:21px}h2{font-size:16px;margin:28px 0 6px}.dm{color:var(--dim);font-size:11px;margin-top:2px}.muted{color:var(--muted)}
+.tagline{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.7}
+.matrix{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cell{border-radius:16px;padding:18px 20px;border:1px solid var(--line);background:var(--panel);position:relative;overflow:hidden}
+.cell .tag{font-size:11px;color:var(--muted);letter-spacing:.3px}
+.cell .big{font-size:44px;font-weight:800;line-height:1.1}
+.cell .pct{font-size:15px;color:var(--muted)}
+.cell .meta{font-size:11.5px;color:var(--dim);margin-top:8px;line-height:1.6}
+.cell .fails{font-size:11.5px;color:var(--red);margin-top:6px}
+.cell::after{content:"";position:absolute;inset:0 auto 0 0;width:4px}
+.cell.A{border-color:rgba(47,209,124,.55)}.cell.A .big,.cell.A::after{color:var(--green);background:var(--green)}
+.cell.B{border-color:rgba(255,171,77,.5)}.cell.B .big{color:var(--orange)}.cell.B::after{background:var(--orange)}
+.cell.C{border-color:rgba(79,140,255,.5)}.cell.C .big{color:var(--blue)}.cell.C::after{background:var(--blue)}
+.cell.D{border-color:rgba(255,107,107,.4)}.cell.D .big{color:var(--red)}.cell.D::after{background:var(--red)}
+.axis{display:flex;justify-content:center;gap:18px;font-size:12px;color:var(--muted);margin:10px 0 8px}
+.axis b{font-weight:600}.badge-row{display:inline-flex;gap:6px;align-items:center}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+th,td{padding:9px 12px;border-bottom:1px solid var(--line);font-size:12.5px;vertical-align:top;text-align:center}
+th:first-child,td:first-child{text-align:left}
+thead th{color:var(--muted);font-size:11.5px;background:#1a1f28}
+td.nm{min-width:170px}
+.b{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:8px}
+.b.pass{background:rgba(47,209,124,.15);color:var(--green)}
+.b.pass.late{border:1px dashed rgba(47,209,124,.5)}
+.b.fail{background:rgba(255,107,107,.13);color:var(--red)}
+tr.legend td{font-size:10px;color:var(--dim);background:#13161d}
+.diag{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-top:14px}
+.diag h4{font-size:14px;margin-bottom:6px;color:#f0c08a}
+.diag pre{font-family:Consolas,monospace;font-size:11.5px;background:#0d1016;border-radius:8px;padding:10px;white-space:pre-wrap;color:#d8b98a;line-height:1.6;margin-top:6px}
+.concl{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--purple);border-radius:12px;padding:16px 20px;margin-top:22px;line-height:1.9}
+.concl b{color:#bd9fff}
+.ok{color:var(--green)} .bad{color:var(--red)} .dim{color:var(--dim)}
+.arrow{color:var(--muted)}
+@media(max-width:900px){.matrix{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<h1>4 元消融矩阵 · pipeline 介入 × 本体注入</h1>
+<p class="tagline">模型 <b>qwen2.5:7b-32k</b> · 12 道项目题 · 沙箱可执行验证（≤3 轮，LLM 不判分）· 2026-09-09<br/>
+轴 A = <b style="color:#2fd17c">本体注入</b>（代码工程师 14 条 + reviewer 本体，use_ontology on/off 统控两侧）· 轴 B = <b style="color:#4f8cff">流程形态</b>（单数字人闭卷写测改 vs pipeline：代码工程师→调试工程师 reviewer 诊断转述→修正）</p>
+<div class="matrix">
+<div class="cell A"><div class="tag">单数字人 · 本体注入</div><div class="big">9/12</div><div class="pct">通过率 75% · 首轮 6 · 均轮 1.83</div><div class="meta">代码工程师自己读沙箱堆栈修正（reactive）</div><div class="fails">fail：normalize_name、parse_dsn、chunk_overlap</div></div>
+<div class="cell C"><div class="tag">Pipeline 协作 · 本体注入</div><div class="big">7/12</div><div class="pct">通过率 58% · 首轮 7 · 均轮 1.83</div><div class="meta">writer 代码工程师 → reviewer 调试工程师（读堆栈出修复建议）→ writer 修正</div><div class="fails">fail：normalize_name、parse_dsn、dedup_tags、chunk_overlap、extract_code</div></div>
+<div class="cell B"><div class="tag">单数字人 · 无本体</div><div class="big">7/12</div><div class="pct">通过率 58% · 首轮 5 · 均轮 2.17</div><div class="meta">隔离变量：仅去掉本体段，其余同 A</div><div class="fails">fail：normalize_name、parse_dsn、dedup_tags、chunk_overlap、merge_summaries</div></div>
+<div class="cell D"><div class="tag">Pipeline 协作 · 无本体</div><div class="big">7/12</div><div class="pct">通过率 58% · 首轮 5 · 均轮 2.0</div><div class="meta">两侧角色都不注入本体</div><div class="fails">fail：normalize_name、parse_dsn、dedup_tags、chunk_overlap、merge_summaries</div></div>
+</div>
+
+<h2>逐题 4 状态对照</h2>
+<table><thead><tr><th>题目</th><th>单+本体<br/>(A)</th><th>单−本体<br/>(B)</th><th>pipe+本体<br/>(C)</th><th>pipe−本体<br/>(D)</th></tr></thead><tbody>
+<tr class="legend"><td colspan="5">PASS 实线=首轮过 · PASS 虚线=经写测改/诊断修正 · FAIL=3 轮仍红；小字=轮次轨迹</td></tr>
+<tr><td class="nm"><b>proj_normalize_name</b><div class="dm">实体名规范化 · data_cleaning</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td></tr>
+<tr><td class="nm"><b>proj_parse_dsn</b><div class="dm">PG DSN 解析 · db</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td></tr>
+<tr><td class="nm"><b>proj_paginate</b><div class="dm">分页 · web</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td></tr>
+<tr><td class="nm"><b>proj_dedup_tags</b><div class="dm">标签去重 · data_cleaning</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→fail→pass</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td></tr>
+<tr><td class="nm"><b>proj_jsonb_get</b><div class="dm">JSONB 点路径读取 · db</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td></tr>
+<tr><td class="nm"><b>proj_chunk_overlap</b><div class="dm">文本重叠分段 · rag</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td></tr>
+<tr><td class="nm"><b>proj_cosine</b><div class="dm">余弦相似度 · vector</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td></tr>
+<tr><td class="nm"><b>proj_validate_tags</b><div class="dm">标签闭集校验 · validation</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→fail→pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→pass</div></td></tr>
+<tr><td class="nm"><b>proj_safe_truncate</b><div class="dm">截断 · text</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→fail→pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→pass</div></td></tr>
+<tr><td class="nm"><b>proj_extract_code</b><div class="dm">提取纯代码 · text</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td></tr>
+<tr><td class="nm"><b>proj_merge_summaries</b><div class="dm">摘要去重拼接 · rag</div></td><td class="pass"><span class="b pass late">PASS</span><div class="dm">fail→pass</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="fail"><span class="b fail">FAIL</span><div class="dm">fail→fail→fail</div></td></tr>
+<tr><td class="nm"><b>proj_topk</b><div class="dm">top-k · vector</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td><td class="pass"><span class="b pass">PASS</span><div class="dm">pass</div></td></tr>
+</tbody></table>
+
+<h2>reviewer 诊断证据（proj_dedup_tags · pipeline+本体 · 首轮失败后调试工程师给 writer 的转述）</h2>
+<div class="diag"><h4>第 1 轮沙箱失败后 reviewer（调试工程师，本体注入）的诊断</h4>根据失败堆栈信息，测试用例 `['A', 'a', 'B', 'b']` 应该返回 `['A', 'B']`，但实际返回结果与预期不符。问题出在 `tag` 的去重逻辑上。
+
+具体根因是：`tag` 在 `strip()` 和 `lower()` 之后，虽然 `strip()` 去除了前后空格，但 `lower()` 将大小写统一后，`'A'` 和 `'a'` 会被认为是同一个元素，导致去重失败。
+
+修改建议：
+- 将 `tag = tag.strip().lower()` 改为 `tag = tag.lower().strip()`，确保先统一大小写再去除前后空格。
+
+验证方式：
+- 重新运行测试用例 `['A', 'a', 'B', 'b']`，确认返回结果为 `['A', 'B']`。
+- 再次运行其他测试用例，确保没有引入新的错误。</div>
+
+<h2>结论</h2>
+<div class="concl">
+<b>① 本体轴的增益在单数字人形态下最大：</b>A（9/12）优于 B（7/12），+2 题（dedup_tags、merge_summaries）——本体规则「即考题答案」。<br/>
+<b>② pipeline 介入在本测试（7B reviewer）下<b class="bad">无增益甚至轻微负向</b>：</b>本体组 9→7（C 丢 dedup_tags、extract_code：reviewer 同模型转述把诊断带偏，如 extract_code 的 SyntaxError 误判），无本体组保持 7（D 与 B 通过题集一致，仅 validate_tags/safe_truncate 轮次 3→2 轻微改善）。<br/>
+<b>③ 关键洞察：pipeline 的收益依赖 reviewer 相对 writer 的「能力增量」。</b>同为 qwen2.5:7b 时，LLM→LLM 转述堆栈会丢失信息、引入误导（证据见上）；预期把 reviewer 换成更强模型（GLM 5.2）或确定性审查门（跑更细断言）才有正向价值。<br/>
+<b>④ 当前最优配置：单数字人 + 本体注入（A，9/12）。</b>pipeline 模式建议保留为「角色分工」实验通道（mode=pipeline，reviewer_id 可换），真实收益待 reviewer 升级后复测。
+</div>
+<div class="dim" style="margin-top:24px;line-height:1.7">数据目录：results(单+本体) / results_none(单−本体) / results_pipe1(pipe+本体) / results_pipe0(pipe−本体) · 逐轮完整往返 + reviewer 诊断见同名 .json · 判定：一次性隔离沙箱跑 HumanEval 风格隐藏 assert</div>
+</div></body></html>

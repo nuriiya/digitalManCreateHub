@@ -2104,7 +2104,19 @@ def capability_run_identity(body: dict):
     provider: llm2(GLM 默认) / llm(V4-Flash) / ollama(本地 qwen，配
     ollama_model 如 "qwen2.5:7b-32k")。reactive 数字人走写→测→改循环。
     use_ontology=False 时做 A/B 消融（不注入本体段）。
+    mode="pipeline" 时走「代码工程师 ↔ 调试工程师」协作（reviewer_id 默认 6），
+    失败信息先经 reviewer 角色本体诊断转述再回流 writer（4 元消融第二轴）。
     """
+    mode = body.get("mode", "single")
+    if mode == "pipeline":
+        return capability.run_pipeline_for_identity(
+            db.get_conn(),
+            int(body.get("identity_id") or 0),
+            int(body.get("task_id") or 0),
+            int(body.get("reviewer_id") or 6),
+            body.get("provider", "llm2"),
+            ollama_model=body.get("ollama_model"),
+            use_ontology=bool(body.get("use_ontology", True)))
     return capability.run_for_identity(
         db.get_conn(), int(body.get("identity_id") or 0),
         int(body.get("task_id") or 0), body.get("provider", "llm2"),

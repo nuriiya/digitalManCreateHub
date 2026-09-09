@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>本体注入 A/B 消融 · 项目能力题</title><style>
+<!doctype html><html lang="zh-CN" data-page-node-id="GJXERByxFL8WHL0lreKlYm"><head data-page-node-id="9CA6nEoSwBRFqVuxSWz3xa"><meta charset="UTF-8" data-page-node-id="BZER0hMkQAcXKwv5AFieVV"/><meta name="viewport" content="width=device-width,initial-scale=1" data-page-node-id="MmwD5fIBsBQUsdzFq4d3PT"/><title>本体注入 A/B 消融 · 项目能力题</title><style>
 :root{--bg:#0f1115;--panel:#171a21;--line:#262b35;--txt:#e6e9ef;--muted:#8b93a1;--dim:#5f6775;--green:#2fd17c;--red:#ff6b6b;--blue:#4f8cff;--orange:#ffab4d}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;padding:28px 22px 70px}
@@ -35,52 +35,52 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
 .concl b{color:#7fb2ff}
 .foot{color:var(--dim);font-size:11.5px;margin-top:26px;line-height:1.6}
 @media(max-width:920px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
-</style></head><body><div class="wrap">
-<h1>本体注入 A/B 消融 · 项目能力题报告</h1>
-<p class="tagline">模型 <b>qwen2.5:7b-32k</b> · 数字人 代码工程师（identity 3）· 12 道<b>项目题</b>（取自本仓库真实模块）· 沙箱可执行验证 · 2026-09-09<br/>隔离变量 = 是否注入 <b style="color:#4f8cff">14 条编程规范本体</b>（use_ontology on/off；身份/输出铁律两侧一致）。判定=容器 assert，LLM 不判分；写测改 ≤3 轮，绿即停。</p>
-<div class="kpis">
-<div class="kpi ont"><div class="n">9/12 <span style="font-size:14px">(75%)</span></div><div class="l">带本体 · 通过率</div><div class="s">首轮通过 6 · 平均轮次 1.83</div></div>
-<div class="kpi none"><div class="n">7/12 <span style="font-size:14px">(58%)</span></div><div class="l">无本体 · 通过率</div><div class="s">首轮通过 5 · 平均轮次 2.17</div></div>
-<div class="kpi" style="border-color:rgba(79,140,255,.5)"><div class="n" style="color:#7fb2ff">+2 题</div><div class="l">本体独有增益（无本体 fail → 带本体 pass）</div><div class="s">dedup_tags、merge_summaries</div></div>
-<div class="kpi" style="border-color:rgba(47,209,124,.5)"><div class="n" style="color:#2fd17c">2 题</div><div class="l">写测改轮次变少</div><div class="s">validate_tags、safe_truncate</div></div>
+</style></head><body data-page-node-id="F4yKVKsriKzPHHRXU7swqL"><div class="wrap" data-page-node-id="tf7iXOk4IOLNmq7BKaWBtu">
+<h1 data-page-node-id="MEk2R06wF4rvYkhl5lA0hb">本体注入 A/B 消融 · 项目能力题报告</h1>
+<p class="tagline" data-page-node-id="GOEvmJZvYrHljELnigdHyr">模型 <b data-page-node-id="Ai7n6rmMq67BejKaIeAqsM">qwen2.5:7b-32k</b> · 数字人 代码工程师（identity 3）· 12 道<b data-page-node-id="pzBHzNxGrMBl3MqAxE6RcF">项目题</b>（取自本仓库真实模块）· 沙箱可执行验证 · 2026-09-09<br data-page-node-id="Y6iPHV30nbDGjMvIMD2Dnl"/>隔离变量 = 是否注入 <b style="color:#4f8cff" data-page-node-id="VnP579WnHkCYxoA14KlHao">14 条编程规范本体</b>（use_ontology on/off；身份/输出铁律两侧一致）。判定=容器 assert，LLM 不判分；写测改 ≤3 轮，绿即停。</p>
+<div class="kpis" data-page-node-id="OIdl4kUitujAL8E8DWXo9X">
+<div class="kpi ont" data-page-node-id="5WB9EM67Q3QgSgmHtjPJKr"><div class="n" data-page-node-id="93boAXKjOP7UE7myRAhFHi">9/12 <span style="font-size:14px" data-page-node-id="wK7hWsKwLfFFHCwS8l3tlL">(75%)</span></div><div class="l" data-page-node-id="N7Y7e3kw99MZbAsKvwoOkN">带本体 · 通过率</div><div class="s" data-page-node-id="C1aZZgrpflppGYBzlGoWE0">首轮通过 6 · 平均轮次 1.83</div></div>
+<div class="kpi none" data-page-node-id="EnIWF6DPyJhUE3yU5Q3Yar"><div class="n" data-page-node-id="G7FfyzSGoOeiSyjlsMxHFc">7/12 <span style="font-size:14px" data-page-node-id="6E4snATeJP3HOAdWiDRpcC">(58%)</span></div><div class="l" data-page-node-id="YVAJPPUpiaokv7ptHGNiY5">无本体 · 通过率</div><div class="s" data-page-node-id="MrpvP0VRYT5GXyjdnOACTb">首轮通过 5 · 平均轮次 2.17</div></div>
+<div class="kpi" style="border-color:rgba(79,140,255,.5)" data-page-node-id="vTFcjXvtPBIpt8S8t2tiZO"><div class="n" style="color:#7fb2ff" data-page-node-id="hM1HaUhGajQTJqEPp41926">+2 题</div><div class="l" data-page-node-id="YFDUjw0RvxHrCrKr362G1l">本体独有增益（无本体 fail → 带本体 pass）</div><div class="s" data-page-node-id="oUPm9kusDzu5dMIyuHvn83">dedup_tags、merge_summaries</div></div>
+<div class="kpi" style="border-color:rgba(47,209,124,.5)" data-page-node-id="R66NyPQdO5ibI7omI0n20J"><div class="n" style="color:#2fd17c" data-page-node-id="AW0eGkPaMcLA7c5RR8yE1t">2 题</div><div class="l" data-page-node-id="YWn0Tg57gLewOO9UER5Lyj">写测改轮次变少</div><div class="s" data-page-node-id="VeZ7t5dGI2qIJe5VEAss5z">validate_tags、safe_truncate</div></div>
 </div>
-<h2>通过率对比</h2>
-<div class="bars">
-<div class="bcol ont"><div class="bar" data-h="__opH__"></div><div class="vl">75%</div><div class="lb">带本体</div></div>
-<div class="bcol none"><div class="bar" data-h="__npH__"></div><div class="vl">58%</div><div class="lb">无本体</div></div>
+<h2 data-page-node-id="WO4AMFPqOLJ89WHxm4WMNA">通过率对比</h2>
+<div class="bars" data-page-node-id="Oh78PhGZZ8GNWzYKwygO4z">
+<div class="bcol ont" data-page-node-id="s11CTzEPP85mkbsH0h9lf7"><div class="bar" data-h="__opH__" data-page-node-id="rkvqykYxMHqG2TThFnfCvy"></div><div class="vl" data-page-node-id="JEHbxX6zRiSCivo5A6I8gF">75%</div><div class="lb" data-page-node-id="KMNYGGKZxate85rUl8dOEY">带本体</div></div>
+<div class="bcol none" data-page-node-id="CDFYZ0UgogyvlFBAzZlcUV"><div class="bar" data-h="__npH__" data-page-node-id="BCFXZPA9fsbetaz5AB6SIz"></div><div class="vl" data-page-node-id="5ocAfqI7K5sdRKqKd7iZBf">58%</div><div class="lb" data-page-node-id="FfnQG4DkVgCc34m1b9dYDy">无本体</div></div>
 </div>
-<h2>逐题对照</h2>
-<table><thead><tr><th>题目（项目来源）</th><th>带本体</th><th>无本体</th><th>判定</th></tr></thead><tbody><tr class="both_fail"><td><b>proj_normalize_name</b><div class="dim">实体名规范化（去括号/空白） · data_cleaning</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
-<tr class="both_fail"><td><b>proj_parse_dsn</b><div class="dim">PG DSN 解析 · db</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
-<tr class="both"><td><b>proj_paginate</b><div class="dim">分页 offset/has_next · web</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="ont_only"><td><b>proj_dedup_tags</b><div class="dim">标签去重（忽略大小写/空白） · data_cleaning</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill gain">仅带本体过</span></tr>
-<tr class="both"><td><b>proj_jsonb_get</b><div class="dim">JSONB 点路径安全读取 · db</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="both_fail"><td><b>proj_chunk_overlap</b><div class="dim">文本重叠分段 · rag</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill fail">两者都挂</span></tr>
-<tr class="both"><td><b>proj_cosine</b><div class="dim">余弦相似度 · vector</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="both"><td><b>proj_validate_tags</b><div class="dim">标签闭集校验 · validation</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="both"><td><b>proj_safe_truncate</b><div class="dim">截断（省略号不计额度） · text</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→fail→pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="both"><td><b>proj_extract_code</b><div class="dim">从回复提取纯代码 · text</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr>
-<tr class="ont_only"><td><b>proj_merge_summaries</b><div class="dim">多段摘要去重拼接 · rag</div></td><td><span class="badge r2">PASS</span><div class="dim">fail→pass</div></td><td><span class="badge r2">FAIL</span><div class="dim">fail→fail→fail</div></td><span class="pill gain">仅带本体过</span></tr>
-<tr class="both"><td><b>proj_topk</b><div class="dim">top-k 索引 · vector</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><td><span class="badge r1">PASS</span><div class="dim">pass</div></td><span class="pill both">两者都过</span></tr></tbody></table>
-<p class="muted" style="margin-top:6px;font-size:12px">绿=pass（实线=首轮过，虚线=经写测改修正），红=fail；小字为轮次轨迹（fail→pass = 第 2 轮修正通过）。</p>
-<h2>带本体组 system prompt 额外注入的 14 条本体（无本体组缺失的部分）</h2>
-<ul class="ont"><li>标签规范形式：标签的规范形式是去除首尾空白并转为小写后的字符串，用于统一比较与输出。</li>
-<li>去重返回规范形式：去重时应将每个标签转换为规范形式，并将规范形式加入结果列表，而不是保留原始标签。</li>
-<li>截断上限不计省略号：safe_truncate 的 max_chars 指截断时保留原文本字符的个数，省略号是额外追加的，不占用 max_chars 的额度。</li>
-<li>超长时截取前缀再拼接省略号：当 len(text) &gt; max_chars 时，应返回 text[:max_chars] + ellipsis，不要用 max_chars - len(ellipsis) 作为前缀截取长度。</li>
-<li>字符数：Python 中按字符数截断时使用 len 和切片按 Unicode 字符计算，中文等每个字符计为 1，不按字节截断。</li>
-<li>非空摘要段先去掉首尾空白再输出：处理每个输入段时应先 strip() 去除首尾空白，strip 后为空则过滤掉，非空则用 strip 后的文本参与后续去重和连接，不能保留原始外层空白。</li>
-<li>去重键与保留文本分离：判断内容重复时，把去除所有空白和标点后的内容作为已见键；真正加入结果的是清理掉首尾空白的该段原文，而不是原始未清理段落，也不是去除空白标点后的键。</li>
-<li>沙箱安全边界：所有代码执行都在一次性隔离沙箱中：禁网、只读根文件系统、无特权、内存 256MB/CPU 1 核/PID 上限 64。数字人无法触及宿主文件系统或外网。</li>
-<li>执行动作白名单：只能调用本人已声明且审批通过的动作；未声明的动作会被 guard 拒绝。执行前 guard 确定性裁决（入参必填 + 长度封顶），越权调用一律拒绝。</li>
-<li>写测改循环：写代码 → run_test 跑测试 → 观察绿/红 → 红则带失败堆栈修正 → 再跑，直到绿或达轮数上限。终止靠确定性判定（测试通过），不靠自我宣称完成。</li>
-<li>输出纯代码：只输出纯 Python 代码，不带解释和 markdown 标记，引号括号成对闭合</li>
-<li>边界条件处理：空输入/单元素/负数/去重/截断等边界必须显式处理，不能只写主路径</li>
-<li>询问层级：代码工程师可询问技术设计工程师：当技术方案不明确时，向技术设计工程师提问澄清，不要自行猜测设计意图。</li>
-<li>审核门：代码过审才交接：产出代码后需代码审查员审核（审核门），审核通过后才交接给测试工程师，审核驳回则修改后重新提交。</li></ul>
-<h2>典型案例：dedup_tags ——「去重返回规范形式」本体规则直接命中</h2>
-<div class="grid2">
-<div class="case"><h4>无本体（fail）</h4><div class="sub">缺少「去重返回规范形式而非原始标签」规则 → 3 轮仍保留原始大小写/空白</div><div class="rd"><div class="rd-h">第 1 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<h2 data-page-node-id="x3pM5FVgkRWNpSuDSHJzKG">逐题对照</h2>
+<table data-page-node-id="e095mXCLX4o7gHPHCVrrPU"><thead data-page-node-id="aPMCDqcGETcLKiKl5Uo4JF"><tr data-page-node-id="An1ZfPhjTTPjrO2wmlLjrT"><th data-page-node-id="q6ZvCc6zTOfEKHgiKoLlD6">题目（项目来源）</th><th data-page-node-id="wHPnkFM5v7D8BKVYhnUiCN">带本体</th><th data-page-node-id="T5QUAVMr6IqP9lfwNvvmqb">无本体</th><th data-page-node-id="AVrGCTJaMYjfdd5isHDOZU">判定</th></tr></thead><tbody data-page-node-id="9ZWWk7PjHpECWFPGSXFHpv"><tr class="both_fail" data-page-node-id="d8bf8kwnukSS9fDQ09d7lT"><td data-page-node-id="CY6NDvdUwCvmGO8HlvFjR8"><b data-page-node-id="yXTdIuB5GxZnkwBbvnJH9v">proj_normalize_name</b><div class="dim" data-page-node-id="LiL6OYDqtgQEIRcBGu8zf3">实体名规范化（去括号/空白） · data_cleaning</div></td><td data-page-node-id="d57CcGCNnoKUKTPanMcmUF"><span class="badge r2" data-page-node-id="omDRt84JJkfaUM2t2xExSS">FAIL</span><div class="dim" data-page-node-id="SrsIdU5rnLxUzYNwLaBKEv">fail→fail→fail</div></td><td data-page-node-id="ztsX3RIxA31jkL2szQEQ8j"><span class="badge r2" data-page-node-id="fjHZkj4bGnStJWthCiDvJW">FAIL</span><div class="dim" data-page-node-id="e8PgsmZ5q0S4omodOPYf6h">fail→fail→fail</div></td><span class="pill fail" data-page-node-id="1x8RvI5bEDa2PODbfKVo6j">两者都挂</span></tr>
+<tr class="both_fail" data-page-node-id="YkiCmUrohdQHeJ4Sa3GkB8"><td data-page-node-id="JTwPpeJUUuy8uxfBDm61S7"><b data-page-node-id="kLMkruNSVLqxWmWsFSKtat">proj_parse_dsn</b><div class="dim" data-page-node-id="yTb5ksCf1s961BeoYuupGI">PG DSN 解析 · db</div></td><td data-page-node-id="WHxunGuOg3Wt9DqP6xxyMw"><span class="badge r2" data-page-node-id="cm00GuC2fWryEcAtdDID4l">FAIL</span><div class="dim" data-page-node-id="CW6wjdiu5iBR6KV9auXMWh">fail→fail→fail</div></td><td data-page-node-id="nopPgjH8VmJ1aOrfNsHXP0"><span class="badge r2" data-page-node-id="IoWUXe0XZzL6TcA4YhfXzu">FAIL</span><div class="dim" data-page-node-id="RIUPhoGdoEGyM6QQXOTpNp">fail→fail→fail</div></td><span class="pill fail" data-page-node-id="JiDi0umTY5G0ItPfjcI50u">两者都挂</span></tr>
+<tr class="both" data-page-node-id="ACxWbDobR9NNAkLB7kSanb"><td data-page-node-id="yaUVTEuDLuKYpSOLn5yPKI"><b data-page-node-id="sfpJHso2dWifrWkC2N0Gv6">proj_paginate</b><div class="dim" data-page-node-id="eHDKXeT53MVCMC2AD4I17W">分页 offset/has_next · web</div></td><td data-page-node-id="NVy6zDAHEgWdbJ1IFsmLFQ"><span class="badge r1" data-page-node-id="elfm06eoqH72Zr1j5mW16X">PASS</span><div class="dim" data-page-node-id="QcOUbfvleHhjcMQl8d4ZpX">pass</div></td><td data-page-node-id="mQfDUyw5m30YjtmpFe0BoO"><span class="badge r1" data-page-node-id="KQXBnrOZ6M02XAhuzAvnFF">PASS</span><div class="dim" data-page-node-id="uXk7a2yzCklEVnbWEdxSUP">pass</div></td><span class="pill both" data-page-node-id="rWEOSBCAGGk1LrOXG1IzJm">两者都过</span></tr>
+<tr class="ont_only" data-page-node-id="fUAoi2fQkvxCh0OwdOun4b"><td data-page-node-id="65AP09Z43N6tIRvSm3JN7I"><b data-page-node-id="kOolQydYBiox5wsQFhJtK5">proj_dedup_tags</b><div class="dim" data-page-node-id="VmHqSzwYF7BSEiOG8xObn0">标签去重（忽略大小写/空白） · data_cleaning</div></td><td data-page-node-id="tYrqqI5xf9OndRWuf5tpE9"><span class="badge r2" data-page-node-id="Z5sq9YdvqbQ1wiQeuLVKU8">PASS</span><div class="dim" data-page-node-id="kSY3Thy1xOGNGHQHoyEyD0">fail→fail→pass</div></td><td data-page-node-id="UYo12UfDX6fIhkkLxkxYox"><span class="badge r2" data-page-node-id="SZqFdVLzP2hWusejPGs3j7">FAIL</span><div class="dim" data-page-node-id="I4iEV5JQ571tV0XPMYcWSC">fail→fail→fail</div></td><span class="pill gain" data-page-node-id="iDZpeHctkPA4cUY5ua2f1l">仅带本体过</span></tr>
+<tr class="both" data-page-node-id="q1MJp0eFEfrglT7UKAjcpX"><td data-page-node-id="SyI8a4bBxyozMoT9kWi0dP"><b data-page-node-id="vEnUJZ1XuTMVvAnz1fHCY7">proj_jsonb_get</b><div class="dim" data-page-node-id="LP61IpnH9SZsALrRR7YKPT">JSONB 点路径安全读取 · db</div></td><td data-page-node-id="DK10AVa0iem0v00Lr9j7fO"><span class="badge r1" data-page-node-id="ecr98S11SO7VPJ0F19DQnu">PASS</span><div class="dim" data-page-node-id="6xz7EDLeU62Ofb8rv4FpUn">pass</div></td><td data-page-node-id="4Yrp5wYtJquzzFGNBKApMM"><span class="badge r1" data-page-node-id="cjHzg87yN5794aqvDMZDNw">PASS</span><div class="dim" data-page-node-id="Zl29GOpEYYR30vVh5CkINr">pass</div></td><span class="pill both" data-page-node-id="pZbDyDwnxqnICeYF4MmQWf">两者都过</span></tr>
+<tr class="both_fail" data-page-node-id="yuolNhGAPCuoH2aUNWuXaD"><td data-page-node-id="mw9B0FkkbQCh9UKKYwAvUu"><b data-page-node-id="i5p2gdyM5dtqj14maygWsP">proj_chunk_overlap</b><div class="dim" data-page-node-id="KFzgDFQ4UccEckzc4WwOZj">文本重叠分段 · rag</div></td><td data-page-node-id="fax5HwzBqCDpori1uoF1US"><span class="badge r2" data-page-node-id="IMOD1fPXXguSN7icFA55nO">FAIL</span><div class="dim" data-page-node-id="PEvkkfoVslC1jhWPOtNAhl">fail→fail→fail</div></td><td data-page-node-id="OnQ75kn9A6O3tjU4gahILS"><span class="badge r2" data-page-node-id="nKgjTixyArH9pQhEPvGvYh">FAIL</span><div class="dim" data-page-node-id="5Khft51COInwa5uF7waGA5">fail→fail→fail</div></td><span class="pill fail" data-page-node-id="qGUqUFhu5na8pWRsnZhDCX">两者都挂</span></tr>
+<tr class="both" data-page-node-id="RB5sh2hw8dInhwqK0ceMrP"><td data-page-node-id="ni5z078UcUWpMMxRCCmP3W"><b data-page-node-id="DFsnDT6ApnAOAYNhOl7F1d">proj_cosine</b><div class="dim" data-page-node-id="h0Dv8eJjC7zREgfUAFJXmn">余弦相似度 · vector</div></td><td data-page-node-id="2ft632b3AbCKrna02y7GfQ"><span class="badge r1" data-page-node-id="I1QeWsMdhRXWNWvHUMkNK8">PASS</span><div class="dim" data-page-node-id="oshpHX2N6EN4ZBrh8DKQvt">pass</div></td><td data-page-node-id="EUWITaCbJFkQsRCdWQCabe"><span class="badge r1" data-page-node-id="sGgLf6Nc1s9tG132Zu2qZ6">PASS</span><div class="dim" data-page-node-id="2GROOFwKEKxjEAX1a5wg14">pass</div></td><span class="pill both" data-page-node-id="Iu0cnTe6gZaUqtddrmlGnB">两者都过</span></tr>
+<tr class="both" data-page-node-id="6qXhIDGzdd7NhDbplKtboM"><td data-page-node-id="LqbDba66GeU6cxJxtG2BMG"><b data-page-node-id="pKdLy7eXP8UWtGjEPD0mq7">proj_validate_tags</b><div class="dim" data-page-node-id="UDG3WZCW5Y0DcMIEuw1f2S">标签闭集校验 · validation</div></td><td data-page-node-id="6kz6oD0fstWSSMyqp3NoWF"><span class="badge r1" data-page-node-id="3SdLfPvZxvAHMR8frOmVIt">PASS</span><div class="dim" data-page-node-id="9SD6oReGz1sd7qQMTn0fme">pass</div></td><td data-page-node-id="33S8XBir0pwxltdu6b9sUZ"><span class="badge r2" data-page-node-id="xylmj25UHcvvyO9WCn4cD0">PASS</span><div class="dim" data-page-node-id="EqYoyt3oia1GZL5RQ2Mm9P">fail→fail→pass</div></td><span class="pill both" data-page-node-id="ws5NnhS5uXy1ZyHgpGQYjA">两者都过</span></tr>
+<tr class="both" data-page-node-id="3a9q9WYCszBdAzCBT133KT"><td data-page-node-id="XDnpsFY1had9A1VxNnpTky"><b data-page-node-id="9Jve8PTeCMtXYY76LK4Cg2">proj_safe_truncate</b><div class="dim" data-page-node-id="H5XIct6Gxfq1iua2iNoCL8">截断（省略号不计额度） · text</div></td><td data-page-node-id="MRBa0KwYkEYw0dOSflFbPf"><span class="badge r1" data-page-node-id="kT93xWwY7Xqe5Ck9i3B3Cg">PASS</span><div class="dim" data-page-node-id="E239qihmUnfWFumOJ89y91">pass</div></td><td data-page-node-id="NTFPcohKz03T4RVMZgmDeK"><span class="badge r2" data-page-node-id="30DlYdEOUTsO2Wo0Wyd8gC">PASS</span><div class="dim" data-page-node-id="tpCmSZgORXQUmFAAYTtTlP">fail→fail→pass</div></td><span class="pill both" data-page-node-id="wy44ekKpp7aOOLm3BHQAKD">两者都过</span></tr>
+<tr class="both" data-page-node-id="CTDCFmWsUHKjQ4f9E08j2Z"><td data-page-node-id="XwmPiS3Mdup94yiSETmmDw"><b data-page-node-id="ZI7l98WkSH5II7POoipvlS">proj_extract_code</b><div class="dim" data-page-node-id="Bli4X8U7tClRmOTaESsMaJ">从回复提取纯代码 · text</div></td><td data-page-node-id="qXnAWgapIeI9G9YgYjvzZe"><span class="badge r2" data-page-node-id="HRp6XXJmANRyDDo3AV5T5z">PASS</span><div class="dim" data-page-node-id="zDDx3x6HYt9jxUPBPAxAv7">fail→pass</div></td><td data-page-node-id="eeHulrjA2DQCja9tprLzyN"><span class="badge r1" data-page-node-id="yneTkvDOWychNucCM18de7">PASS</span><div class="dim" data-page-node-id="CSAdZDchBszDXoNMdvKQkE">pass</div></td><span class="pill both" data-page-node-id="Xt4LDFeo3OWZMqkZTO6DxR">两者都过</span></tr>
+<tr class="ont_only" data-page-node-id="j7gMrL2FjFAPWD0tsYxO8h"><td data-page-node-id="r22QMnPIjaQcIhCAwTOcZE"><b data-page-node-id="tLKML7Bnl7bqBeCRsb6wSW">proj_merge_summaries</b><div class="dim" data-page-node-id="ATKCptBlUljGIKR39hfwUO">多段摘要去重拼接 · rag</div></td><td data-page-node-id="5l37mhl93RAem1lxmlTldp"><span class="badge r2" data-page-node-id="4CWOVkCpqSNw5LPH4PVuP9">PASS</span><div class="dim" data-page-node-id="rtSI0nTt0Duvp3iEVCubcV">fail→pass</div></td><td data-page-node-id="tz6Aqqh0iEteSLqb3dGuD5"><span class="badge r2" data-page-node-id="H81knxPIqUhsIu45DDv6tg">FAIL</span><div class="dim" data-page-node-id="klnyVi57JL4ohSqKPUe4EA">fail→fail→fail</div></td><span class="pill gain" data-page-node-id="xnJHOJW18jZLxx4PomnTaC">仅带本体过</span></tr>
+<tr class="both" data-page-node-id="ioCPqxumySqgYXAZI8sEy6"><td data-page-node-id="l6qGgW1p8tvTOHO8a6k9Zl"><b data-page-node-id="M2AbFNeqPFsMUXpwgP8xlr">proj_topk</b><div class="dim" data-page-node-id="9030uHiIKmxhpEP4P5V2ZD">top-k 索引 · vector</div></td><td data-page-node-id="xRDB5YPVVzWKcY7VLw584G"><span class="badge r1" data-page-node-id="Bkjf1Uioy0CK0B2WAWO9o4">PASS</span><div class="dim" data-page-node-id="Adi5cAQBcP6wcVKom6ASy4">pass</div></td><td data-page-node-id="7xwbKz8PNbFwGmDaY2OdUZ"><span class="badge r1" data-page-node-id="lwOeZzNRlhFY7lHvz72p9s">PASS</span><div class="dim" data-page-node-id="A4t1P0Yy3uBVeA2etBhlIn">pass</div></td><span class="pill both" data-page-node-id="BEyhMWBWwR74L2YEnnAvtl">两者都过</span></tr></tbody></table>
+<p class="muted" style="margin-top:6px;font-size:12px" data-page-node-id="YKzlBdE5FWe1Xv5CgAfQyG">绿=pass（实线=首轮过，虚线=经写测改修正），红=fail；小字为轮次轨迹（fail→pass = 第 2 轮修正通过）。</p>
+<h2 data-page-node-id="6dBPqzz3WQHqU9AnTpSleV">带本体组 system prompt 额外注入的 14 条本体（无本体组缺失的部分）</h2>
+<ul class="ont" data-page-node-id="OQu1YGuWjRTS1QXHKL2PAd"><li data-page-node-id="EGJIvnGoLcD62gXFqqAIw9">标签规范形式：标签的规范形式是去除首尾空白并转为小写后的字符串，用于统一比较与输出。</li>
+<li data-page-node-id="H4sicld94bbagiLHKGDMXj">去重返回规范形式：去重时应将每个标签转换为规范形式，并将规范形式加入结果列表，而不是保留原始标签。</li>
+<li data-page-node-id="x7PsT7qmSTrGbR61OBCA1R">截断上限不计省略号：safe_truncate 的 max_chars 指截断时保留原文本字符的个数，省略号是额外追加的，不占用 max_chars 的额度。</li>
+<li data-page-node-id="RFV0E9wHJSgHfgBemacOIz">超长时截取前缀再拼接省略号：当 len(text) &gt; max_chars 时，应返回 text[:max_chars] + ellipsis，不要用 max_chars - len(ellipsis) 作为前缀截取长度。</li>
+<li data-page-node-id="rfjG91wStQMqtpR05UJei9">字符数：Python 中按字符数截断时使用 len 和切片按 Unicode 字符计算，中文等每个字符计为 1，不按字节截断。</li>
+<li data-page-node-id="3KrACQUowr1N4yHHoEPX0a">非空摘要段先去掉首尾空白再输出：处理每个输入段时应先 strip() 去除首尾空白，strip 后为空则过滤掉，非空则用 strip 后的文本参与后续去重和连接，不能保留原始外层空白。</li>
+<li data-page-node-id="0wJVkmaERFe7OGNGYkzuKW">去重键与保留文本分离：判断内容重复时，把去除所有空白和标点后的内容作为已见键；真正加入结果的是清理掉首尾空白的该段原文，而不是原始未清理段落，也不是去除空白标点后的键。</li>
+<li data-page-node-id="tsTl1dTfb9hoyA0eLBHxk5">沙箱安全边界：所有代码执行都在一次性隔离沙箱中：禁网、只读根文件系统、无特权、内存 256MB/CPU 1 核/PID 上限 64。数字人无法触及宿主文件系统或外网。</li>
+<li data-page-node-id="jtbDNDAYRVpeFTfTAlZejN">执行动作白名单：只能调用本人已声明且审批通过的动作；未声明的动作会被 guard 拒绝。执行前 guard 确定性裁决（入参必填 + 长度封顶），越权调用一律拒绝。</li>
+<li data-page-node-id="8sH3x739oeGTwwK9QQdyL5">写测改循环：写代码 → run_test 跑测试 → 观察绿/红 → 红则带失败堆栈修正 → 再跑，直到绿或达轮数上限。终止靠确定性判定（测试通过），不靠自我宣称完成。</li>
+<li data-page-node-id="kf0WWevQ8gM9akMWlWfsdz">输出纯代码：只输出纯 Python 代码，不带解释和 markdown 标记，引号括号成对闭合</li>
+<li data-page-node-id="Xj4IUNXlbiE0VlHxSQVkhu">边界条件处理：空输入/单元素/负数/去重/截断等边界必须显式处理，不能只写主路径</li>
+<li data-page-node-id="oUfhYFBKD7Ix1nKNpmTNOG">询问层级：代码工程师可询问技术设计工程师：当技术方案不明确时，向技术设计工程师提问澄清，不要自行猜测设计意图。</li>
+<li data-page-node-id="LTvy7LnraFAnATTREjbY2h">审核门：代码过审才交接：产出代码后需代码审查员审核（审核门），审核通过后才交接给测试工程师，审核驳回则修改后重新提交。</li></ul>
+<h2 data-page-node-id="M9CtPFSoFKDgCgTUFgw0Vb">典型案例：dedup_tags ——「去重返回规范形式」本体规则直接命中</h2>
+<div class="grid2" data-page-node-id="4KBCBwequxIvZEDFXMHAFq">
+<div class="case" data-page-node-id="GjPC5qe1AZQdiJ3pE1k5Vv"><h4 data-page-node-id="aBj6lHmB71HUCOwH6YB3qH">无本体（fail）</h4><div class="sub" data-page-node-id="TZmXS1JDTjDYVdqwdDcx6t">缺少「去重返回规范形式而非原始标签」规则 → 3 轮仍保留原始大小写/空白</div><div class="rd" data-page-node-id="myBrgborRlCwwvWDAnvob9"><div class="rd-h" data-page-node-id="Xp6XSS3zJfdHryyds03SqU">第 1 轮 → <b class="r" data-page-node-id="uIYOIMJkIAdHcqp8M5yLlO">fail</b></div><pre class="code" data-page-node-id="DFgPZKYowBEMVcrSvEYT7J">def dedup_tags(tags: list) -&gt; list:
     """
     标签去重。
     保持首次出现的顺序；忽略大小写差异和首尾空白。
@@ -94,14 +94,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
             seen.add(clean_tag)
             result.append(tag)
     return result</pre>
-<pre class="out">Traceback (most recent call last):
+<pre class="out" data-page-node-id="z2F3oB8y6Prykp6Swe9fC0">Traceback (most recent call last):
   File "&lt;string&gt;", line 23, in &lt;module&gt;
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
   File "&lt;string&gt;", line 19, in check
     assert candidate([' </pre>
 </div>
-<div class="rd"><div class="rd-h">第 2 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<div class="rd" data-page-node-id="Jqf1BIuQRf2Ac6WOzBQXRm"><div class="rd-h" data-page-node-id="p4536vQmcPfNFBBfhZu19u">第 2 轮 → <b class="r" data-page-node-id="wudmI41caUp6JOc6S748Tm">fail</b></div><pre class="code" data-page-node-id="QCPWOEJaS4ZZZrxXpfVTfq">def dedup_tags(tags: list) -&gt; list:
     """标签去重。
     保持首次出现的顺序；忽略大小写差异和首尾空白。
     """
@@ -113,14 +113,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
             seen.add(stripped_tag)
             result.append(tag)
     return result</pre>
-<pre class="out">Traceback (most recent call last):
+<pre class="out" data-page-node-id="5zjkQD6DpkecgvBRe02UYd">Traceback (most recent call last):
   File "&lt;string&gt;", line 21, in &lt;module&gt;
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
   File "&lt;string&gt;", line 17, in check
     assert candidate([' </pre>
 </div>
-<div class="rd"><div class="rd-h">第 3 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<div class="rd" data-page-node-id="y1oALfRcE8s1hCHgA7OeiT"><div class="rd-h" data-page-node-id="JexAkPK9pJESPEVNPPYv2u">第 3 轮 → <b class="r" data-page-node-id="rWlpAfzmadI4PYbzoNLqdU">fail</b></div><pre class="code" data-page-node-id="dwO9OVlRowILkHGhmclRZZ">def dedup_tags(tags: list) -&gt; list:
     """标签去重。
     保持首次出现的顺序；忽略大小写差异和首尾空白。
     """
@@ -132,14 +132,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
             seen.add(stripped_tag)
             result.append(tag)
     return result</pre>
-<pre class="out">Traceback (most recent call last):
+<pre class="out" data-page-node-id="WMPwIc2fUf7FLeNU5rzAhf">Traceback (most recent call last):
   File "&lt;string&gt;", line 21, in &lt;module&gt;
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
   File "&lt;string&gt;", line 17, in check
     assert candidate([' </pre>
 </div></div>
-<div class="case"><h4>带本体（pass）</h4><div class="sub">本体写死了去重语义 → 模型按规则输出规范形式</div><div class="rd"><div class="rd-h">第 1 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<div class="case" data-page-node-id="fZ0EIEpfvyrcrChNFhhbEN"><h4 data-page-node-id="HhZaeEWoDmMkeSDKNVH4MR">带本体（pass）</h4><div class="sub" data-page-node-id="4MLGFe2GV2ftYaP8NEYQu3">本体写死了去重语义 → 模型按规则输出规范形式</div><div class="rd" data-page-node-id="NBI7W1Q9E2pYzDAl1tqjQW"><div class="rd-h" data-page-node-id="fflD0YvqoAhWybjPI1gopZ">第 1 轮 → <b class="r" data-page-node-id="XaHrpVaHWIloKSmBjMZWSW">fail</b></div><pre class="code" data-page-node-id="6xkxsQO60UvTFYmAXQjAtb">def dedup_tags(tags: list) -&gt; list:
     seen = set()
     result = []
     for tag in tags:
@@ -148,14 +148,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
             seen.add(tag)
             result.append(tag)
     return result</pre>
-<pre class="out">Traceback (most recent call last):
+<pre class="out" data-page-node-id="eqiiZVOBp3JnwJNex6l6mb">Traceback (most recent call last):
   File "&lt;string&gt;", line 18, in &lt;module&gt;
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
   File "&lt;string&gt;", line 13, in check
     assert candidate(['A</pre>
 </div>
-<div class="rd"><div class="rd-h">第 2 轮 → <b class="r">fail</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<div class="rd" data-page-node-id="Y2e5oADiByxifhp06AG7BQ"><div class="rd-h" data-page-node-id="xCDlmS5GFmYmg2KlmInd0k">第 2 轮 → <b class="r" data-page-node-id="701VOuMxMMBe4V0TKIFPlY">fail</b></div><pre class="code" data-page-node-id="ohG4X59bx15p7Ftq9H5ggK">def dedup_tags(tags: list) -&gt; list:
     """标签去重。
     保持首次出现的顺序；忽略大小写差异和首尾空白。
     """
@@ -167,14 +167,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
             seen.add(normalized_tag)
             result.append(tag)
     return result</pre>
-<pre class="out">Traceback (most recent call last):
+<pre class="out" data-page-node-id="VoCiI7J1WgRppcq8IZcF7U">Traceback (most recent call last):
   File "&lt;string&gt;", line 21, in &lt;module&gt;
     check(dedup_tags)
     ~~~~~^^^^^^^^^^^^
   File "&lt;string&gt;", line 17, in check
     assert candidate([' </pre>
 </div>
-<div class="rd"><div class="rd-h">第 3 轮 → <b class="g">pass</b></div><pre class="code">def dedup_tags(tags: list) -&gt; list:
+<div class="rd" data-page-node-id="9cEeFgMYd8l26w0hodBzp7"><div class="rd-h" data-page-node-id="KulEMOp3G6TBDiLNvQRh2E">第 3 轮 → <b class="g" data-page-node-id="PwQwpC5Mkff07SmGi54CtQ">pass</b></div><pre class="code" data-page-node-id="zhiFnWCKcR24YaWFNCymWn">def dedup_tags(tags: list) -&gt; list:
     """标签去重。
     保持首次出现的顺序；忽略大小写差异和首尾空白。
     """
@@ -188,14 +188,14 @@ ul.ont{list-style:none}ul.ont li{background:var(--panel);border:1px solid var(--
     return result</pre>
 </div></div>
 </div>
-<h2>结论</h2>
-<div class="concl">
-<b>① 本体注入带来可量化增益：</b>通过率 7/12（58%）→ 9/12（75%）；本体独有翻盘：dedup_tags、merge_summaries；首轮通过 5→6，平均轮次 2.17→1.83。<br/>
-<b>② 增益集中在「本体规则与考题强相关」处：</b>dedup_tags / merge_summaries / safe_truncate 的本体里恰好写死了「去重返回规范形式」「去重键与保留文本分离」「省略号不计 max_chars」——题目考什么、本体就写什么，注入即得分；validate_tags / extract_code 虽两侧都过，但带本体收敛更快（少走 1-2 轮）。<br/>
-<b>③ 本体不改变「通用算法/库函数」结果：</b>jsonb_get / cosine / topk / paginate 两侧都过（不依赖领域规则）；normalize_name / parse_dsn / chunk_overlap 两侧都挂——瓶颈在 7B 的中文边界/需求歧义/多约束联合覆盖，本体未写这些细节故无增益（详见 results/summary.md 根因诊断）。<br/>
-<b>④ 工程结论：</b>代码型数字人的本体应写成<b style="color:#2fd17c">「可执行编码规范」（规则即考题答案）</b>，收益最大。qwen2.5:7b 定位 = 低成本回归/对照基线；生产写码走 GLM 5.2 / V4-Flash。
+<h2 data-page-node-id="tJHGSBgRGt9iQFgFUdIDRz">结论</h2>
+<div class="concl" data-page-node-id="XVSUSl8NuXBHV4HsE3X4a9">
+<b data-page-node-id="RJZ6lTqkk1OTKoDhsWe9N0">① 本体注入带来可量化增益：</b>通过率 7/12（58%）→ 9/12（75%）；本体独有翻盘：dedup_tags、merge_summaries；首轮通过 5→6，平均轮次 2.17→1.83。<br data-page-node-id="Wvnmlw1PY97JfLGdtJlmW5"/>
+<b data-page-node-id="I0440xM57hultT4mgT4zzI">② 增益集中在「本体规则与考题强相关」处：</b>dedup_tags / merge_summaries / safe_truncate 的本体里恰好写死了「去重返回规范形式」「去重键与保留文本分离」「省略号不计 max_chars」——题目考什么、本体就写什么，注入即得分；validate_tags / extract_code 虽两侧都过，但带本体收敛更快（少走 1-2 轮）。<br data-page-node-id="8ACgtqzpSb6ZeGQAMnM3EF"/>
+<b data-page-node-id="KSyhbvV2iNndTUVsjmPK7R">③ 本体不改变「通用算法/库函数」结果：</b>jsonb_get / cosine / topk / paginate 两侧都过（不依赖领域规则）；normalize_name / parse_dsn / chunk_overlap 两侧都挂——瓶颈在 7B 的中文边界/需求歧义/多约束联合覆盖，本体未写这些细节故无增益（详见 results/summary.md 根因诊断）。<br data-page-node-id="5jf8vAIC3G4HCHxupRtxKD"/>
+<b data-page-node-id="XqdOAP2j7bCgX0gwkYxDe4">④ 工程结论：</b>代码型数字人的本体应写成<b style="color:#2fd17c" data-page-node-id="LF57Qssj7vmHBn45Xu1nAS">「可执行编码规范」（规则即考题答案）</b>，收益最大。qwen2.5:7b 定位 = 低成本回归/对照基线；生产写码走 GLM 5.2 / V4-Flash。
 </div>
-<div class="foot">数据：exports/test-suite-project-2026-09-09/results（带本体）vs results_none（无本体）· 逐轮往返见同名 .json · 判定：一次性隔离沙箱容器跑 HumanEval 风格隐藏 assert</div>
+<div class="foot" data-page-node-id="r9Y2oFmOBLJNQgfratJzz9">数据：exports/test-suite-project-2026-09-09/results（带本体）vs results_none（无本体）· 逐轮往返见同名 .json · 判定：一次性隔离沙箱容器跑 HumanEval 风格隐藏 assert</div>
 </div>
 <script>document.querySelectorAll('.bar[data-h]').forEach(function(b){setTimeout(function(){b.style.height=b.dataset.h+'%'},150)});</script>
 </body></html>

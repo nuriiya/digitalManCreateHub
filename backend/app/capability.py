@@ -232,6 +232,151 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
     return llm.chat2(messages)
 
 
+# ---------------- pipeline 协作解题（writer → reviewer 手递交接） ----------------
+
+def _call_channel(provider: str, messages: list, ollama_model: str | None,
+                  temperature: float = 0.2) -> str:
+    """统一按通道调 LLM（与 chat._dispatch 对齐）。"""
+    from . import llm, chat as chat_mod
+    if provider == "ollama":
+        return llm.chat_ollama(messages, temperature=temperature,
+                               model=ollama_model or chat_mod.DEFAULT_OLLAMA_MODEL)
+    if provider == "llm":
+        return llm.chat(messages, temperature=temperature)
+    return llm.chat2(messages)
+
+
+def _reviewer_system(conn, reviewer_id: int, use_ontology: bool) -> str:
+    """调试/审查角色的 system：身份 + 输出铁律 +（可选）本体全量注入。
+
+    与 _solve_with_ontology 的 writer system 同构，保证 4 元消融的隔离变量
+    一致：use_ontology 只控制「本体段是否注入」，角色分工在 pipeline 模式下
+    天然存在（writer=写码，reviewer=读失败堆栈出修复建议）。
+    """
+    from . import chat as chat_mod
+    ident = chat_mod._identity(conn, reviewer_id)
+    if not ident:
+        return "你是代码调试工程师。请定位代码问题并给出修改建议。"
+    lines = [
+        f"你是数字人「{ident['name']}」。",
+        f"使命：{ident['mission'] or '（未填写）'}",
+        "",
+        "你收到代码工程师的实现与测试失败信息。你的职责：",
+        "1. 定位根因（哪条边界/逻辑没满足 docstring），引用失败堆栈证据；",
+        "2. 给出精确、可执行的修改建议（改哪个分支/补哪个边界）；",
+        "3. 不要重写完整实现，不要输出代码块标记，控制在 400 字内。",
+    ]
+    if use_ontology:
+        ontology = chat_mod._persona_ontology(conn, reviewer_id)
+        anchors = chat_mod._approved_anchors(conn, reviewer_id)
+        if anchors:
+            lines.append("")
+            lines.append("【锚点本体 · 核心能力】")
+            for a in anchors:
+                lines.append(chat_mod._fmt_anchor(a))
+        if ontology:
+            lines.append("")
+            lines.append("【你的调试规范本体（必须遵守）】")
+            for o in ontology:
+                defn = (o.get("definition") or "").strip()
+                lines.append(f"- {o['name']}" + (f"：{defn}" if defn else ""))
+        pt = (ident.get("prompt") or "").strip()
+        if pt:
+            lines.append("")
+            lines.append("【你的补充规范】")
+            lines.append(pt)
+    return "\n".join(lines)
+
+
+def _review_diagnose(conn, reviewer_id: int, code: str, output: str,
+                     provider: str, ollama_model: str | None,
+                     use_ontology: bool) -> str:
+    """reviewer（如调试工程师）读 writer 代码 + 沙箱失败 → 返回修复建议。"""
+    system = _reviewer_system(conn, reviewer_id, use_ontology)
+    user = (
+        "代码工程师提交的实现如下：\n\n```python\n"
+        f"{code[:3000]}\n```\n\n"
+        "运行隐藏测试失败，输出：\n\n```\n"
+        f"{str(output)[:1500]}\n```\n\n"
+        "请定位根因并给出可执行的修改建议（只分析，不要写完整实现）。")
+    try:
+        return _call_channel(provider,
+                             [{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                             ollama_model, temperature=0.2).strip()
+    except Exception:  # noqa: BLE001 — reviewer 失败不阻断主链（沿用 writer 裸堆栈）
+        return ""
+
+
+def _solve_pipeline(conn, writer_id: int, reviewer_id: int, task: dict,
+                    provider: str, ollama_model: str | None,
+                    use_ontology: bool) -> dict:
+    """pipeline 协作解题：writer 写码 → 沙箱 → 红则 reviewer 诊断 → writer 修正。
+
+    与 _solve_reactively（单数字人自己看堆栈改）的差异：失败信息先经
+    「reviewer 角色」（另一个数字人 + 其本体）转述为修复建议，再回流 writer。
+    终止仍由沙箱断言决定（绿即停 ≤3 轮），LLM 不判分。
+    """
+    code, rounds, feedback = "", [], None
+    for rnd in range(1, MAX_REACTIVE_ROUNDS + 1):
+        reply = _solve_with_ontology(conn, writer_id, task["prompt"], provider,
+                                     feedback=feedback,
+                                     ollama_model=ollama_model,
+                                     use_ontology=use_ontology)
+        code = _extract_code(reply) if reply else ""
+        if not code.strip():
+            return {"error": "generation failed: empty code"}
+        r = run_test_sandbox(code, task["test"], task["entry_point"])
+        verdict, output = r["verdict"], r["output"]
+        diag = ""
+        if verdict != "pass" and rnd < MAX_REACTIVE_ROUNDS:
+            diag = _review_diagnose(conn, reviewer_id, code, output,
+                                    provider, ollama_model, use_ontology)
+            feedback = diag or output  # reviewer 失败则回退裸堆栈
+        rounds.append({"round": rnd, "verdict": verdict, "output": output,
+                       "code": code,
+                       "reviewer_diagnosis": diag if diag else None})
+        if verdict == "pass":
+            return {"code": code, "verdict": "pass", "rounds": rounds,
+                    "output": output, "reviewer_id": reviewer_id}
+    return {"code": code, "verdict": "fail", "rounds": rounds,
+            "output": rounds[-1]["output"] if rounds else "",
+            "reviewer_id": reviewer_id}
+
+
+def run_pipeline_for_identity(conn, writer_id, task_id, reviewer_id,
+                              provider="llm2", ollama_model: str | None = None,
+                              use_ontology: bool = True) -> dict:
+    """pipeline 介入版解题：代码工程师(writer) ↔ 调试工程师(reviewer) 接力。
+
+    writer_id / reviewer_id 各自全量注入本体（use_ontology 统一控制两侧），
+    判定 = 沙箱隐藏 assert。writer 必须 reactive（无本体也能走协作，仅角色分工）。
+    """
+    task = get_task(conn, task_id)
+    if not task:
+        return {"error": "task not found"}
+    try:
+        sol = _solve_pipeline(conn, writer_id, reviewer_id, task, provider,
+                              ollama_model=ollama_model, use_ontology=use_ontology)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"pipeline solve failed: {e}"}
+    if "error" in sol:
+        return sol
+    cur = conn.execute(
+        "INSERT INTO capability_runs(task_id, identity_id, code, verdict,"
+        " output, created_at) VALUES(?,?,?,?,?,?)",
+        (task_id, writer_id, sol["code"], sol["verdict"],
+         sol["output"][:4000], db.now()))
+    conn.commit()
+    return {"run_id": cur.lastrowid, "task_id": task_id,
+            "writer_id": writer_id, "reviewer_id": reviewer_id,
+            "entry_point": task["entry_point"],
+            "verdict": sol["verdict"], "output": sol["output"][:2000],
+            "rounds": sol["rounds"], "reactive": True,
+            "use_ontology": use_ontology, "mode": "pipeline",
+            "reply": sol["code"][:2000]}
+
+
 # 反应式循环的最大修正轮数（写→测→改）
 MAX_REACTIVE_ROUNDS = 3
 
