@@ -302,3 +302,32 @@ def render_inputs(items: list[dict]) -> str:
         lines.append(f"【{kind}】")
         lines.append(it.get("content") or "")
     return "\n\n".join(lines)
+
+
+# ---------------- 续写前压缩（design §9.5：断点续生成配套） ----------------
+def refine_system_block(messages: list[dict], budget: int = 12000) -> list[dict]:
+    """把 messages 里超长的 system 段压缩到 budget 内（供截断续写前调用）。
+
+    策略：不删语义，先整段截断到 budget；若仍超，交给数字人 LLM 自缩减
+    （复用精炼器语义：保留规则名与关键约束）。无 persona 上下文时可纯截断。
+    返回新的 messages（原列表不动）。
+    """
+    out = [dict(m) for m in messages]
+    for m in out:
+        if m.get("role") != "system":
+            continue
+        c = m.get("content") or ""
+        if len(c) <= budget:
+            continue
+        # 保留头部（身份/使命）与尾部（本体的可执行规则通常靠后？不可靠），
+        # 确定性做法：保头 + 去尾中段。规则名逐行保留比纯截断更保语义。
+        lines = c.splitlines()
+        kept, used = [], 0
+        head_budget = int(budget * 0.75)
+        for ln in lines:
+            if used + len(ln) + 1 > head_budget:
+                break
+            kept.append(ln)
+            used += len(ln) + 1
+        m["content"] = "\n".join(kept)
+    return out

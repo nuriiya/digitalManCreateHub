@@ -20,18 +20,27 @@ from __future__ import annotations
 import urllib.request as _ur
 from urllib.parse import urlsplit
 
-LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "")
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "",
+               "host.docker.internal", "gateway.docker.internal",
+               "docker.for.win.localhost", "docker.for.mac.localhost")
 
 
 def is_local_url(url: str | None) -> bool:
-    """True for loopback endpoints (http://localhost:11434, 127.0.0.1, ::1)."""
+    """True for loopback / docker-internal endpoints that must bypass the
+    external CN proxy.
+
+    Includes host.docker.internal: the dev compose routes Ollama through
+    the host at that name — sending it via the external LLM_PROXY (mihomo
+    6789) times out / 502s, so it is treated as "local" for proxy bypass.
+    """
     if not url:
         return False
     try:
         host = (urlsplit(url).hostname or "").lower()
     except ValueError:
         return False
-    return host in LOCAL_HOSTS or host.startswith("127.")
+    return host in LOCAL_HOSTS or host.startswith("127.") \
+        or host.endswith(".internal")
 
 
 def local_request(url: str, data: bytes | None = None,

@@ -206,6 +206,88 @@ def chat_ollama(messages: list[dict], temperature: float = 0.5,
     return reply
 
 
+# ---------------- 截断续生成（design §9.5） ----------------
+# 检测"回复被中途截断"（finish_reason=length / 未闭合符号结尾），自动续写拼接。
+# 背景：qwen2.5:7b 在长上下文修正时输出会中途坍缩成 61~73 字符空壳（引号/三引号
+# 未闭合即 SyntaxError）。V4-Flash 无此现象，但任何模型在极长输出/限流下都可能被
+# 服务端 max_tokens 截断——本机制把它从"整题失败"救成"续写完整"。
+
+_UNCLOSED = ('"""', "'''", "\\")
+MAX_CONTINUE = 3          # 单次生成内最多续写次数
+ANCHOR_TAIL = 800         # 续写锚点：保留已生成内容尾部字符数
+
+
+def _looks_truncated(reply: str, finish_reason: str | None = None) -> bool:
+    """截断判定：finish_reason==length（权威）+ 空回复 + 强信号启发式。
+
+    纯代码判定，不靠 LLM 自评。启发式只报"几乎必然是截断"的信号——
+      - 以未闭合的三引号 `\"\"\"`/`'''` 结尾：代码 docstring/多行字符串被硬切断
+      - 以反斜杠 `\\` 结尾：转义序列被硬切断
+      - 空回复：生成中断
+    普通单引号/括号结尾（代码里完全正常）不判截断，避免误触发续写。
+    """
+    if finish_reason == "length":
+        return True
+    tail = (reply or "").rstrip()
+    if not tail:
+        return True
+    for sym in _UNCLOSED:
+        if tail.endswith(sym):
+            return True
+    return False
+
+
+def _unclosed_tail_hint(reply: str) -> bool:
+    """返回是否疑似截断（供上层记 trace）。"""
+    return _looks_truncated(reply)
+
+
+def _continue_request(reply: str, anchor_chars: int = ANCHOR_TAIL) -> list[dict]:
+    """续写请求消息：给模型它自己已写内容的尾部作锚点，要求接着写完整。
+
+    不重发原始任务 prompt —— 避免模型从头重写（丢已写结构）或重复。同一会话
+    消息栈 append（assistant 已写 + 续写指令），模型能看到自己上文。
+    """
+    anchor = reply[-anchor_chars:] if len(reply) > anchor_chars else reply
+    return [{"role": "user", "content":
+             f"你上一条输出在末尾被截断了。下面是你已写内容的末尾：\n"
+             f"```\n{anchor}\n```\n"
+             "请从该点**继续**把内容写完整（不要重复锚点及更早的内容，"
+             "不要解释，直接续写剩余部分，保持原有格式）。"}]
+
+
+def chat_with_continuation(messages: list[dict], temperature: float = 0.2,
+                           channel: str = "llm",
+                           ollama_model: str | None = None) -> tuple[str, dict]:
+    """生成 + 截断续写：正常调用 → 若 _looks_truncated 则循环续写拼接。
+
+    channel: "llm"(V4-Flash) / "llm2"(GLM) / "ollama"(qwen 等)。
+    返回 (完整回复, {"truncated": bool, "continues": int})。
+    """
+    if channel == "llm2":
+        base = chat2
+    elif channel == "ollama":
+        base = lambda msgs, temp: chat_ollama(msgs, temperature=temp,  # noqa: E731
+                                              model=ollama_model)
+    else:
+        base = chat
+    reply = base(messages, temperature) or ""
+    truncated = _looks_truncated(reply)
+    continues = 0
+    while truncated and continues < MAX_CONTINUE:
+        # 续写：在原消息栈上 append 已写内容 + 续写指令（模型看得到自己上文）
+        stack = [dict(m) for m in messages]
+        stack.append({"role": "assistant", "content": reply})
+        stack.extend(_continue_request(reply))
+        part = base(stack, temperature) or ""
+        if not part.strip():          # 续写为空 → 放弃，保留已有
+            break
+        reply += part                 # 拼接，而不是重写
+        continues += 1
+        truncated = _looks_truncated(part)
+    return reply, {"truncated": truncated, "continues": continues}
+
+
 def _chat_llm2(messages: list[dict], temperature: float, channel: str,
                usage_out: dict | None = None) -> str:
     """Shared llm2 (GLM 5.2) call. `channel` is a telemetry label (judge|chat)."""

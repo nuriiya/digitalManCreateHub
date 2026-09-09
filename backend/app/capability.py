@@ -225,10 +225,15 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
                          f"{feedback}\n\n"
                          "请分析失败原因，修正代码。仍然只输出纯 Python 代码，不要解释。"})
     if provider == "llm":
-        return llm.chat(messages, temperature=0.0)
+        # design §9.5：生成 + 截断续写（finish_reason/未闭合启发式 → 锚点续写拼接）
+        text, _ = llm.chat_with_continuation(messages, temperature=0.0,
+                                             channel="llm")
+        return text
     if provider == "ollama":
-        return llm.chat_ollama(messages, temperature=0.0,
-                               model=ollama_model or chat.DEFAULT_OLLAMA_MODEL)
+        text, _ = llm.chat_with_continuation(messages, temperature=0.0,
+                                             channel="ollama",
+                                             ollama_model=ollama_model or chat.DEFAULT_OLLAMA_MODEL)
+        return text
     return llm.chat2(messages)
 
 
@@ -236,13 +241,17 @@ def _solve_with_ontology(conn, identity_id: int, task_prompt: str,
 
 def _call_channel(provider: str, messages: list, ollama_model: str | None,
                   temperature: float = 0.2) -> str:
-    """统一按通道调 LLM（与 chat._dispatch 对齐）。"""
+    """统一按通道调 LLM（与 chat._dispatch 对齐）；写码通道带截断续写（§9.5）。"""
     from . import llm, chat as chat_mod
     if provider == "ollama":
-        return llm.chat_ollama(messages, temperature=temperature,
-                               model=ollama_model or chat_mod.DEFAULT_OLLAMA_MODEL)
+        text, _ = llm.chat_with_continuation(
+            messages, temperature=temperature, channel="ollama",
+            ollama_model=ollama_model or chat_mod.DEFAULT_OLLAMA_MODEL)
+        return text
     if provider == "llm":
-        return llm.chat(messages, temperature=temperature)
+        text, _ = llm.chat_with_continuation(messages, temperature=temperature,
+                                             channel="llm")
+        return text
     return llm.chat2(messages)
 
 
