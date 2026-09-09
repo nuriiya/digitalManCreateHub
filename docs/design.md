@@ -465,6 +465,90 @@ reflection 六元已定义（独立、不共享、只回流自身 Spec），但*
 - **编排-调研并写 demo 页面**（通路库未命中 → 数字人设计编排图 → 动态建数字人 → 工具自生长）属概念验证设计，未见全自动入口。
 - **前端上传「＋」按钮**：暂未开放（提示占位）。
 
+### 9.5 截断续生成（truncation recovery）—— 未实现
+
+**背景**（2026-09-09 能力题/4 元消融实证）：qwen2.5:7b 等小模型在长上下文修正时输出会
+中途截断（现象：writer 修正代码从 857 字符塌缩到 61~73 字符、引号/三引号未闭合即
+SyntaxError、沙箱报 `unterminated string literal`）。V4-Flash 无此现象，但任何模型在
+极长输出/高并发下都可能被服务端 `max_tokens` 截断或连接中断截断。
+
+**目标机制**：LLM 回复被截断时，不把它当最终结果（也不整题重来），而是自动「压缩上下文 →
+从断点续写 → 拼接完整」重试，直到产出完整回复或达次数上限。
+
+**截断检测**（三层，纯代码判定，不用 LLM 自评）：
+1. `finish_reason == "length"`（OpenAI 流式末 chunk 的标准信号 = 输出撞 max_tokens 上限）；
+2. 启发式语法中断：回复以未闭合的 `"""` / `"` / `'` / `(` / `[` / `{` / `\` 结尾（对应沙箱
+   `unterminated ... literal` 类错误）；
+3. 已知模型输出上限检查：回复字符数 ≈ 模型 max_tokens × 4 且无自然结束符。
+
+**续写策略**：不是重发原 prompt（会导致重复/遗忘已写内容），而是：
+- 保留已生成内容的尾部 N 字符（如 800）作为「续写锚点」；
+- 上下文压缩：把 system 里的本体段/历史反馈压缩（context_mgr.refine_handoff 同源），
+  腾出输出预算；
+- 新请求 user = 锚点 + 「这是你上次输出被截断的末尾，请从该点继续写完整剩余内容，
+  不要重复锚点之前的内容」；
+- 拼接锚点前内容 + 本次续写 → 再次检测 → 循环（≤3 次）。
+
+```python
+# ---------- 截断续生成（pseudo-code, 拟落 backend/app/llm.py + capability.py） ----------
+MAX_CONTINUE = 3          # 单轮内最多续写次数
+ANCHOR_TAIL = 800         # 续写锚点：保留已生成内容的尾部字符数
+
+def _looks_truncated(reply: str, finish_reason: str | None) -> bool:
+    """截断判定：finish_reason==length（权威） + 启发式语法中断（兜底）。"""
+    if finish_reason == "length":
+        return True
+    tail = (reply or "").rstrip()
+    if not tail:
+        return True
+    # 启发式：以未闭合的成对符号/引号结尾 => 极可能被硬截断
+    for sym in ('"""', "'''", '"', "'", "(", "[", "{", "\\"):
+        if tail.endswith(sym):
+            return True
+    return False
+
+def _continue_prompt(reply: str, anchor_chars: int) -> list[dict]:
+    """续写请求：锚点 + 续写指令（不重发原任务，避免重复生成）。"""
+    anchor = reply[-anchor_chars:] if len(reply) > anchor_chars else reply
+    return [{"role": "user", "content":
+             f"以下是你上次输出被截断的末尾：\n```\n{anchor}\n```\n"
+             "请从该点**继续**把内容写完整（不要重复锚点及之前的内容，"
+             "不要解释，直接续写剩余部分）。"}]
+
+def generate_with_truncation_recovery(messages, *, max_tokens_hint) -> tuple[str, dict]:
+    """主生成入口：正常调用 → 若截断则压缩上下文 + 断点续写 → 拼接完整。
+
+    返回 (完整回复, {truncated: bool, continues: int})。
+    设计要点：续写前用 context_mgr 压缩 system/历史（本体段按 kind 预算精炼），
+    保证续写请求落在模型上下文窗口内；续写自身也可能被截断 → 循环续写。
+    """
+    reply = _chat_once(messages, expect_finish_reason=True)   # -> (text, finish_reason)
+    truncated = _looks_truncated(reply.text, reply.finish_reason)
+    continues = 0
+    while truncated and continues < MAX_CONTINUE:
+        compact = context_mgr.refine_system_block(messages, keep_budget=...)
+        # 续写（同一会话消息栈：append 而非 replace，模型能看到自己上文）
+        cont = _chat_continue(compact, _continue_prompt(reply.text, ANCHOR_TAIL))
+        reply.text += cont.text                                  # 拼接
+        continues += 1
+        truncated = _looks_truncated(cont.text, cont.finish_reason)
+    if truncated:
+        return reply.text, {"truncated": True, "continues": continues}
+    return reply.text, {"truncated": False, "continues": continues}
+
+# 调用方（capability._solve_with_ontology / chat._generate / pipeline._run_nominate）：
+#   text, meta = generate_with_truncation_recovery(...)
+#   if meta["truncated"]:      # 重试 N 次仍截断 → 才算 fail，带标记供上层记录
+#        return {..., "truncated": True}
+```
+
+**落点**（待实现，不在本仓库当前代码中）：
+- `backend/app/llm.py`：加 `_looks_truncated` + `generate_with_truncation_recovery`（`_iter_openai`
+  已能取到 usage chunk 的 `finish_reason`）；在 `_call_llm_with_usage` 的 retry 循环之上包一层。
+- `context_mgr.py`：加 `refine_system_block(messages, budget)`（把 system 里的本体段按
+  KIND_INPUT_BUDGET 精炼，供续写前压缩）。
+- 接入点：capability（能力题写码修正轮）、chat._generate（长对话）、pipeline._run_nominate。
+
 ---
 
 ## 10. 设计变更流程（强制约定）
