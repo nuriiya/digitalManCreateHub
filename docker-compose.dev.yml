@@ -17,4 +17,6 @@ services:
     environment:
       ENV: dev
       EMBEDDING_BASE_URL: http://host.docker.internal:11434
+      # 外网 LLM 走宿主机代理（deepseek 在当前网络直连 SSL EOF）；见 .env
+      LLM_PROXY: ${LLM_PROXY:-}
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
