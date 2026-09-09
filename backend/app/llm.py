@@ -14,6 +14,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from . import netutil, settings_store
 
@@ -287,7 +288,26 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
                 extra["keep_alive"] = keep_alive
             if extra:
                 kwargs["extra_body"] = extra
-            resp = client.chat.completions.create(**kwargs)
+            # Connection-level retries: APIConnectionError (proxy / NAT blip,
+            # TLS EOF under transient CN egress) is recoverable — retry with
+            # a short backoff instead of failing the whole job. Rate limits
+            # are NOT retried here (handled upstream with proper backoff).
+            last_err: Exception | None = None
+            resp = None
+            for attempt in range(1, 4):
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    ename = type(e).__name__
+                    if ename in ("APIConnectionError", "ConnectError",
+                                 "ReadTimeout", "ConnectTimeout") and attempt < 3:
+                        last_err = e
+                        time.sleep(1.0 * attempt)  # 1s / 2s backoff
+                        continue
+                    raise
+            if last_err is not None and resp is None:
+                raise last_err
             parts: list[str] = []
             for chunk in resp:
                 usage = getattr(chunk, "usage", None)
