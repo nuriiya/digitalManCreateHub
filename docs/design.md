@@ -465,7 +465,12 @@ reflection 六元已定义（独立、不共享、只回流自身 Spec），但*
 - **编排-调研并写 demo 页面**（通路库未命中 → 数字人设计编排图 → 动态建数字人 → 工具自生长）属概念验证设计，未见全自动入口。
 - **前端上传「＋」按钮**：暂未开放（提示占位）。
 
-### 9.5 截断续生成（truncation recovery）—— 未实现
+### 9.5 截断续生成（truncation recovery）—— 已实现（2026-09-09，commit 91a02c4）
+
+> 落地详情：llm.py `_looks_truncated` + `chat_with_continuation`；capability 写码/
+> reviewer 通道接入；context_mgr.refine_system_block 预留。同时修复
+> host.docker.internal 误走 LLM_PROXY 的 502 回归（netutil.is_local_url 覆盖
+> *.internal）。实测 qwen extract_code 由「三轮写崩」恢复为 R1 一轮 pass。
 
 **背景**（2026-09-09 能力题/4 元消融实证）：qwen2.5:7b 等小模型在长上下文修正时输出会
 中途截断（现象：writer 修正代码从 857 字符塌缩到 61~73 字符、引号/三引号未闭合即
