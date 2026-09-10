@@ -1,0 +1,42 @@
+{
+  "name": "docx-accessor",
+  "description": "可读取 .docx 文档内容并返回纯文本的 MCP 服务器，支持本地路径、file:// URI 与 http(s) URL",
+  "transport": "stdio",
+  "image": "mcp/docx-accessor:latest",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "tools": [
+    {
+      "name": "read_docx",
+      "description": "读取 .docx 文档并返回纯文本正文；支持文件路径/URL；可提取段落与表格文本。远程请求可通过 PAPER_PROXY 代理。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": ".docx 文档路径或 URL，例如 /data/report.docx 或 https://example.com/report.docx",
+            "minLength": 1
+          },
+          "include_tables": {
+            "type": "boolean",
+            "description": "是否将表格内容加入返回文本，默认 true",
+            "default": true
+          },
+          "timeout": {
+            "type": "number",
+            "description": "远程下载超时秒数，默认 30",
+            "default": 30,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "source"
+        ]
+      }
+    }
+  ],
+  "server_py": "from mcp.server.fastmcp import FastMCP\nimport os\nimport io\nfrom pathlib import Path\nimport httpx\nfrom docx import Document\n\nmcp = FastMCP('docx-accessor')\n\nPAPER_PROXY = os.getenv('PAPER_PROXY', '').strip()\n\n\ndef _load_docx_bytes(source: str, timeout: float) -> bytes:\n    if source.startswith('file://'):\n        source = source[7:]\n    if source.startswith(('http://', 'https://')):\n        proxy = PAPER_PROXY or None\n        with httpx.Client(verify=False, proxy=proxy, timeout=timeout) as client:\n            resp = client.get(source)\n            resp.raise_for_status()\n            return resp.content\n    return Path(source).read_bytes()\n\n\ndef _extract_docx_text(data: bytes, include_tables: bool) -> str:\n    document = Document(io.BytesIO(data))\n    lines = []\n    for paragraph in document.paragraphs:\n        text = paragraph.text.strip()\n        if text:\n            lines.append(text)\n    if include_tables:\n        for table in document.tables:\n            for row in table.rows:\n                cells = [cell.text.strip().replace(chr(10), ' ') for cell in row.cells]\n                lines.append(' | '.join(cells))\n    return chr(10).join(lines) if lines else '(empty document)'\n\n\n@mcp.tool\ndef read_docx(source: str, include_tables: bool = True, timeout: float = 30.0) -> str:\n    if not source or not isinstance(source, str):\n        return 'Error: source must be a non-empty string path or URL'\n    if timeout is None or not isinstance(timeout, (int, float)) or timeout <= 0:\n        return 'Error: timeout must be a positive number'\n    try:\n        data = _load_docx_bytes(source, timeout)\n        return _extract_docx_text(data, include_tables)\n    except FileNotFoundError:\n        return f'Error: file not found: {source}'\n    except httpx.HTTPStatusError as exc:\n        return f'Error: HTTP {exc.response.status_code} while fetching {source}'\n    except Exception as exc:\n        return f'Error reading docx: {exc}'\n\n\nif __name__ == '__main__':\n    mcp.run()",
+  "dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nENV PYTHONUNBUFFERED=1\nRUN pip install --no-cache-dir mcp python-docx httpx\nCOPY server.py .\nCMD [\"python\",\"server.py\"]"
+}

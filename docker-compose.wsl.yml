@@ -1,0 +1,28 @@
+# WSL 原生 docker 适配层（Ubuntu-22.04 + mirrored 网络 + 原生 dockerd）
+#
+# 与 Docker Desktop 的差异：WSL 原生 dockerd 不注入 host.docker.internal，
+# 且 mirrored 模式下 bridge 容器访问不到 Windows 宿主 IP（实测 000）。
+# 唯一可用路径：backend 用 host 网络 —— 容器 localhost = WSL localhost =
+# Windows localhost（mirrored 共享），于是宿主 Ollama(11434) 与 mihomo(6789)
+# 直接可达，无需代理或 IP 注入。
+#
+# 用法（WSL 内）：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#                  -f docker-compose.wsl.yml up -d --build
+#
+# pg 仍走 bridge + 5432 端口映射；backend 经 127.0.0.1:5432 访问。
+services:
+  backend:
+    network_mode: host
+    # dockerd/WSL 重启后容器自动恢复（默认 no 会导致服务静默消失）
+    restart: unless-stopped
+    # host 网络下不允许端口映射（与 network_mode: host 冲突）→ 清空
+    ports: !reset []
+    environment:
+      RAG_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rag
+      EMBEDDING_BASE_URL: http://127.0.0.1:11434
+      # 外网 LLM 出口代理：容器 host 网络下 127.0.0.1:6789 = 宿主 mihomo
+      LLM_PROXY: http://127.0.0.1:6789
+
+  pg:
+    restart: unless-stopped
