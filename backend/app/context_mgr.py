@@ -24,10 +24,15 @@ KIND_TEST_REPORT = "失败测试报告"
 KIND_TASK = "任务要求"
 KIND_TEST_ASSERT = "隐藏测试断言"
 KIND_RESEARCH = "调研报告"
+# ---- DFMEA 专用 kind（design §15.3 E4）----
+KIND_FAILURE_MODES = "失效模式清单"
+KIND_SOD = "评分取值"
+KIND_DFMEA = "DFMEA 表"
 KIND_GENERIC = "交接物"
 
 KINDS = (KIND_REQUIREMENT, KIND_DESIGN, KIND_CODE, KIND_REVIEW,
          KIND_TEST_REPORT, KIND_TASK, KIND_TEST_ASSERT, KIND_RESEARCH,
+         KIND_FAILURE_MODES, KIND_SOD, KIND_DFMEA,
          KIND_GENERIC)
 
 # 步骤名 → 出站 kind（节点贴标签用；规则命中优先，可被关系 handoff_type 覆盖）
@@ -39,6 +44,15 @@ NODE_OUT_KIND_BY_STEP = {
     "代码审查": KIND_REVIEW, "审查": KIND_REVIEW, "复核": KIND_REVIEW,
     "测试": KIND_TEST_REPORT, "测试执行": KIND_TEST_REPORT,
     "调试修复": KIND_TEST_REPORT, "调试": KIND_TEST_REPORT,
+    # ---- DFMEA（长键在前，保证子串匹配优先命中更具体的 kind；
+    #      且**不放** "AP"/"报告" 这类过短键 —— 会误伤 "API 设计"/"调研报告"）----
+    "失效模式分析": KIND_FAILURE_MODES, "失效模式清单": KIND_FAILURE_MODES,
+    "失效模式": KIND_FAILURE_MODES, "失效分析": KIND_FAILURE_MODES,
+    "评分取值": KIND_SOD, "S-O-D": KIND_SOD, "行动优先级": KIND_SOD,
+    "严重度": KIND_SOD, "频度": KIND_SOD, "探测度": KIND_SOD,
+    "DFMEA 表": KIND_DFMEA, "DFMEA 报告": KIND_DFMEA, "DFMEA": KIND_DFMEA,
+    "FMEA 表": KIND_DFMEA, "FMEA 报告": KIND_DFMEA,
+    "FMEA 分析": KIND_FAILURE_MODES, "FMEA": KIND_DFMEA,
 }
 
 # 每类 kind 的默认字符预算（摘要/压缩后仍超预算 = 可能还需要再缩或该 kind 太大）
@@ -51,6 +65,9 @@ KIND_BUDGET = {
     KIND_TASK: 2000,
     KIND_TEST_ASSERT: 4000,
     KIND_RESEARCH: 3000,
+    KIND_FAILURE_MODES: 3000,
+    KIND_SOD: 2000,
+    KIND_DFMEA: 6000,        # 表格行多，预算给大（xlsx 导出的主要载体）
     KIND_GENERIC: 2000,
 }
 DEFAULT_BUDGET = 2400
@@ -65,6 +82,9 @@ KIND_INPUT_BUDGET = {
     KIND_TASK: 2000,
     KIND_TEST_ASSERT: 4000,
     KIND_RESEARCH: 3000,
+    KIND_FAILURE_MODES: 3000,
+    KIND_SOD: 2000,
+    KIND_DFMEA: 6000,
     KIND_GENERIC: 2000,
 }
 
@@ -80,6 +100,11 @@ ROLE_INPUT_KINDS: dict[str, list[str]] = {
     "代码": [KIND_REQUIREMENT, KIND_DESIGN, KIND_TASK, KIND_TEST_ASSERT],
     "设计": [KIND_REQUIREMENT, KIND_TASK],
     "需求": [KIND_TASK],
+    # ---- DFMEA（注意：键按子串匹配，"DFMEA 工程师" 会先命中 "DFMEA"，故具体→泛化排序）----
+    "DFMEA": [KIND_REQUIREMENT, KIND_TASK, KIND_FAILURE_MODES, KIND_SOD,
+              KIND_DFMEA],
+    "失效模式": [KIND_REQUIREMENT, KIND_TASK, KIND_DFMEA],
+    "专家": [KIND_REQUIREMENT, KIND_TASK, KIND_FAILURE_MODES],
 }
 # 审查意见 / 失败测试报告 仅允许出现在明确声明的下游（避免拿错）
 ROLE_INPUT_ALLOW_ALL = ()  # 未来可放宽
@@ -111,6 +136,11 @@ KIND_ALIASES = {
     "任务要求": KIND_TASK, "题目": KIND_TASK, "docstring": KIND_TASK,
     "隐藏测试": KIND_TEST_ASSERT, "测试断言": KIND_TEST_ASSERT,
     "断言": KIND_TEST_ASSERT, "调研报告": KIND_RESEARCH, "调研": KIND_RESEARCH,
+    # ---- DFMEA ----
+    "失效模式清单": KIND_FAILURE_MODES, "失效模式": KIND_FAILURE_MODES,
+    "失效分析": KIND_FAILURE_MODES,
+    "评分取值": KIND_SOD, "S/O/D": KIND_SOD, "SOD": KIND_SOD,
+    "dfmea": KIND_DFMEA, "fmea": KIND_DFMEA,
 }
 
 

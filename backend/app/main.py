@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research, chunk_types
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research, chunk_types, fmea
 
 
 def _sha256(text: str) -> str:
@@ -2103,6 +2103,30 @@ def run_pipeline(pipeline_id: int):
                              ref_id=pipeline_id)
     jobs.run_in_background(job_id, pipeline.run_pipeline_execution, pipeline_id)
     return {"job_id": job_id}
+
+
+# ---------------- 运行记录 / 交接物 / DFMEA 产出（读取侧，design §15） ----------------
+# 这三张表此前只写不读，对话页无法展示「生成 → 运行 → 产出」，故补读取接口。
+
+@app.get("/api/pipelines/{pipeline_id}/runs")
+def list_pipeline_runs(pipeline_id: int):
+    return {"runs": pipeline.list_runs(db.get_conn(), pipeline_id)}
+
+
+@app.get("/api/pipeline-runs/{run_id}/handoffs")
+def list_run_handoffs(run_id: int):
+    return {"handoffs": pipeline.list_handoffs(db.get_conn(), run_id)}
+
+
+@app.get("/api/dfmea/rows")
+def dfmea_rows(run_id: int | None = None):
+    return {"rows": fmea.list_rows(db.get_conn(), run_id)}
+
+
+@app.get("/api/dfmea/pending")
+def dfmea_pending(run_id: int | None = None):
+    """待人工确认清单（`ai_new` 的格逐条列出）。"""
+    return {"pending": fmea.pending_ai_new(db.get_conn(), run_id)}
 
 
 @app.get("/api/pipelines/{pipeline_id}/changes")

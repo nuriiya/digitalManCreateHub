@@ -66,6 +66,64 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                          "required": ["path", "content"]},
         "category": "fs",
     },
+    # ---- DFMEA 领域动作（design §15.3 的 C1~C4）----
+    # 取值优先级链的执行体：查历史(1) → 查表(2) → 问专家(3) → AI 推断(4)。
+    # 都是**读证据 / 写结果**的知识型动作，不含任何领域判定逻辑。
+    "fmea_history_query": {
+        "name": "查询历史 FMEA",
+        "description": "按部件名/编号或关键词检索历史 FMEA 库，返回失效模式、后果、S/O/D、措施与出处（取值优先级第 1 级证据，每条带可引用编号）",
+        "input_schema": {"type": "object",
+                         "properties": {"part": {"type": "string"},
+                                        "keyword": {"type": "string"}},
+                         "required": []},
+    },
+    "fmea_ap_table": {
+        "name": "查 AP / S-O-D 准则表",
+        "description": ("查 AP 行动优先级或 S/O/D 评分准则（取值优先级第 2 级证据）。"
+                        "支持三种用法：① 不传参数 → 一次返回 S/O/D **全部准则**（拿打分口径）；"
+                        "② 传 severity+occurrence+detection → 查该组合的 AP；"
+                        "③ 传 items 数组 → **批量**查多条 AP"),
+        "input_schema": {"type": "object",
+                         "properties": {"severity": {"type": "integer"},
+                                        "occurrence": {"type": "integer"},
+                                        "detection": {"type": "integer"},
+                                        "dimension": {"type": "string"},
+                                        "score": {"type": "integer"},
+                                        "items": {"type": "array"}},
+                         "required": []},
+    },
+    "ask_expert": {
+        "name": "询问专家数字人",
+        "description": "向指定部件专家数字人提问并取回其专业回答（取值优先级第 3 级证据；专家不可再转问其他专家）",
+        "input_schema": {"type": "object",
+                         "properties": {"expert": {"type": "string"},
+                                        "question": {"type": "string"}},
+                         "required": ["expert", "question"]},
+    },
+    "fmea_write_row": {
+        "name": "写入 DFMEA 记录",
+        "description": ("写入 DFMEA 行并**逐格**标注来源。单行模式直接传字段；"
+                        "多行模式传 rows 数组一次落多行（推荐 —— 一张表十几行，"
+                        "批量写可避免逐行往返）。来源必须是 history / table / "
+                        "expert:<专家名> / ai_inferred / ai_new 之一；AP 以 AP 表为准"),
+        "input_schema": {"type": "object",
+                         "properties": {
+                             "part": {"type": "string"},
+                             "function": {"type": "string"},
+                             "failure_mode": {"type": "string"},
+                             "failure_effect": {"type": "string"},
+                             "severity": {"type": "integer"},
+                             "failure_cause": {"type": "string"},
+                             "occurrence": {"type": "integer"},
+                             "prevention_control": {"type": "string"},
+                             "detection_control": {"type": "string"},
+                             "detection": {"type": "integer"},
+                             "ap": {"type": "string"},
+                             "action": {"type": "string"},
+                             "sources": {"type": "object"},
+                             "rows": {"type": "array"}},
+                         "required": []},
+    },
 }
 
 # 动作类别闭集
@@ -106,6 +164,15 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_read_file(conn, identity_id, args)
     if builtin_name == "write_file":
         return _exec_write_file(conn, identity_id, args)
+    # DFMEA 领域动作（design §15.3 C1~C4）
+    if builtin_name == "fmea_history_query":
+        return _exec_fmea_history_query(conn, args)
+    if builtin_name == "fmea_ap_table":
+        return _exec_fmea_ap_table(conn, args)
+    if builtin_name == "ask_expert":
+        return _exec_ask_expert(conn, identity_id, args)
+    if builtin_name == "fmea_write_row":
+        return _exec_fmea_write_row(conn, args)
     return {"ok": False, "error": f"未知内置动作 {builtin_name}"}
 
 
@@ -232,6 +299,105 @@ def _exec_write_file(conn, identity_id: int, args: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
     return {"ok": True, "result": {"path": path, "written": len(content)}}
+
+
+# ---------------- DFMEA 领域动作执行器（design §15.3 C1~C4） ----------------
+# 薄封装：领域逻辑在 fmea.py（确定性数据访问 + 来源裁决），这里只做参数搬运。
+
+def _exec_fmea_history_query(conn, args: dict) -> dict:
+    from . import fmea
+    a = args or {}
+    return fmea.history_query(conn, a.get("part", ""), a.get("keyword", ""))
+
+
+def _exec_fmea_ap_table(conn, args: dict) -> dict:
+    from . import fmea
+    a = args or {}
+    # 批量查 AP（items=[{severity,occurrence,detection}, …]）—— 一次查多条
+    items = a.get("items")
+    if isinstance(items, list) and items:
+        return fmea.ap_lookup_many(conn, items)
+    has_sod = all(a.get(k) not in (None, "")
+                  for k in ("severity", "occurrence", "detection"))
+    if has_sod:
+        return fmea.ap_lookup(conn, a["severity"], a["occurrence"], a["detection"])
+    dim = (a.get("dimension") or "").strip()
+    if dim and dim.lower() not in ("all", "*"):
+        return fmea.criterion_lookup(conn, dim, a.get("score"))
+    # 无参 / dimension=all -> 一次返回 S/O/D 三张准则表（打分口径）
+    return fmea.criteria_all(conn)
+
+
+def _exec_ask_expert(conn, identity_id: int, args: dict) -> dict:
+    """ask 回退的执行体：向指定专家数字人提问，取回其回答。
+
+    设计要点（design §15.3 E1）：
+      - 深度限制 —— 专家不能再转问专家（`fmea.MAX_ASK_DEPTH`），防无限递归；
+      - 名字解析必须**唯一**，歧义时明确报错而不是猜；
+      - 走 `chat.answer`（带本体 + RAG），专家的回答自带其本体依据。
+    """
+    from . import fmea
+    a = args or {}
+    expert = (a.get("expert") or "").strip()
+    question = (a.get("question") or "").strip()
+    if not expert or not question:
+        return {"ok": False, "error": "expert 与 question 不能为空"}
+    if fmea.ask_depth() >= fmea.MAX_ASK_DEPTH:
+        return {"ok": False,
+                "error": "询问层数已达上限：专家不能再转问其他专家"}
+
+    eid = None
+    if expert.isdigit():
+        row = conn.execute(
+            "SELECT id, name FROM identities WHERE id=? AND status='approved'",
+            (int(expert),)).fetchone()
+        if row:
+            eid = row["id"]
+    if eid is None:
+        rows = conn.execute(
+            "SELECT id, name FROM identities WHERE status='approved'"
+            " AND name LIKE ?", (f"%{expert}%",)).fetchall()
+        if len(rows) > 1:
+            return {"ok": False, "error": f"专家「{expert}」匹配到多个："
+                    + "、".join(r["name"] for r in rows)}
+        if len(rows) == 1:
+            eid = rows[0]["id"]
+    if eid is None:
+        return {"ok": False, "error": f"未找到专家数字人「{expert}」"}
+    if eid == identity_id:
+        return {"ok": False, "error": "不能询问自己"}
+    nm = conn.execute("SELECT name FROM identities WHERE id=?",
+                      (eid,)).fetchone()["name"]
+    # ask 边裁决（design §15.3 E1）：pipeline 场景下引擎按 ask 边注入可询问名单，
+    # 问名单外的专家一律拒绝 —— 边不只是画在图上，它约束运行期权限。
+    allowed = fmea.allowed_experts()
+    if allowed is not None and nm not in allowed:
+        return {"ok": False,
+                "error": f"「{nm}」不在本节点可询问的专家名单内"
+                         f"（可询问：{'、'.join(allowed) or '无'}）"}
+
+    from . import chat
+    fmea.push_ask()
+    try:
+        r = chat.answer(conn, eid, question, use_ontology=True, use_rag=True,
+                        provider="llm2")
+    finally:
+        fmea.pop_ask()
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error")}
+    return {"ok": True, "result": {
+        "expert": nm, "expert_id": eid, "answer": r.get("reply") or "",
+        "source": f"expert:{nm}"}}
+
+
+def _exec_fmea_write_row(conn, args: dict) -> dict:
+    from . import fmea
+    a = args or {}
+    # 批量写（rows=[{…}, …]）—— 一次落多行，避免逐行耗尽轮数
+    rows = a.get("rows")
+    if isinstance(rows, list) and rows:
+        return fmea.write_rows(conn, rows)
+    return fmea.write_row(conn, a)
 
 
 def execute_mcp(conn, mcp_server_id: int, mcp_tool_name: str, args: dict) -> dict:
@@ -382,6 +548,8 @@ def set_action_status(conn, action_id: int, status: str) -> bool:
     cur = conn.execute("UPDATE persona_actions SET status=? WHERE id=?",
                        (status, action_id))
     conn.commit()
+    # 自审修复：原实现声明返回 bool 却无 return（恒返回 None），调用方无法判断成败。
+    return cur.rowcount > 0
 
 
 def bind_mcp_action(conn, identity_id: int, mcp_server_id: int,
@@ -417,6 +585,42 @@ def bind_mcp_action(conn, identity_id: int, mcp_server_id: int,
     return {"ok": True, "action_id": cur.lastrowid, "existed": False, "name": name}
 
 
+def bind_builtin_action(conn, identity_id: int, builtin_name: str,
+                        name: str = "", description: str = "") -> dict:
+    """用户显式把**内置动作**绑定到数字人（直接 approved，绕过提名-审批）。幂等。
+
+    与 `bind_mcp_action` 对称 —— 补齐「MCP 能显式直绑、builtin 不能」的缺口
+    （design §15.5 落地时发现：装配 DFMEA 工程师需要把领域动作确定性地绑上，
+    而不必每次都走 LLM 提名 + 人工审批两跳）。显式绑定语义即「用户已裁决」。
+    """
+    if builtin_name not in BUILTIN_ACTIONS:
+        return {"ok": False, "error": f"内置动作不在注册表：{builtin_name}"}
+    meta = BUILTIN_ACTIONS[builtin_name]
+    act_name = (name or meta["name"]).strip()
+    if not act_name or len(act_name) > 64:
+        return {"ok": False, "error": "动作名缺失或过长（≤64）"}
+    desc = (description or meta["description"])[:300]
+    exists = conn.execute(
+        "SELECT id, status FROM persona_actions WHERE identity_id=? AND name=?",
+        (identity_id, act_name)).fetchone()
+    if exists:
+        conn.execute("UPDATE persona_actions SET status='approved' WHERE id=?",
+                     (exists["id"],))
+        conn.commit()
+        return {"ok": True, "action_id": exists["id"], "existed": True,
+                "status": "approved", "name": act_name}
+    cur = conn.execute(
+        "INSERT INTO persona_actions(identity_id, name, description,"
+        " input_schema, kind, mcp_server_id, mcp_tool_name, builtin_name,"
+        " status, created_at) VALUES(?,?,?,?,?,?,?,?,'approved',?)",
+        (identity_id, act_name, desc,
+         json.dumps(meta["input_schema"], ensure_ascii=False), "builtin",
+         None, None, builtin_name, db.now()))
+    conn.commit()
+    return {"ok": True, "action_id": cur.lastrowid, "existed": False,
+            "status": "approved", "name": act_name}
+
+
 def unbind_action(conn, identity_id: int, action_id: int) -> bool:
     """解绑 persona action（按 identity_id 校验归属）。"""
     row = conn.execute("SELECT identity_id FROM persona_actions WHERE id=?",
@@ -426,10 +630,46 @@ def unbind_action(conn, identity_id: int, action_id: int) -> bool:
     conn.execute("DELETE FROM persona_actions WHERE id=?", (action_id,))
     conn.commit()
     return True
-    return cur.rowcount > 0
 
 
 # ---------------- guard (execution-time adjudication) ----------------
+
+def _norm_action_name(s: str) -> str:
+    """动作名归一化：去掉**所有空白** + 转小写。
+
+    LLM 在 `<tool_call>` 里写动作名时常漏空格（实测 2026-09-11：注册名是
+    「查询历史 FMEA」，LLM 写成「查询历史FMEA」）。若只做精确匹配，动作会被
+    误判为「未声明」而拒绝执行 —— DFMEA 链路因此整轮空转、产出 0 行。
+    """
+    return _re.sub(r"\s+", "", (s or "")).lower()
+
+
+def _match_action(conn, identity_id: int, name: str):
+    """按名匹配 persona action：先精确，再归一化（**唯一**匹配才算，避免歧义误判）。"""
+    row = conn.execute(
+        "SELECT * FROM persona_actions WHERE identity_id=? AND name=?",
+        (identity_id, name)).fetchone()
+    if row:
+        return dict(row)
+    target = _norm_action_name(name)
+    if not target:
+        return None
+    cands = conn.execute(
+        "SELECT * FROM persona_actions WHERE identity_id=?",
+        (identity_id,)).fetchall()
+    hits = [dict(r) for r in cands if _norm_action_name(r["name"]) == target]
+    return hits[0] if len(hits) == 1 else None
+
+
+#: 入参别名兜底：LLM 受提示里的通用示例影响，常把参数名写成 `query`。
+#: 缺必填项时按此表补全（**只补不覆盖**）—— 提名归 LLM、对齐归代码。
+_ARG_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("ask_expert", "question"): ("query", "q", "text", "prompt", "ask"),
+    ("fmea_history_query", "part"): ("query", "q", "part_name"),
+    ("fmea_write_row", "failure_mode"): ("mode", "failure", "failure_mode_name"),
+    ("fmea_write_row", "sources"): ("source", "source_map"),
+}
+
 
 def guard_action(conn, identity_id: int, name: str, args: dict) -> tuple[bool, str, dict | None]:
     """Deterministic pre-execution gate (guardians): only an approved action
@@ -439,10 +679,11 @@ def guard_action(conn, identity_id: int, name: str, args: dict) -> tuple[bool, s
       - 执行类动作（exec/fs）必须显式声明且 approved（白名单裁决，默认拒绝）
       - 入参按 JSON Schema required 校验（泛化，不再只查 query）
       - 执行类入参长度封顶（防 prompt 注入/超大 payload）
+
+    名称匹配先精确、再归一化（见 `_match_action`）：LLM 只负责提名，代码负责
+    把它对齐到真实的动作记录上（铁律 L1 —— 提名与裁决分离）。
     """
-    row = conn.execute(
-        "SELECT * FROM persona_actions WHERE identity_id=? AND name=?",
-        (identity_id, name)).fetchone()
+    row = _match_action(conn, identity_id, name)
     if not row:
         return False, f"数字人未声明动作「{name}」", None
     if row["status"] != "approved":
@@ -454,6 +695,14 @@ def guard_action(conn, identity_id: int, name: str, args: dict) -> tuple[bool, s
         schema = BUILTIN_ACTIONS[row["builtin_name"]]["input_schema"]
         for req in schema.get("required", []):
             val = args.get(req)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                # 别名兜底（见 _ARG_ALIASES）：补全到真实参数名上，供执行器使用
+                for al in _ARG_ALIASES.get((row["builtin_name"], req), ()):
+                    av = args.get(al)
+                    if av not in (None, ""):
+                        args[req] = av
+                        break
+                val = args.get(req)
             if val is None or (isinstance(val, str) and not val.strip()):
                 return False, f"动作入参缺少 {req}", None
         # 执行类动作：入参长度封顶（防超大 payload / prompt 注入）

@@ -255,18 +255,18 @@
 
 | ID | 需求 | 状态 | 验收要点 |
 |---|---|---|---|
-| R-17.1 | 需求 → 自动生成 DFMEA pipeline（复用 `/api/pipeline/generate`） | 未实现 | 产物落到 draft，节点已绑数字人 |
-| R-17.2 | 取值优先级链：历史库 → AP/S-O-D 表 → 专家 → AI 推断 | 未实现 | **不得越级代填**（前级有证据即不得用后级） |
-| R-17.3 | 逐格来源标注（`history`/`table`/`expert:<name>`/`ai_inferred`/`ai_new`） | 未实现 | 来源随格存储，非整表标记 |
-| R-17.4 | 全新功能无依据 → 强制标注「AI 生成·待人工确认」 | 未实现 | `ai_new` 必须可被机器筛出并进确认清单 |
-| R-17.5 | DFMEA 工程师数字人（本体 = 取值链与标注规则） | 未实现 | P0 |
-| R-17.6 | 部件专家数字人 × N | 未实现 | P0 |
-| R-17.7 | 历史 FMEA 数据域（结构化表 + 导入） | 未实现 | P0 |
-| R-17.8 | P0 动作：`fmea_history_query` / `ask_expert` / `fmea_write_row` | 未实现 | P0 |
-| R-17.9 | pipeline **ask 回退可执行**（引擎级，当前完全不执行） | 未实现 | P0 |
-| R-17.10 | 生成时**自动绑定 persona_id**（主 UI 路径当前全为 None） | 未实现 | P0 |
-| R-17.11 | review 门控 + FMEA 专用 kind + handoff 契约校验 | 未实现 | P1 |
-| R-17.12 | DFMEA 表格视图（来源高亮 + 待人工确认清单） | 未实现 | P1 |
+| R-17.1 | 需求 → 自动生成 DFMEA pipeline（复用 `/api/pipeline/generate`） | **已实现** | 产物落到 draft，节点已绑数字人（实测 0 未绑定） |
+| R-17.2 | 取值优先级链：历史库 → AP/S-O-D 表 → 专家 → AI 推断 | **已实现** | 由 DFMEA 工程师本体承载；**不得越级代填**为规则条目 |
+| R-17.3 | 逐格来源标注（`history`/`table`/`expert:<name>`/`ai_inferred`/`ai_new`） | **已实现** | 代码侧闭集裁决（`fmea.validate_sources`），越界拒绝写入 |
+| R-17.4 | 全新功能无依据 → 强制标注「AI 生成·待人工确认」 | **已实现** | `ai_new` 可被 `pending_ai_new()` 机器筛出 |
+| R-17.5 | DFMEA 工程师数字人（本体 = 取值链与标注规则） | **已实现** | id=9，本体 22 条（8 概念 + 14 规则） |
+| R-17.6 | 部件专家数字人 × N | **已实现** | id=10~13（射频/电源时钟/结构工艺/固件），各 5 条本体 |
+| R-17.7 | 历史 FMEA 数据域（结构化表 + 导入） | **已实现** | `fmea_cases` 17 条蓝牙模块样例 + 30 条 S/O/D 准则 + 1000 格 AP 表 |
+| R-17.8 | P0 动作：`fmea_history_query` / `ask_expert` / `fmea_write_row` | **已实现** | 另含 `fmea_ap_table`；四个动作均支持**批量**（取准则/查 AP/写多行） |
+| R-17.9 | pipeline **ask 回退可执行**（引擎级） | **已实现** | `_ask_sources` + `fmea.allowed_experts`；问名单外专家被拒，深度上限 2 |
+| R-17.10 | 生成时**自动绑定 persona_id** | **已实现** | `generate_from_request` 校验并绑定；实测 0 未绑定 |
+| R-17.11 | review 门控 + FMEA 专用 kind + handoff 契约校验 | **部分实现** | 门控与 kind 已实现（FAIL 中止下游）；**handoff_schema 运行期校验未做** |
+| R-17.12 | DFMEA 表格视图（来源高亮 + 待人工确认清单） | **已实现** | 对话页 `PipelineCard`：逐格来源徽章 + `ai_new` 待确认清单 |
 | R-17.13 | DFMEA 结果导出 xlsx/csv | 未实现 | P2 |
 
 ---

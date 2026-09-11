@@ -214,7 +214,17 @@
 
 ## T-K DFMEA 自动编排链路（design §15）
 
-> 该链路当前**全部未实现**（缺口 21 项，见 design §15.3）；以下阈值是落地后的验收口径。
+> **已落地（2026-09-11，design §15）**。验证工具：
+> `docker exec -w /app/backend -e PYTHONPATH=/app/backend rag_backend python scripts/verify_dfmea_bluetooth_e2e.py`
+> （手机蓝牙模块端到端：G 生成 / R 运行 / V 产出校验共 20 条断言）·
+> `scripts/verify_fmea_actions.py`（动作：查历史 · 查表 · 写行 · 批量 · 来源闭集 · AP 以表为准）·
+> `scripts/verify_pipeline_fmea.py`（ask 边执行语义 · review 门控 · FMEA kind）·
+> `scripts/verify_toolcall_fix.py`（tool_call 容错 · 动作名归一化 · 参数别名 · 并行多调用）。
+>
+> **蓝牙模块实测**（一句话需求 → 生成 → 运行）：**23 行 DFMEA，覆盖 11 个部件**
+> （天线/匹配网络/PA/LNA/滤波器/射频开关/链路预算/LDO/去耦/晶振/浪涌防护）；
+> K-1 来源覆盖率 **100%**、K-4 可追溯 **100%**（`history#N` 与 `expert:<名>` 全部回指成功）、
+> AP 与 AP 表一致 **100%**。
 
 | 指标 | 定义/口径 | 阈值/目标 |
 |---|---|---|
@@ -222,7 +232,7 @@
 | K-2 `ai_new` 可筛出率 | 标记 `ai_new` 的格数 == 人工复核清单条数 | **100%** |
 | K-3 越级代填率 | 前级已有证据、却被后级来源填写的格数 | **0** |
 | K-4 证据可回溯源 | `history` / `table` 来源的格能回指到具体表行或 chunk | 100% |
-| K-5 流水线可运行率 | 自动生成的 DFMEA pipeline 能跑完且节点不空转 | 100%（**当前 0**：节点 persona_id 全为 None） |
+| K-5 流水线可运行率 | 自动生成的 DFMEA pipeline 能跑完且节点不空转 | 100%（**已达成**：实测 0 个节点未绑定数字人） |
 | K-6 ask 回退成功率 | 专家数字人回答被成功回注到 DFMEA 工程师的比例 | ≥95% |
 
 ## T-J 工作台体验（IdentityWorkbench）

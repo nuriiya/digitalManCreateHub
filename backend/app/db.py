@@ -408,6 +408,78 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
 
+-- ---- DFMEA 数据域（design §15.3 的 B1 / B2）----
+-- DFMEA 工程师的取值优先级链需要「可查、可溯源」的证据底座。此前全项目 FMEA
+-- 相关零命中，四张表即为此补齐；它们只是**数据零件**，不参与 pipeline 生成。
+
+-- B1 历史 FMEA 库：取值优先级链第 1 级（source='history'）。每条是一次历史分析
+-- 记录，含 S/O/D/AP 与出处，供 fmea_history_query 检索并逐条溯源。
+CREATE TABLE IF NOT EXISTS fmea_cases (
+    id BIGSERIAL PRIMARY KEY,
+    part TEXT NOT NULL,
+    part_no TEXT NOT NULL DEFAULT '',
+    function TEXT,
+    failure_mode TEXT NOT NULL,
+    failure_effect TEXT,
+    severity SMALLINT,
+    failure_cause TEXT,
+    occurrence SMALLINT,
+    prevention_control TEXT,
+    detection_control TEXT,
+    detection SMALLINT,
+    ap TEXT,
+    action TEXT,
+    source_doc TEXT NOT NULL DEFAULT '',
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fmea_cases_part ON fmea_cases(part);
+
+-- B2a S/O/D 评分准则（AIAG-VDA）：fmea_ap_table 的「准则查询」侧。
+CREATE TABLE IF NOT EXISTS fmea_sod_criteria (
+    id BIGSERIAL PRIMARY KEY,
+    dimension TEXT NOT NULL,            -- severity | occurrence | detection
+    score SMALLINT NOT NULL,            -- 1..10
+    criterion TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fmea_sod_uniq
+    ON fmea_sod_criteria(dimension, score);
+
+-- B2b AP 行动优先级矩阵：按 (S,O,D) 查 H/M/L。由 seed 按 AIAG-VDA AP 规则生成，
+-- 可整体替换为官方表（动作只做查表，不硬编码判定）。
+CREATE TABLE IF NOT EXISTS fmea_ap_matrix (
+    id BIGSERIAL PRIMARY KEY,
+    severity SMALLINT NOT NULL,
+    occurrence SMALLINT NOT NULL,
+    detection SMALLINT NOT NULL,
+    ap TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fmea_ap_uniq
+    ON fmea_ap_matrix(severity, occurrence, detection);
+
+-- DFMEA 结果表：动作 fmea_write_row 的落点。`sources` 是**逐格**来源标注
+-- （history / table / expert:<name> / ai_inferred / ai_new），不是整表一个标记。
+CREATE TABLE IF NOT EXISTS dfmea_rows (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT,
+    part TEXT NOT NULL DEFAULT '',
+    function TEXT,
+    failure_mode TEXT,
+    failure_effect TEXT,
+    severity SMALLINT,
+    failure_cause TEXT,
+    occurrence SMALLINT,
+    prevention_control TEXT,
+    detection_control TEXT,
+    detection SMALLINT,
+    ap TEXT,
+    action TEXT,
+    sources JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dfmea_rows_run ON dfmea_rows(run_id);
+
 -- chunk 内容类型词表（design §11）：用户可自定义；builtin 与 unknown 不可删。
 -- 每个 type 内嵌默认两维度，chunk 落库时由此确定性裁决（LLM 只提名 type）。
 CREATE TABLE IF NOT EXISTS chunk_types (

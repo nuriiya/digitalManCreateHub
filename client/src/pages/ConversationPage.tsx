@@ -6,6 +6,7 @@ import {
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
+import PipelineCard from '../components/PipelineCard'
 
 interface Props {
   refreshKey: number
@@ -37,6 +38,8 @@ export default function ConversationPage({ refreshKey }: Props) {
   const [loading, setLoading] = useState(false)
   const [genMcpMode, setGenMcpMode] = useState(false)
   const [genPipelineMode, setGenPipelineMode] = useState(false)
+  // 已生成的 pipeline（对话页内联展示：摘要 + 审批/运行 + DFMEA 产出）
+  const [pipelineIds, setPipelineIds] = useState<number[]>([])
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
@@ -112,11 +115,13 @@ export default function ConversationPage({ refreshKey }: Props) {
         const r = await generatePipeline(text)
         if (r.ok) {
           toast(`已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），待审批`, 'ok')
+          if (r.pipeline_id) setPipelineIds((v) => [...v, r.pipeline_id as number])
+          const tid = -Date.now()
           setMessages((m) => [...m, {
-            id: -4, identity_id: 0, role: 'user', content: `创建 pipeline：${text}`, created_at: Date.now() / 1000,
+            id: tid, identity_id: 0, role: 'user', content: `创建 pipeline：${text}`, created_at: Date.now() / 1000,
           }, {
-            id: -5, identity_id: 0, role: 'assistant',
-            content: `已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），状态 draft。待审批后可执行，去「编排」页批准。`,
+            id: tid - 1, identity_id: 0, role: 'assistant',
+            content: `已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），状态 draft —— 见下方卡片，可就地**校验 / 批准 / 运行**并查看 DFMEA 产出。`,
             created_at: Date.now() / 1000,
           }])
         } else {
@@ -392,6 +397,12 @@ export default function ConversationPage({ refreshKey }: Props) {
                 流式 token 累加时实时更新），不再渲染静态 typing 气泡
                 —— 否则会和占位气泡重复，造成视觉混乱。 */}
           </div>
+
+          {/* 生成的 pipeline：就地展示摘要 + 校验/批准/运行 + DFMEA 产出
+              （design §15 —— 对话页即「生成 → 运行 → 看结果」的唯一入口） */}
+          {pipelineIds.map((pid) => (
+            <PipelineCard key={pid} pipelineId={pid} />
+          ))}
 
           <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''} ${genPipelineMode ? 'pipe-on' : ''}`}>
             <textarea

@@ -692,3 +692,36 @@ export const rejectPipelineChange = (pipelineId: number, changeId: number) =>
   api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/changes/${changeId}/reject`, { method: 'POST' })
 export const chatPipeline = (id: number, message: string) =>
   api<{ ok: boolean; change_id?: number; changes: any[]; note?: string }>(`/api/pipelines/${id}/chat`, { method: 'POST', body: JSON.stringify({ message }) })
+
+// ---- pipeline 运行记录 / 交接物 / DFMEA 产出（design §15）----
+// 此前 pipeline_runs / pipeline_run_handoffs / dfmea_rows 只写不读，
+// 对话页无法展示「生成 → 运行 → 产出」的结果，故补这组读取接口。
+export interface PipelineRun {
+  id: number; pipeline_id: number; job_id: number | null
+  status: string; current_node_id: number | null; created_at: number
+}
+export interface RunHandoff {
+  id: number; node_id: number; node_key: string | null; step_name: string | null
+  kind: string; content: string; chars: number; refined: boolean; raw_chars: number
+}
+export interface DfmeaRow {
+  id: number; run_id: number | null; part: string; function: string | null
+  failure_mode: string | null; failure_effect: string | null
+  severity: number | null; failure_cause: string | null
+  occurrence: number | null; prevention_control: string | null
+  detection_control: string | null; detection: number | null
+  ap: string | null; action: string | null
+  sources: Record<string, string>; ai_new_fields: string[]; created_at: number
+}
+export interface DfmeaPending {
+  row_id: number; part: string; failure_mode: string; fields: string[]
+}
+
+export const getPipelineRuns = (pipelineId: number) =>
+  api<{ runs: PipelineRun[] }>(`/api/pipelines/${pipelineId}/runs`)
+export const getRunHandoffs = (runId: number) =>
+  api<{ handoffs: RunHandoff[] }>(`/api/pipeline-runs/${runId}/handoffs`)
+export const getDfmeaRows = (runId?: number) =>
+  api<{ rows: DfmeaRow[] }>(`/api/dfmea/rows${runId ? `?run_id=${runId}` : ''}`)
+export const getDfmeaPending = (runId?: number) =>
+  api<{ pending: DfmeaPending[] }>(`/api/dfmea/pending${runId ? `?run_id=${runId}` : ''}`)

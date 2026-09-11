@@ -875,40 +875,125 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 
 # ---------------- answer / compare ----------------
 
-MAX_ACTION_ROUNDS = 3
+MAX_ACTION_ROUNDS = 8
 _TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)(?:</[^>]*>|\Z)", re.DOTALL)
+#: LLM 常臆造结束标记（如 `</arg_value>`），抠 JSON 前先剥掉尾部伪标签
+_TAG_TAIL = re.compile(r"</[^>]*>")
 
 
 def _actions_block(actions_list: list[dict]) -> str:
-    lines = "\n".join(f"- {a['name']}：{a['description']}" for a in actions_list)
+    """渲染可用动作清单。
+
+    关键：**逐个列出该动作真实的参数名**（取自 input_schema）。
+    早前的实现用统一的 `{"query": "..."}` 作示例，误导 LLM 把所有动作的入参
+    都写成 `query` —— 实测 2026-09-11：`ask_expert` 需要 `question`，LLM 给
+    `query`，于是入参校验失败、动作被反复拒绝直到轮数耗尽，DFMEA 全链路空转。
+    """
+    lines = []
+    for a in actions_list:
+        sch = a.get("input_schema") or {}
+        props = list((sch.get("properties") or {}).keys())
+        req = set(sch.get("required") or [])
+        if props:
+            params = "、".join(f"{k}{'*' if k in req else ''}" for k in props)
+            lines.append(f"- {a['name']}：{a['description']}｜参数：{params}")
+        else:
+            lines.append(f"- {a['name']}：{a['description']}")
+    body = "\n".join(lines)
     return (
         "\n\n你拥有以下可用动作（需要时通过 <tool_call> 调用）：\n"
-        + lines +
-        "\n调用动作时，只输出这一行（不要额外文字），严格以 </tool_call> 结尾：\n"
-        "<tool_call>{\"name\": \"动作名\", \"args\": {\"query\": \"...\"}}</tool_call>\n"
-        "然后停止，等待执行结果。不需要动作时直接回答。"
+        + body +
+        "\n调用动作时，**只输出这一行**（不要额外文字）；动作名必须与上面"
+        "**逐字一致**（含空格）；`args` 的键必须使用上面标注的参数名"
+        "（带 * 为必填）。严格以 </tool_call> 结尾：\n"
+        "<tool_call>{\"name\": \"动作名\", \"args\": {\"参数名\": \"值\"}}</tool_call>\n"
+        "JSON 必须完整合法（括号闭合）。然后停止，等待执行结果。"
+        "不需要动作时直接回答。"
     )
 
 
+def _salvage_tool_json(raw: str):
+    """从 tool_call 文本里抠出 JSON 对象，**容忍 LLM 写坏的形式**。
+
+    实测（2026-09-11，DFMEA 首跑）LLM 会产出::
+
+        <tool_call>{"name":"查询历史FMEA","args":{"query":"…"}</arg_value></tool_call>
+
+    ① `args` 对象**缺一个闭括号**；② 结束标记臆造为 `</arg_value>`。
+    原实现只在 `{…}` 恰好平衡时才 `json.loads`，于是解析返回 None、
+    **整条链路的动作从未被执行**（DFMEA 因此产出 0 行）。
+
+    这里改为：剥掉尾部伪标签 → 用栈扫描（跳过字符串内与转义后的括号）→
+    若括号未闭合则**补齐缺失的闭括号**。修复后同一段文本可正常解析。
+    """
+    s = _TAG_TAIL.sub("", raw or "")
+    start = s.find("{")
+    if start < 0:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(s[start:i + 1])
+                except Exception:  # noqa: BLE001
+                    return None
+    if depth > 0:                      # 未闭合 -> 补齐
+        try:
+            return json.loads(s[start:] + ("}" * depth))
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _parse_tool_calls(reply: str) -> list[tuple[str, dict]]:
+    """解析回复里**全部** `<tool_call>`（不是只取第一个）。
+
+    两条来自实测（2026-09-11，DFMEA 全链路空转）的兼容要求：
+
+      1. **并行调用** —— 模型会一次输出多个 `<tool_call>`（DFMEA 一次查 5 组
+         AP）。只解析第一个会让其余调用**被静默丢弃**，模型以为"还在等其余
+         返回"而反复重试同类调用，直到轮数耗尽、产出停在裸 tool_call。
+      2. **动作名在 JSON 之外** —— 模型也会写出
+         `<tool_call>检索本体{"args": {...}}</tool_call>`（JSON 里没有 name）。
+         此时取 JSON 之前的文本作为动作名。
+    """
+    out: list[tuple[str, dict]] = []
+    for m in _TOOL_CALL.finditer(reply or ""):
+        chunk = (m.group(1) or "").strip()
+        data = _salvage_tool_json(chunk)
+        if not isinstance(data, dict):
+            continue
+        args = data.get("args")
+        args = args if isinstance(args, dict) else {}
+        name = str(data.get("name") or "").strip()
+        if not name:
+            brace = chunk.find("{")
+            name = chunk[:brace].strip().strip('"').strip() if brace > 0 else ""
+        if name:
+            out.append((name, args))
+    return out
+
+
 def _parse_tool_call(reply: str) -> tuple[str, dict] | None:
-    m = _TOOL_CALL.search(reply or "")
-    if not m:
-        return None
-    raw = m.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end < start:
-        return None
-    try:
-        data = json.loads(raw[start:end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    name = str(data.get("name") or "").strip()
-    args = data.get("args") or {}
-    if not name or not isinstance(args, dict):
-        return None
-    return name, args
+    """单调用包装（保留旧调用点；新代码请用 `_parse_tool_calls`）。"""
+    calls = _parse_tool_calls(reply)
+    return calls[0] if calls else None
 
 
 def _generate(conn, identity_id: int, message: str, use_ontology: bool,
@@ -1002,29 +1087,46 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
 
     # 动作调用循环（tool-use）：LLM 只提名 <tool_call>，guard 确定性裁决，执行后注入
     tool_calls: list[dict] = []
+    seen: set[str] = set()          # 防重复：完全相同的 (name,args) 不重复执行
+
+    def _sig(n: str, a: dict) -> str:
+        return n + "|" + json.dumps(a, ensure_ascii=False, sort_keys=True)
+
     for _ in range(MAX_ACTION_ROUNDS):
-        parsed = _parse_tool_call(reply)
-        if not parsed:
+        calls = _parse_tool_calls(reply)
+        if not calls:
             break
-        name, args = parsed
-        ok, reason, action_row = actions_mod.guard_action(conn, identity_id, name, args)
-        if not ok:
-            tool_calls.append({"name": name, "ok": False, "reason": reason})
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user",
-                             "content": f"动作「{name}」被拒绝：{reason}。请直接回答或换一种方式。"})
-            reply = _dispatch(provider, messages, ollama_model, usage)
-            continue
-        result = actions_mod.execute_action(conn, identity_id, action_row, args)
-        tool_calls.append({"name": name, "ok": result.get("ok", False),
-                           "result": (result.get("result") if result.get("ok")
-                                      else result.get("error"))})
+        # 一轮内**执行全部**并行调用（模型会一次输出多个 tool_call），结果合并
+        # 成一条消息回灌。原来只处理第一个 —— 其余被静默丢弃，模型误以为
+        # "还在等其余返回"而反复重试，直到轮数耗尽（实测 DFMEA 一次查 5 组 AP）。
+        lines: list[str] = []
+        attempted = 0
+        for name, args in calls:
+            sig = _sig(name, args)
+            if sig in seen:
+                lines.append(f"· 动作「{name}」（同参数）已执行过，结果见上文。")
+                continue
+            seen.add(sig)
+            attempted += 1
+            ok, reason, action_row = actions_mod.guard_action(
+                conn, identity_id, name, args)
+            if not ok:
+                tool_calls.append({"name": name, "ok": False, "reason": reason})
+                lines.append(f"· 动作「{name}」被拒绝：{reason}（请改用正确的参数名）")
+                continue
+            result = actions_mod.execute_action(conn, identity_id, action_row, args)
+            tool_calls.append({"name": name, "ok": result.get("ok", False),
+                               "result": (result.get("result") if result.get("ok")
+                                          else result.get("error"))})
+            lines.append(f"· 动作「{name}」执行结果："
+                         + json.dumps(result, ensure_ascii=False))
         messages.append({"role": "assistant", "content": reply})
-        messages.append({"role": "user",
-                         "content": "动作「" + name + "」执行结果："
-                         + json.dumps(result, ensure_ascii=False)
-                         + "。请基于此结果继续回答。"})
+        messages.append({"role": "user", "content":
+                         "\n".join(lines) + "\n请基于以上结果继续；如已可完成，"
+                         "请直接给出最终回答（不要重复调用已执行过的动作）。"})
         reply = _dispatch(provider, messages, ollama_model, usage)
+        if attempted == 0:
+            break       # 本轮没有任何新调用 -> 再循环也不会有新信息
 
     prompt_tokens = usage.get("prompt_tokens")
     estimate = not isinstance(prompt_tokens, int)

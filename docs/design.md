@@ -1248,7 +1248,7 @@ client/src/hooks/useWorkbench.ts
 
 ---
 
-## 15. DFMEA 自动编排链路（需求 → N 专家 + 1 DFMEA 工程师）—— 设计已定，未实现
+## 15. DFMEA 自动编排链路（需求 → N 专家 + 1 DFMEA 工程师）—— 已实现（2026-09-11）
 
 > **编号说明**：本节为 2026-09-11 新增。§14「设计变更流程」是全文收尾约定，编号保持不变以免破坏已有引用，新设计统一从 §15 起追加。
 >
@@ -1402,7 +1402,61 @@ DFMEA 的每一格（失效模式 / 后果 / S / 原因 / O / 现有控制 / D /
 4. **P1**：B2 AP/S-O-D 本体 + C2 查表动作 + E2 review 门控 + E4 FMEA kind + F1 前端表格视图。
 5. **P2**：D2 Excel 导出 + E5 语义化选人 + C5/D1。
 
-**状态**：设计已定（2026-09-11），**代码未实现**。需求编号 R-17。
+### 15.6 落地实现（2026-09-11）
+
+**边界（不可越）**：本轮补的全是**零件**（数据域 / 动作 / 数字人 / 机制），
+**生成仍由 LLM 完成** —— pipeline 的节点与关系由 `generate_from_request` 单次
+LLM 提名产出，代码只做校验与落库，未硬编码任何拓扑。
+
+| 层 | 落地位置 | 内容 |
+|---|---|---|
+| **B1/B2 数据域** | `backend/seed_fmea_data.py` + `db.py` | 4 张表：`fmea_cases`（历史 FMEA）、`fmea_sod_criteria`（30 条准则）、`fmea_ap_matrix`（1000 格 AP 表）、`dfmea_rows`（结果）。seed 含**手机蓝牙模块 17 条历史 FMEA**（6 子系统） |
+| **C1~C4 动作** | `backend/app/fmea.py`（新）+ `actions.py` | `fmea_history_query` / `fmea_ap_table` / `ask_expert` / `fmea_write_row`；`bind_builtin_action` 补齐「builtin 也能显式直绑」的缺口 |
+| **A1~A3 数字人** | `backend/seed_dfmea_identities.py` | DFMEA 工程师（general，20 条本体 = 取值优先级链 + 来源规则）、4 个部件专家（射频/电源时钟/结构工艺/固件）、DFMEA 复核员（review 门） |
+| **E1 ask 可执行** | `pipeline._ask_sources` + `fmea.allowed_experts` | ask 边的执行语义 = **可询问名单**；`ask_expert` 执行期裁决（问名单外的专家被拒）；深度上限 `MAX_ASK_DEPTH=2` 阻断「专家再问专家」 |
+| **E2 review 门控** | `pipeline.run_pipeline_execution` | 复核门须输出 `[REVIEW:PASS]` / `[REVIEW:FAIL]`；FAIL → `pipeline_runs.status='blocked'` 并**中止下游**；UNKNOWN 放行但记事件（不静默） |
+| **E4 FMEA kind** | `context_mgr.py` | 新增 `失效模式清单` / `评分取值` / `DFMEA 表` 三类 kind + 步名映射 + DFMEA 角色入站白名单 |
+| **对话入口** | `ConversationPage` + `components/PipelineCard.tsx` + `api.ts` | 对话页一句话生成 → **就地**校验/批准/运行 → DFMEA 表（逐格来源徽章 + `ai_new` 待确认清单）；补 runs / handoffs / dfmea rows 读取接口 |
+| **验收** | `scripts/verify_dfmea_bluetooth_e2e.py` | 蓝牙模块端到端：先生成测试用例（G/R/V 三阶段共 20 条断言），再跑 FMEA |
+
+#### 三处关键踩坑（首跑暴露，均已修复）
+
+1. **`_parse_tool_call` 只认「括号平衡」的 JSON → 全链路动作静默失效。**
+   实测 LLM 产出 `<tool_call>{"name":"查询历史FMEA","args":{"query":"…"}</arg_value></tool_call>`
+   —— ① `args` **缺一个闭括号**；② 结束标记臆造为 `</arg_value>`。
+   原实现 `json.loads` 失败即返回 None，动作从未执行，**DFMEA 首跑产出 0 行**。
+   修复：`chat._salvage_tool_json` —— 剥尾部伪标签 → 栈扫描（跳过字符串内/转义括号）
+   → **补齐缺失闭括号**。
+2. **动作名精确匹配 → LLM 漏空格即被判「未声明」。**
+   注册名「查询历史 FMEA」vs LLM 写的「查询历史FMEA」。
+   修复：`actions._match_action` 先精确、再**去空白+小写归一化**（唯一匹配才算）。
+3. **ask 边方向判反 + 生成 prompt 未解释关系语义。**
+   `_ask_sources` 原只认 `to == node`，与设计图（提问方 → 被问方）相反；
+   且生成 prompt 只给了 6 类关系的名字、没给语义，LLM 一律用 `supply`。
+   修复：`_ask_sources` 改为认「边的另一端」（与方向、拓扑位置解耦）；
+   `generate_from_request` 的 prompt 补 6 类关系的**语义说明**。
+4. **只解析第一个 `<tool_call>` → 并行调用被静默丢弃。**
+   实测 DFMEA 工程师**一次输出 5 个** `<tool_call>`（并行查 5 组 AP），
+   原实现 `re.search` 只取第一个，其余被丢弃；模型以为「还在等其余返回」，
+   反复重试同类调用直到轮数耗尽，产出停在裸 tool_call。
+   修复：`_parse_tool_calls`（`finditer` 解析**全部**），循环内一轮执行全部
+   并行调用、结果合并回灌。
+5. **`_actions_block` 用统一示例 → 参数名被模型学错。**
+   提示里的示例固定写 `{"query": "..."}`，于是 LLM 把 `ask_expert` 的
+   `question` 也写成 `query`，入参校验失败、动作被反复拒绝。
+   修复：`_actions_block` **逐个列出该动作的真实参数名**（取自 input_schema，
+   必填加 `*`）；`guard_action` 另加 `_ARG_ALIASES` 别名兜底（只补不覆盖）。
+6. **动作粒度太粗 → 大批量写库做不完。**
+   一张 DFMEA 表十几行，逐行调用 + 逐维度查表，8 轮远不够。
+   修复（**补零件，不是干预生成**）：动作支持批量 —— `fmea_ap_table` 不传参
+   一次取回 S/O/D 三张准则、传 `items` 批量查 AP；`fmea_write_row` 支持
+   `rows` 数组一次写多行（逐行的来源闭集校验与 AP 以表为准**不放松**）。
+
+> 另：`MAX_ACTION_ROUNDS` 由 3 提升到 **8**；动作名匹配加**归一化**（去空白+小写，
+> 唯一匹配才算）—— 注册名「查询历史 FMEA」而 LLM 写「查询历史FMEA」时不再误判；
+> 无新调用的轮次直接跳出，避免空转。
+
+**状态**：**已实现（2026-09-11）**。需求编号 R-17；指标 test-metrics §T-K。
 
 ---
 *维护说明：本文档由 2026-09-09 代码库现状 + doc/ 历史设计（顶层架构、pipeline、DESIGN/DESIGN_MVP、编排示例）整理生成；所有标注「未实现」项以 §9 为准。*

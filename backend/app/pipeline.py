@@ -86,6 +86,39 @@ def get_pipeline(conn, pipeline_id) -> dict | None:
     return d
 
 
+# ---------------- 运行记录 / 交接物（读取侧） ----------------
+# 此前 pipeline_runs / pipeline_run_handoffs **只写不读** —— 运行完用户看不到
+# 任何产出。对话页要展示「生成 → 运行 → 结果」，故补这两个读取函数。
+
+def list_runs(conn, pipeline_id) -> list[dict]:
+    """某 pipeline 的运行记录（倒序）。"""
+    return [dict(r) for r in conn.execute(
+        "SELECT id, pipeline_id, job_id, status, current_node_id, created_at"
+        " FROM pipeline_runs WHERE pipeline_id=? ORDER BY id DESC",
+        (pipeline_id,)).fetchall()]
+
+
+def list_handoffs(conn, run_id) -> list[dict]:
+    """某次运行的交接物（按节点顺序），解析 kind / 内容 / 精炼元数据。"""
+    rows = conn.execute(
+        "SELECT h.id, h.node_id, h.handoff, h.created_at,"
+        " n.node_key, n.step_name FROM pipeline_run_handoffs h"
+        " LEFT JOIN pipeline_nodes n ON n.id = h.node_id"
+        " WHERE h.run_id=? ORDER BY h.id", (run_id,)).fetchall()
+    out = []
+    for r in rows:
+        u = cm.unpack_handoff(r["handoff"]) if r["handoff"] else {}
+        out.append({
+            "id": r["id"], "node_id": r["node_id"],
+            "node_key": r["node_key"], "step_name": r["step_name"],
+            "kind": u.get("kind", cm.KIND_GENERIC),
+            "content": u.get("content", ""), "chars": u.get("chars", 0),
+            "refined": u.get("refined", False),
+            "raw_chars": u.get("raw_chars", 0),
+        })
+    return out
+
+
 # ---------------- pipeline CRUD ----------------
 
 def create_pipeline(conn, name, description="", tags=None) -> int | None:
@@ -580,13 +613,67 @@ def _run_deterministic(conn, node, inputs, parent_job_id) -> str:
                       ensure_ascii=False)
 
 
-def _run_nominate(conn, node, inputs, relations=None) -> str:
+def _ask_sources(conn, node, relations, nodes) -> list[dict]:
+    """该节点的 ask 上游 ——「可询问的专家数字人」名单（design §15.3 E1）。
+
+    ask 的语义是「**提问方声明它可以问哪个专家**」（design §15.1 图上箭头由
+    DFMEA 工程师指向上游专家），它不参与拓扑排序与数据流向 —— 是反向边。
+
+    实现上**只认「边的另一端」**，与方向、拓扑位置都解耦：无论 LLM 把 ask 画成
+    `工程师 → 专家` 还是 `专家 → 工程师`、画在汇总节点还是计划节点上，语义都成立
+    （自审 2026-09-11：原实现要求另一端必须是拓扑祖先，但实测 LLM 会把 ask 画在
+    上游的计划节点上、而该专家在其下游，导致 ask 边不生效）。
+    边的方向与位置由 LLM 决定，引擎只负责让它**有执行语义**。
+    """
+    node_by_id = {n["id"]: n for n in (nodes or [])}
+    out = []
+    seen = set()
+    for r in (relations or []):
+        if r.get("relation_type") != RELATION_ASK:
+            continue
+        a, b = r.get("from_node_id"), r.get("to_node_id")
+        other = b if a == node["id"] else (a if b == node["id"] else None)
+        if other is None or other in seen:
+            continue
+        src = node_by_id.get(other)
+        if not src or not src.get("persona_id"):
+            continue
+        nm = _persona_name(conn, src["persona_id"])
+        if nm:
+            seen.add(other)
+            out.append({"node_id": src["id"],
+                        "persona_id": src["persona_id"], "name": nm})
+    return out
+
+
+def _is_review_gate(node, relations) -> bool:
+    """该节点是否为复核门（有 review 入边）。"""
+    return any(r.get("relation_type") == RELATION_REVIEW
+               and r.get("to_node_id") == node["id"] for r in (relations or []))
+
+
+def _review_verdict(output: str) -> str:
+    """解析复核结论（确定性，只看输出开头）：PASS / FAIL / UNKNOWN。
+
+    门控必须由**代码**裁决 —— 复核员用自然语言写结论，引擎只认这两个显式标记，
+    含糊其辞一律记为 UNKNOWN（不阻断，但会记事件，便于人工发现）。
+    """
+    head = (output or "")[:400]
+    if "[REVIEW:FAIL]" in head:
+        return "FAIL"
+    if "[REVIEW:PASS]" in head:
+        return "PASS"
+    return "UNKNOWN"
+
+
+def _run_nominate(conn, node, inputs, relations=None, nodes=None) -> str:
     """nominate 节点执行 = 数字人 chat.answer（自带 tool-use loop）。
 
-    inputs 为上游交接物原始文本；按 kind 分组裁剪后注入（context_mgr），
-    数字人只看到自己该看的、且每 kind 在预算内。
+    除注入上游交接物（context_mgr 按 kind 裁剪）外，还注入两类**编排语义**：
+      - **ask 上游名单**（可询问的专家）—— ask 边的执行体权限约束；
+      - **复核门指令** —— 有 review 入边的节点须给出机器可读的 PASS/FAIL 结论。
     """
-    from . import chat
+    from . import chat, fmea
     persona_id = node.get("persona_id")
     step = (node.get("step_name") or node.get("node_key") or "").strip()
     if not persona_id:
@@ -601,6 +688,20 @@ def _run_nominate(conn, node, inputs, relations=None) -> str:
         allow_set = set(allow)
         shaped = [it for it in shaped if it["kind"] in allow_set]
         msg += "\n上游交接物（按类型）：\n" + cm.render_inputs(shaped)
+
+    # ask 边：声明本节点可向哪些上游专家求证（执行期由 ask_expert 裁决）
+    asks = _ask_sources(conn, node, relations or [], nodes or [])
+    fmea.set_allowed_experts([a["name"] for a in asks] if asks else None)
+    if asks:
+        msg += ("\n【可询问的专家】需要部件专业信息时用 ask_expert 向以下专家"
+                "求证（只能问这些）：" + "、".join(a["name"] for a in asks))
+
+    # review 门：要求机器可读结论，引擎据此门控下游
+    if _is_review_gate(node, relations):
+        msg += ("\n【复核门】请逐格核对依据是否可追溯、AP 是否与表一致、"
+                "ai_new 是否已列入待确认清单。结论**必须以 [REVIEW:PASS] 或 "
+                "[REVIEW:FAIL] 开头**；依据不足或来源缺失必须给 FAIL 并列出问题。")
+
     msg += "\n请完成本步骤并产出可传递给下游的交接物。"
     r = chat.answer(conn, persona_id, msg, use_ontology=True, use_rag=True,
                     provider="llm2")
@@ -627,6 +728,9 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
         jobs.finish_job(conn, job_id, ok=False, error="pipeline 无节点")
         return
     run_id = create_run(conn, pipeline_id, job_id)
+    # 运行期上下文：fmea_write_row 借此把 DFMEA 行关联到本次 run
+    from . import fmea
+    fmea.set_run_id(run_id)
     jobs.update_progress(conn, job_id, 0, len(order))
     for i, node in enumerate(order):
         jobs.emit(conn, job_id, "pipeline.node",
@@ -636,7 +740,7 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
         if node["kind"] == KIND_DETERMINISTIC:
             output = _run_deterministic(conn, node, inputs, job_id)
         else:
-            output = _run_nominate(conn, node, inputs, p["relations"])
+            output = _run_nominate(conn, node, inputs, p["relations"], p["nodes"])
         # 上下文管理：标 kind + 超预算由该数字人自缩减后落库（含精炼元数据）
         rr = refine_node_output(conn, node, output, p["relations"])
         store_handoff(conn, run_id, node["id"], rr["kind"], rr["content"],
@@ -647,6 +751,25 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
                    "kind": rr["kind"], "chars": len(rr["content"] or ""),
                    "refined": rr.get("refined", False),
                    "raw_chars": rr.get("raw_chars", 0)})
+
+        # ---- review 门控（design §15.3 E2）----
+        # 复核门未通过 -> 中止下游并标记 blocked；UNKNOWN 放行但记事件（不静默）。
+        if _is_review_gate(node, p["relations"]):
+            verdict = _review_verdict(rr["content"])
+            jobs.emit(conn, job_id, "pipeline.review",
+                      {"node_key": node["node_key"], "verdict": verdict,
+                       "index": i})
+            if verdict == "FAIL":
+                conn.execute("UPDATE pipeline_runs SET status='blocked' WHERE id=?",
+                             (run_id,))
+                conn.commit()
+                fresh = fmea.pending_ai_new(conn, run_id)
+                jobs.finish_job(
+                    conn, job_id, ok=False,
+                    error=(f"复核门「{node['node_key']}」未通过（[REVIEW:FAIL]），"
+                           f"已中止下游；待人工确认 {len(fresh)} 项"))
+                return
+
         jobs.update_progress(conn, job_id, i + 1, len(order))
         conn.execute("UPDATE pipeline_runs SET current_node_id=?, status='running'"
                      " WHERE id=?", (node["id"], run_id))
@@ -685,7 +808,17 @@ def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
         '"relations":[{"from_node_key":"step1","to_node_key":"step2",'
         '"relation_type":"supply"}]}\n\n'
         "要求：node_key 唯一英文小写连字符；persona_id 必须是上面可用数字人的 id；"
-        f"relation_type ∈ {RELATION_TYPES}；关系形成 DAG 不能成环。"
+        "关系形成 DAG 不能成环。\n\n"
+        "**关系类型语义（必须按语义选择，不要一律用 supply）**：\n"
+        "  - design：流程设计师设计编排（把需求/方案交给下游去分析）\n"
+        "  - supply：上游向下游**供给**产物（专家把领域结论给汇总者，数据顺势流动）\n"
+        "  - review：**复核门** —— 被指向的节点是复核人，其结论决定能否继续\n"
+        "  - handoff：通用交接（上游把产物原样交给下游）\n"
+        "  - compose：建数字人工具组装数字人\n"
+        "  - ask：**反向询问** —— 提问方指向上游专家，声明「我可以问它」。"
+        "当某节点需要向其上游专家追问细节（如汇总工程师要向各部件专家核实"
+        "数据）时，必须用 ask 边；ask 不参与数据流与执行顺序。\n"
+        f"relation_type ∈ {RELATION_TYPES}。"
     )
     messages = [{"role": "user", "content": prompt}]
     try:
