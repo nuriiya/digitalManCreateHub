@@ -51,6 +51,7 @@ EXPORT_TABLES: list[tuple[str, list[str], bool]] = [
     ("candidates", [], False),
     ("relations", [], False),
     ("mentions", [], False),
+    ("chunk_types", [], False),
     ("documents", ["embedding"], True),
     ("chunks", ["embedding"], True),
     ("pipelines", [], False),
@@ -65,7 +66,7 @@ EXPORT_TABLES: list[tuple[str, list[str], bool]] = [
 # 导入清空顺序（子表在前，父表在后；TRUNCATE ... CASCADE 一次清完）
 IMPORT_TRUNCATE = (
     "identities", "anchors", "persona_ontology", "persona_actions",
-    "candidates", "relations", "mentions", "documents", "chunks",
+    "candidates", "relations", "mentions", "chunk_types", "documents", "chunks",
     "pipelines", "pipeline_nodes", "pipeline_relations", "pipeline_changes",
     "capability_tasks", "capability_tools", "mcp_servers",
 )
@@ -73,7 +74,7 @@ IMPORT_TRUNCATE = (
 # 导入插入顺序（父表在前，子表在后，满足外键）
 IMPORT_ORDER = [
     "identities", "anchors", "persona_ontology", "persona_actions",
-    "documents", "chunks", "candidates", "relations", "mentions",
+    "chunk_types", "documents", "chunks", "candidates", "relations", "mentions",
     "pipelines", "pipeline_nodes", "pipeline_relations", "pipeline_changes",
     "capability_tasks", "capability_tools", "mcp_servers",
 ]

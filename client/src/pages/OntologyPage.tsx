@@ -12,7 +12,7 @@ import {
   runOrchestrate, getOrchestration, confirmOrchestration, discardOrchestration,
   dismissOrchItem, createIdentity, type EventItem, type OrchSummary, type OrchItem,
 } from '../api'
-import IdentityPanel from './IdentityPanel'
+// 数字人管理面板已迁出到 IdentityWorkbench（design §13）
 import { useToast } from '../Toast'
 
 interface Props {
@@ -681,8 +681,7 @@ function OntologyGraphInner({ refreshKey, focusChunkId, chunks = 0 }: Props) {
 
   return (
     <>
-      <IdentityPanel refreshKey={refreshKey + idVer} chunks={chunks} />
-
+      {/* 数字人管理面板已迁出到独立的「数字人」工作台页（design §13），本页回归纯图谱 + 候选治理 */}
       {orch && orch.total > 0 && (
         <div className="card">
           <h3>

@@ -320,6 +320,14 @@ def _ensure_schema(conn: _Conn) -> None:
     with _schema_lock:
         if not _schema_ready:
             _init_schema(conn)
+            # 预设 chunk 类型词表（design §11）：幂等，只补缺失的 builtin 项，
+            # 不覆盖用户改动。失败不阻断启动 —— 读取端对未知 type 有 unknown
+            # 兜底，词表缺失最多让全部 chunk 落在 unknown。
+            try:
+                from . import chunk_types
+                chunk_types.ensure_seed(conn)
+            except Exception:  # noqa: BLE001 - 启动健壮性优先
+                conn.rollback()
             _schema_ready = True
 
 
@@ -400,6 +408,21 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
 
+-- chunk 内容类型词表（design §11）：用户可自定义；builtin 与 unknown 不可删。
+-- 每个 type 内嵌默认两维度，chunk 落库时由此确定性裁决（LLM 只提名 type）。
+CREATE TABLE IF NOT EXISTS chunk_types (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    description TEXT,
+    default_confidence TEXT NOT NULL DEFAULT 'medium',
+    default_mandatory SMALLINT NOT NULL DEFAULT 0,
+    priority INT NOT NULL DEFAULT 0,
+    builtin BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at DOUBLE PRECISION NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chunks (
     id BIGSERIAL PRIMARY KEY,
     doc_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -409,9 +432,17 @@ CREATE TABLE IF NOT EXISTS chunks (
     tags TEXT[],
     embedding vector,
     content_hash TEXT NOT NULL,
-    source_meta JSONB NOT NULL DEFAULT '{}'::jsonb
+    source_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+    type TEXT,
+    type_confidence TEXT,
+    type_mandatory SMALLINT,
+    type_source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
+-- 注意：idx_chunks_type 的创建**必须**放在 _init_schema 的迁移块里（ALTER
+-- 补列之后）。写在这里会让老库直接崩：chunks 表已存在 -> CREATE TABLE IF
+-- NOT EXISTS 跳过 -> 这条 CREATE INDEX 引用尚未存在的 type 列报
+-- `column "type" does not exist`（2026-09-11 实测踩到）。
 
 -- ontology evidence chain (FK-bound to chunks + candidates)
 CREATE TABLE IF NOT EXISTS candidates (
@@ -852,6 +883,15 @@ def _init_schema(conn: _Conn) -> None:
         cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS"
                     " source_path TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS build JSONB")
+        # chunks 内容类型（2026-09-11, design §11）：type 是词表项，另落两个
+        # **正交**维度（置信度 / 强制等级）与来源标记。老库补列；chunk_types
+        # 表本体由 _SCHEMA_SQL 的 CREATE TABLE IF NOT EXISTS 建好。
+        # 历史行三列均为 NULL -> 读取端视为「未分类」，不参与 mandatory 必选注入。
+        cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type TEXT")
+        cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_confidence TEXT")
+        cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_mandatory SMALLINT")
+        cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_source TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_type ON chunks(type)")
     conn.commit()
 
 

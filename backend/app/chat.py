@@ -76,6 +76,9 @@ DEFAULT_OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "qwen2.5:7b-cpu")
 # 相互独立、可叠加；检索 0 LLM（仅 embedding 余弦），失败时优雅降级为
 # 「资料不可用」（不注入、不中断对话）。
 RAG_TOP_K = 6
+#: mandatory=2（强制等级）的知识单独注入的上限 —— **不受 RAG_TOP_K 截断影响**
+#: （design §11.5：强制约束是 chunk 的数据属性，不是「参考资料」里的一员）
+RAG_RULES_MAX = 4
 RAG_SNIPPET_MAX = 500          # 单条片段截断字符数（保留证据语义）
 
 # literal-match tokenizers for the 0-LLM relevance scorer
@@ -217,6 +220,9 @@ def _system_prompt(ctx: dict, use_ontology: bool = True) -> str:
     ontology = ctx["ontology"]
     relations = ctx["relations"]
     rag = ctx.get("rag") or []
+    # design §11.5：mandatory=2 的知识（强制等级）单独成段注入 —— 它不受
+    # top-K 截断，且必须在 prompt 里被声明为「必须遵守」，与普通参考资料区分。
+    rag_rules = ctx.get("rag_rules") or []
     if use_ontology and (anchors or ontology):
         lines.append("")
         lines.append("你的本体约束（你只掌握、也只能依据以下本体知识回答）：")
@@ -238,6 +244,13 @@ def _system_prompt(ctx: dict, use_ontology: bool = True) -> str:
                     continue
                 seen.add(key)
                 lines.append(_fmt_relation(r))
+    if rag_rules:
+        lines.append("")
+        lines.append("【强制约束 · 必须遵守（知识库高优先级条目）】")
+        for t in rag_rules:
+            t = (t or "").strip()
+            if t:
+                lines.append(t)
     if rag:
         lines.append("")
         lines.append("【参考资料 · 原文片段】")
@@ -248,23 +261,28 @@ def _system_prompt(ctx: dict, use_ontology: bool = True) -> str:
     lines.append("")
     lines.append("回答规则（铁律）：")
     has_ont = use_ontology and bool(anchors or ontology)
+    n = 1
+    if rag_rules:
+        lines.append(f"{n}. 【强制约束】是本平台的硬性要求，必须无条件遵守；"
+                     "与本体或参考资料冲突时，以【强制约束】为准。")
+        n += 1
     if has_ont and rag:
-        lines.append("1. 优先依据【本体约束】回答，回答要具体、尽量可追溯到本体；"
+        lines.append(f"{n}. 优先依据【本体约束】回答，回答要具体、尽量可追溯到本体；"
                      "本体未覆盖但【参考资料】有的，可依据资料补充并说明依据。")
-        lines.append("2. 本体与参考资料都没有相关内容时，明确说「我不知道」或"
+        lines.append(f"{n + 1}. 本体与参考资料都没有相关内容时，明确说「我不知道」或"
                      "「我的知识里没有这方面内容」，绝不编造。")
     elif has_ont:
-        lines.append("1. 只依据上述本体约束回答，回答要具体、尽量可追溯到你的本体。")
-        lines.append("2. 如果问题超出你的本体知识，明确说「我不知道」或「我的本体里没有"
-                     "这方面内容」，绝不编造。")
+        lines.append(f"{n}. 只依据上述本体约束回答，回答要具体、尽量可追溯到你的本体。")
+        lines.append(f"{n + 1}. 如果问题超出你的本体知识，明确说「我不知道」或"
+                     "「我的本体里没有这方面内容」，绝不编造。")
     elif rag:
-        lines.append("1. 只依据上述参考资料回答，回答要具体、可追溯到原文。")
-        lines.append("2. 如果问题超出参考资料范围，明确说「我不知道」或「资料里没有"
-                     "这方面内容」，绝不编造。")
+        lines.append(f"{n}. 只依据上述参考资料回答，回答要具体、可追溯到原文。")
+        lines.append(f"{n + 1}. 如果问题超出参考资料范围，明确说「我不知道」或"
+                     "「资料里没有这方面内容」，绝不编造。")
     else:
-        lines.append("1. 诚实回答，不编造事实、不虚构来源。")
-        lines.append("2. 如果不知道或不确认，明确说「我不确定」而不是猜测。")
-    lines.append("3. 用中文回答。")
+        lines.append(f"{n}. 诚实回答，不编造事实、不虚构来源。")
+        lines.append(f"{n + 1}. 如果不知道或不确认，明确说「我不确定」而不是猜测。")
+    lines.append(f"{n + 2}. 用中文回答。")
 
     prompt_text = _wrap_user_prompt_tail(ident.get("prompt") or "")
     if prompt_text:
@@ -515,30 +533,50 @@ def _dispatch(provider: str, messages: list[dict], ollama_model: str | None,
 
 # ---------------- optional RAG reference injection (「使用 RAG」开关) ----------------
 
-def _rag_snippets(conn, message: str, top_k: int = RAG_TOP_K) -> dict:
-    """Retrieve top-K corpus chunks for the message (0 LLM, embedding cosine)
-    and cut them into injectable reference snippets.
+def _snippet_text(h: dict) -> str:
+    """One search hit -> injectable snippet (原文优先，退化到摘要；截断到上限)。"""
+    base = ((h.get("text") or "").strip()
+            or (h.get("summary") or "").strip())
+    if not base:
+        return ""
+    base = " ".join(base.split())
+    if len(base) > RAG_SNIPPET_MAX:
+        base = base[:RAG_SNIPPET_MAX].rstrip() + "…"
+    return base
 
-    Returns {"used", "hits", "error", "texts"}. Any failure (embedding backend
-    down / empty corpus / bad store) degrades gracefully: the persona answers
-    without references and the context reports why (iron law: chat never
+
+def _rag_snippets(conn, message: str, top_k: int = RAG_TOP_K) -> dict:
+    """Retrieve corpus chunks for the message (0 LLM, embedding cosine).
+
+    design §11.5 起分两路注入：
+      - `rules`：`mandatory=2`（强制等级）的命中 —— **必选注入**，不参与
+        top-K 竞争，在 system prompt 里单独成【强制约束】段；
+      - `texts`：其余命中走原 top-K，进【参考资料】段（已剔除上面的强制项，
+        避免同一段内容重复注入）。
+
+    Returns {"used", "hits", "error", "texts", "rules"}. Any failure (embedding
+    backend down / empty corpus / bad store) degrades gracefully: the persona
+    answers without references and the context reports why (iron law: chat never
     silently fabricates a retrieval)."""
     try:
         from . import ingest
+        rule_hits = ingest.search(conn, message, top_k=RAG_RULES_MAX,
+                                  mandatory=2)
         hits = ingest.search(conn, message, top_k=top_k)
     except Exception as e:  # embedding unconfigured / corpus empty / store error
-        return {"used": True, "hits": 0, "error": str(e)[:160], "texts": []}
+        return {"used": True, "hits": 0, "error": str(e)[:160],
+                "texts": [], "rules": []}
+    rule_ids = {h.get("chunk_id") for h in rule_hits}
+    rules = [s for s in (_snippet_text(h) for h in rule_hits) if s]
     texts: list[str] = []
     for h in hits:
-        base = ((h.get("text") or "").strip()
-                or (h.get("summary") or "").strip())
-        if not base:
-            continue
-        base = " ".join(base.split())
-        if len(base) > RAG_SNIPPET_MAX:
-            base = base[:RAG_SNIPPET_MAX].rstrip() + "…"
-        texts.append(base)
-    return {"used": True, "hits": len(hits), "error": None, "texts": texts}
+        if h.get("chunk_id") in rule_ids:
+            continue  # 已进【强制约束】段，不重复
+        s = _snippet_text(h)
+        if s:
+            texts.append(s)
+    return {"used": True, "hits": len(hits) + len(rule_hits), "error": None,
+            "texts": texts, "rules": rules}
 
 
 # ---------------- dynamic retrieval window (0 LLM) ----------------
@@ -930,14 +968,18 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
             "budget_total": budget_tokens, "budget_used": 0, "truncated": False,
         }
 
-    # 「使用 RAG」开关：可选注入检索到的原文片段（独立于本体约束）
-    rag_info = {"used": False, "hits": 0, "error": None}
+    # 「使用 RAG」开关：可选注入检索到的原文片段（独立于本体约束）。
+    # design §11.5：mandatory=2 的强制知识走 rag_rules，单独成【强制约束】段，
+    # 不受 top-K 截断。
+    rag_info = {"used": False, "hits": 0, "error": None, "rules": 0}
     rag_texts: list[str] = []
+    rag_rules: list[str] = []
     if use_rag:
         got = _rag_snippets(conn, message)
         rag_texts = got["texts"]
+        rag_rules = got.get("rules") or []
         rag_info = {"used": got["used"], "hits": got["hits"],
-                    "error": got["error"]}
+                    "error": got["error"], "rules": len(rag_rules)}
 
     ctx = {
         "identity": ident,
@@ -945,6 +987,7 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
         "ontology": injected_ont,
         "relations": injected_rel,
         "rag": rag_texts,
+        "rag_rules": rag_rules,
     }
     system = _system_prompt(ctx, use_ontology=use_ontology)
     # 附上该数字人已批准的动作清单（六元组 actions）
@@ -1156,13 +1199,15 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
             "budget_total": budget_tokens, "budget_used": 0, "truncated": False,
         }
 
-    rag_info = {"used": False, "hits": 0, "error": None}
+    rag_info = {"used": False, "hits": 0, "error": None, "rules": 0}
     rag_texts: list[str] = []
+    rag_rules: list[str] = []
     if use_rag:
         got = _rag_snippets(conn, message)
         rag_texts = got["texts"]
+        rag_rules = got.get("rules") or []
         rag_info = {"used": got["used"], "hits": got["hits"],
-                    "error": got["error"]}
+                    "error": got["error"], "rules": len(rag_rules)}
 
     ctx = {
         "identity": ident,
@@ -1170,6 +1215,7 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
         "ontology": injected_ont,
         "relations": injected_rel,
         "rag": rag_texts,
+        "rag_rules": rag_rules,
     }
     system = _system_prompt(ctx, use_ontology=use_ontology)
     from . import actions as actions_mod

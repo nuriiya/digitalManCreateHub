@@ -281,19 +281,12 @@ def approve_server(conn, mcp_id: int, approve: bool) -> tuple[bool, str]:
 
 
 def _extract_json(text: str):
-    """从 LLM 输出提取 JSON 对象（容错 markdown 代码块 + 前后杂文）。"""
-    text = (text or "").strip()
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if m:
-        text = m.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        return json.loads(text[start:end + 1])
-    except Exception:  # noqa: BLE001
-        return None
+    """从 LLM 输出提取 JSON —— 薄封装 `protocol.parse_json`（design §10.4 统一入口）。
+
+    注：这是被收敛的第 5 套实现（原以为只有 4 套）。旧实现只认 `{..}` 且围栏
+    正则与其它几套不一致。"""
+    from . import protocol
+    return protocol.parse_json(text)
 
 
 def generate_from_request(conn, request: str, provider: str = "llm") -> dict:

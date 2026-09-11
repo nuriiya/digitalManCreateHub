@@ -15,9 +15,10 @@ import LoginPage from './pages/LoginPage'
 import McpPage from './pages/McpPage'
 import PipelinePage from './pages/PipelinePage'
 import IngestDialog from './components/IngestDialog'
+import IdentityWorkbench from './pages/IdentityWorkbench'
 import type { EventItem } from './api'
 
-type Tab = 'ingest' | 'rag' | 'ontology' | 'conversation' | 'chat' | 'settings' | 'mcp' | 'pipeline'
+type Tab = 'identity' | 'rag' | 'ontology' | 'conversation' | 'chat' | 'settings' | 'mcp' | 'pipeline'
 
 const REFRESH_ON: string[] = [
   'job.finished', 'job.failed', 'job.paused', 'job.resumed', 'job.deleted',
@@ -184,7 +185,7 @@ function RunBlockView({ block, showLlm }: { block: RunBlock; showLlm: boolean })
 }
 
 function Console({ onLogout }: { onLogout: () => void }) {
-  const [tab, setTab] = useState<Tab>('ingest')
+  const [tab, setTab] = useState<Tab>('identity')
   const [refreshKey, setRefreshKey] = useState(0)
   const [jobs, setJobs] = useState<any[]>([])
   const [stats, setStats] = useState<any>({})
@@ -193,6 +194,8 @@ function Console({ onLogout }: { onLogout: () => void }) {
   const [jobEvents, setJobEvents] = useState<EventItem[]>([])
   const [showLlm, setShowLlm] = useState(false)
   const [showIngestDialog, setShowIngestDialog] = useState(false)
+  // 任务与事件抽屉（design §13.2）：全局可开 —— 原「数字人创建台」整页内容收进这里
+  const [jobDrawer, setJobDrawer] = useState(false)
   const { toast } = useToast()
 
   const bump = () => setRefreshKey((k) => k + 1)
@@ -324,9 +327,11 @@ const doRepair = async () => {
     </div>
   )
 
+  const runningCount = jobs.filter((j) => j.status === 'running').length
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'conversation', label: '对话' },
-    { id: 'ingest', label: '数字人创建台' },
+    { id: 'identity', label: '数字人' },
     { id: 'rag', label: 'RAG 预览' },
     { id: 'ontology', label: '本体图谱' },
     { id: 'pipeline', label: '编排' },
@@ -346,6 +351,10 @@ const doRepair = async () => {
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>{t.label}</button>
           ))}
         </nav>
+        <button className="btn ghost small" onClick={() => setJobDrawer(true)}
+          title="任务与事件：数据流水线 / 任务进度 / 事件流（原「数字人创建台」内容）">
+          任务{runningCount > 0 ? ` · ${runningCount}` : ''}
+        </button>
         <button className="btn ghost small logout" onClick={onLogout} title="退出登录">退出</button>
       </div>
 
@@ -357,75 +366,90 @@ const doRepair = async () => {
             onDone={() => refreshJobs()}
           />
         )}
-        {tab === 'ingest' && (
-          <>
-            <div className="card">
-              <h3>数字人创建台</h3>
-              <div className="desc">
-                一键流水线自动串起三步：<b>① 添加资料</b>（加载→分段→摘要→嵌入）→ <b>② 本体提取</b>（提名→三关校验）→ <b>③ 装配</b>（装配到数字人本体段）。下方任务栏可查看三步各自进度。
+        {tab === 'identity' && (
+          <IdentityWorkbench refreshKey={refreshKey} chunks={stats.chunks ?? 0}
+            onOpenGraph={() => setTab('ontology')} />
+        )}
+
+        {jobDrawer && (
+          <div className="drawer-overlay" onClick={() => setJobDrawer(false)}>
+            <aside className="drawer" onClick={(e) => e.stopPropagation()}>
+              <div className="drawer-head">
+                <b>任务与事件</b>
+                <span className="note">数据流水线 · 任务进度 · 事件流</span>
+                <button className="btn ghost small" style={{ marginLeft: 'auto' }}
+                  onClick={() => setJobDrawer(false)}>关闭</button>
               </div>
-              <div className="btnrow">
-                <button className="btn green" onClick={doPipeline}
-                        disabled={pipelineBusy}
-                        title={pipelineBusy ? '已有流水线/入库/提取/装配任务进行中' : ''}>
-                  一键创建数字人（添加资料 → 本体提取 → 装配）
-                </button>
-                <button className="btn ghost" onClick={refreshJobs}>刷新</button>
-              </div>
-              <details style={{ marginTop: 10 }}>
-                <summary className="note">高级：分步手动触发</summary>
-                <div className="btnrow" style={{ marginTop: 8 }}>
-                  <button className="btn ghost" onClick={() => setShowIngestDialog(true)}
-                          disabled={ingestBusy}
-                          title={ingestBusy ? '入库/修复任务进行中' : ''}>① 添加资料</button>
-                  <button className="btn ghost" onClick={doOntology}
-                          disabled={!stats.chunks || ontologyBusy}
-                          title={ontologyBusy ? '本体提取任务进行中' : ''}>② 本体提取（提名+校验）</button>
-                  <button className="btn ghost" onClick={doRepair} disabled={ingestBusy}
-                          title="重跑之前因网络波动退化为规则兜底的摘要/标签">③ 修复兜底摘要</button>
-                </div>
-              </details>
-            </div>
-            <div className="card">
-              <h3>任务进度（点击行展开详情，含发给大模型的内容）</h3>
-              {jobs.filter((j) => j.parent_id == null).map((j) => (
-                <div key={j.id}>
-                  {renderJobRow(j, false)}
-                  {jobs.filter((s) => s.parent_id === j.id).map((sub) => renderJobRow(sub, true))}
-                </div>
-              ))}
-              {!jobs.length && <div className="note">暂无任务</div>}
-            </div>
-            <div className="card">
-              <h3>
-                事件流（断线按 seq 增量补齐 · 一次运行一个块）
-                <label className="llmtoggle">
-                  <input type="checkbox" checked={showLlm} onChange={(e) => setShowLlm(e.target.checked)} />
-                  显示 LLM 调用（任务详情里始终可见）
-                </label>
-              </h3>
-              <div className="evstream">
-                {grouped.runs
-                  .sort((a, b) => b.startSeq - a.startSeq)
-                  .map((b) => (
-                    <RunBlockView key={`${b.jobId}-${b.startSeq}`} block={b} showLlm={showLlm} />
-                  ))}
-                {grouped.system.length > 0 && (
-                  <details className="evrun" open>
-                    <summary className="evrun-head">
-                      <span className="evrun-title">系统事件</span>
-                      <span className="evrun-time">与任务无关</span>
-                      <span className="evrun-count">{grouped.system.length} 条</span>
-                    </summary>
-                    <div className="log">
-                      {[...grouped.system].reverse().map((e) => <EventRow key={e.seq} e={e} />)}
+              <div className="drawer-body">
+                <div className="card">
+                  <h3>数据流水线</h3>
+                  <div className="desc">
+                    一键流水线：<b>① 添加资料</b>（加载→分段→摘要→嵌入）→ <b>② 本体提取</b>（提名→三关校验）→ <b>③ 装配</b>（装配到数字人本体段）。
+                  </div>
+                  <div className="btnrow">
+                    <button className="btn green" onClick={doPipeline}
+                            disabled={pipelineBusy}
+                            title={pipelineBusy ? '已有流水线/入库/提取/装配任务进行中' : ''}>
+                      一键创建数字人（添加资料 → 本体提取 → 装配）
+                    </button>
+                    <button className="btn ghost" onClick={refreshJobs}>刷新</button>
+                  </div>
+                  <details style={{ marginTop: 10 }}>
+                    <summary className="note">高级：分步手动触发</summary>
+                    <div className="btnrow" style={{ marginTop: 8 }}>
+                      <button className="btn ghost" onClick={() => setShowIngestDialog(true)}
+                              disabled={ingestBusy}
+                              title={ingestBusy ? '入库/修复任务进行中' : ''}>① 添加资料</button>
+                      <button className="btn ghost" onClick={doOntology}
+                              disabled={!stats.chunks || ontologyBusy}
+                              title={ontologyBusy ? '本体提取任务进行中' : ''}>② 本体提取（提名+校验）</button>
+                      <button className="btn ghost" onClick={doRepair} disabled={ingestBusy}
+                              title="重跑之前因网络波动退化为规则兜底的摘要/标签">③ 修复兜底摘要</button>
                     </div>
                   </details>
-                )}
-                {!events.length && <div className="ev">（等待事件…）</div>}
+                </div>
+                <div className="card">
+                  <h3>任务进度（点击行展开详情，含发给大模型的内容）</h3>
+                  {jobs.filter((j) => j.parent_id == null).map((j) => (
+                    <div key={j.id}>
+                      {renderJobRow(j, false)}
+                      {jobs.filter((s) => s.parent_id === j.id).map((sub) => renderJobRow(sub, true))}
+                    </div>
+                  ))}
+                  {!jobs.length && <div className="note">暂无任务</div>}
+                </div>
+                <div className="card">
+                  <h3>
+                    事件流（断线按 seq 增量补齐 · 一次运行一个块）
+                    <label className="llmtoggle">
+                      <input type="checkbox" checked={showLlm} onChange={(e) => setShowLlm(e.target.checked)} />
+                      显示 LLM 调用
+                    </label>
+                  </h3>
+                  <div className="evstream">
+                    {grouped.runs
+                      .sort((a, b) => b.startSeq - a.startSeq)
+                      .map((b) => (
+                        <RunBlockView key={`${b.jobId}-${b.startSeq}`} block={b} showLlm={showLlm} />
+                      ))}
+                    {grouped.system.length > 0 && (
+                      <details className="evrun" open>
+                        <summary className="evrun-head">
+                          <span className="evrun-title">系统事件</span>
+                          <span className="evrun-time">与任务无关</span>
+                          <span className="evrun-count">{grouped.system.length} 条</span>
+                        </summary>
+                        <div className="log">
+                          {[...grouped.system].reverse().map((e) => <EventRow key={e.seq} e={e} />)}
+                        </div>
+                      </details>
+                    )}
+                    {!events.length && <div className="ev">（等待事件…）</div>}
+                  </div>
+                </div>
               </div>
-            </div>
-          </>
+            </aside>
+          </div>
         )}
         {tab === 'rag' && <RagPage refreshKey={refreshKey} events={events} onOpenChunk={(id) => { setFocusChunk(id); setTab('ontology') }} />}
         {tab === 'ontology' && <OntologyPage refreshKey={refreshKey} events={events} focusChunkId={focusChunk} chunks={stats.chunks ?? 0} />}

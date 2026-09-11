@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research, chunk_types
 
 
 def _sha256(text: str) -> str:
@@ -715,8 +715,12 @@ def rag_documents():
 
 
 @app.get("/api/rag/chunks")
-def rag_chunks(page: int = 1, page_size: int = 20, doc_id: int | None = None):
-    return ingest.list_chunks(db.get_conn(), page, page_size, doc_id)
+def rag_chunks(page: int = 1, page_size: int = 20, doc_id: int | None = None,
+               type: str | None = None, confidence: str | None = None,
+               mandatory: int | None = None):
+    # design §11.6：三维过滤（type / 置信度 / 强制等级）
+    return ingest.list_chunks(db.get_conn(), page, page_size, doc_id,
+                              type, confidence, mandatory)
 
 
 @app.get("/api/rag/chunks/{chunk_id}")
@@ -758,11 +762,99 @@ class SearchQuery(BaseModel):
     query: str
     top_k: int = 5
     tag: str | None = None
+    # design §11.5 三维过滤：type 精确匹配；mandatory 精确匹配（2=强制）；
+    # confidence 是「至少这么可信」（high 只匹配 high，medium 匹配 high+medium）。
+    type: str | None = None
+    confidence: str | None = None
+    mandatory: int | None = None
 
 
 @app.post("/api/rag/search")
 def rag_search(q: SearchQuery):
-    return {"results": ingest.search(db.get_conn(), q.query, q.top_k, q.tag)}
+    return {"results": ingest.search(db.get_conn(), q.query, q.top_k, q.tag,
+                                     q.type, q.confidence, q.mandatory)}
+
+
+# ---------------- chunk 内容类型词表（design §11.2 / §11.7） ----------------
+
+class ChunkTypeBody(BaseModel):
+    code: str
+    label: str
+    description: str = ""
+    default_confidence: str = "medium"
+    default_mandatory: int = 0
+    priority: int = 10
+
+
+class ChunkTypePatch(BaseModel):
+    label: str | None = None
+    description: str | None = None
+    default_confidence: str | None = None
+    default_mandatory: int | None = None
+    priority: int | None = None
+    status: str | None = None
+
+
+class ChunkTypeSet(BaseModel):
+    type: str
+
+
+@app.get("/api/rag/types")
+def rag_types(active_only: bool = False):
+    return {"types": chunk_types.list_types(db.get_conn(), active_only)}
+
+
+@app.post("/api/rag/types")
+def rag_type_create(body: ChunkTypeBody):
+    try:
+        t = chunk_types.create_type(
+            db.get_conn(), body.code, body.label, body.description,
+            body.default_confidence, body.default_mandatory, body.priority)
+    except chunk_types.TypeError_ as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "type": t}
+
+
+@app.put("/api/rag/types/{type_id}")
+def rag_type_update(type_id: int, body: ChunkTypePatch):
+    try:
+        t = chunk_types.update_type(db.get_conn(), type_id,
+                                    body.model_dump(exclude_none=True))
+    except chunk_types.TypeError_ as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "type": t}
+
+
+@app.delete("/api/rag/types/{type_id}")
+def rag_type_delete(type_id: int):
+    """删除自定义 type。builtin / unknown 不可删；被 chunk 引用不可删。"""
+    try:
+        chunk_types.delete_type(db.get_conn(), type_id)
+    except chunk_types.TypeError_ as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "id": type_id}
+
+
+@app.post("/api/rag/chunks/{chunk_id}/type")
+def rag_chunk_set_type(chunk_id: int, body: ChunkTypeSet):
+    """**用户终审**：改单个 chunk 的 type；两维度自动重取词表默认值。
+
+    type_source 置为 'user'，与 LLM 提名（'llm'）/ 规则兜底（'rule'）区分。"""
+    conn = db.get_conn()
+    tmap = chunk_types.type_map(conn)
+    if body.type not in tmap:
+        return JSONResponse({"error": f"未知类型：{body.type}"}, status_code=400)
+    row = conn.execute("SELECT id FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "chunk not found"}, status_code=404)
+    tinfo = chunk_types.resolve(body.type, tmap)
+    conn.execute(
+        "UPDATE chunks SET type=?, type_confidence=?, type_mandatory=?,"
+        " type_source=? WHERE id=?",
+        (tinfo["type"], tinfo["type_confidence"], tinfo["type_mandatory"],
+         chunk_types.SOURCE_USER, chunk_id))
+    conn.commit()
+    return {"ok": True, "id": chunk_id, **tinfo, "type_source": "user"}
 
 
 # ---------------- ontology graph & approval ----------------
@@ -1773,22 +1865,12 @@ def _design_changes_via_llm(pipeline_dict: dict, user_message: str) -> list:
                           {"role": "user", "content": user}], temperature=0.0)
     except Exception:
         return []
-    text = (reply or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.strip()
-    try:
-        data = json.loads(text)
-    except Exception:
-        s, e = text.find("["), text.rfind("]")
-        if s == -1 or e == -1:
-            return []
-        try:
-            data = json.loads(text[s:e + 1])
-        except Exception:
-            return []
+    # design §10.4：JSON 抠取统一走协议层（原先此处手写「剥围栏 + 方括号截取」，
+    # 与其他三套实现的容错行为都不一致）。
+    from . import protocol
+    data = protocol.parse_json(reply)
+    if data is None:
+        return []
     if isinstance(data, dict):
         data = data.get("changes", data.get("modifications", []))
     if not isinstance(data, list):
@@ -1843,22 +1925,9 @@ def _design_pipeline_via_llm(name: str, user_desc: str, hint_tags: list[str],
         )
     except Exception:
         return None
-    text = (reply or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.strip()
-    try:
-        data = json.loads(text)
-    except Exception:
-        s, e = text.find("{"), text.rfind("}")
-        if s == -1 or e == -1:
-            return None
-        try:
-            data = json.loads(text[s:e + 1])
-        except Exception:
-            return None
+    # design §10.4：JSON 抠取统一走协议层（原先此处手写「剥围栏 + 花括号截取」）
+    from . import protocol
+    data = protocol.parse_json(reply)
     if not isinstance(data, dict):
         return None
     return data

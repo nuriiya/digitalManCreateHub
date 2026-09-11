@@ -559,19 +559,13 @@ def _notify(fields: dict) -> None:
 
 
 def extract_json(text: str) -> dict | list | None:
-    """Tolerant JSON extraction from LLM output."""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:
-        m = re.search(r'\{.*\}|\[.*\]', text, re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
-    return None
+    """容错 JSON 抠取 —— 薄封装 `protocol.parse_json`。
+
+    design §10.4：原本全项目有四套互不相同的 JSON 抠取实现，现已收敛到协议层
+    唯一入口；保留本函数名以免破坏既有调用方（行为：直接解析 → 剥 ``` 围栏 →
+    贪婪匹配首个 {..}/[..]，全失败返回 None）。"""
+    from . import protocol
+    return protocol.parse_json(text)
 
 
 # ---------------- rule fallback (no LLM) ----------------
@@ -599,27 +593,50 @@ def rule_tags(text: str) -> list[str]:
     return tags or ["通用"]
 
 
-def summarize_chunk(text: str) -> dict:
-    """summary + tags for one chunk. Flash if configured, rule fallback.
+def summarize_chunk(text: str, type_catalog: str | None = None) -> dict:
+    """summary + tags + type **提名** for one chunk (LLM, else rule fallback).
+
+    type 语义（design §11.4，铁律 L1 提名-裁决分离）：
+      - 这里**只提名 type**（一个词表 code），**不判置信度/强制等级** —— 两个
+        维度由调用方 `chunk_types.resolve()` 按词表默认值确定性裁决；
+      - 提名的 type 可能是词表外的值甚至 None，**由调用方回落 `unknown`**，
+        本函数不做闭集校验（保持「LLM 只提名」的边界）；
+      - `type_catalog` 由调用方从 active 词表生成（见
+        `chunk_types.catalog_for_prompt`）；缺省时用内置预设。
 
     Raises LLMError when the LLM is configured but unreachable (network
     blip / auth) - the caller auto-pauses the job instead of silently
     degrading to rule quality. Unusable replies (bad JSON) still fall
     back - the model answered, the answer was just malformed."""
+    from . import chunk_types
     if llm_configured():
         try:
+            catalog = type_catalog
+            if catalog is None:
+                catalog = chunk_types.catalog_for_prompt(
+                    {t["code"]: t for t in chunk_types.BUILTIN_TYPES})
             prompt = (
-                "你是文档摘要助手。总结这段文字的核心要点，并给出2-5个分类标签。\n"
-                '严格按 JSON 输出：{"summary": "...", "tags": ["..."]}\n\n原文：\n' + text)
+                "你是文档摘要助手。针对这段文字输出三件事：\n"
+                "1) summary：核心要点，1-2 句；\n"
+                "2) tags：2-5 个分类标签；\n"
+                "3) type：这段内容的**性质**，只能从下面列出的类型里选一个 code，"
+                "不能自创；都不合适就选 unknown。\n"
+                f"{catalog}\n"
+                '严格按 JSON 输出：'
+                '{"summary": "...", "tags": ["..."], "type": "..."}\n\n原文：\n' + text)
             data = extract_json(chat([{"role": "user", "content": prompt}]))
             if isinstance(data, dict) and data.get("summary"):
                 return {"summary": str(data["summary"]),
-                        "tags": [str(t) for t in data.get("tags", [])][:5]}
+                        "tags": [str(t) for t in data.get("tags", [])][:5],
+                        "type": str(data.get("type") or "").strip().lower(),
+                        "source": "llm"}
         except LLMError:
             raise
         except Exception:
             pass
-    return {"summary": rule_summary(text), "tags": rule_tags(text)}
+    # 降级链：规则兜底（type 走关键词规则，落库时 type_source='rule'）
+    return {"summary": rule_summary(text), "tags": rule_tags(text),
+            "type": chunk_types.rule_type(text), "source": "rule"}
 
 
 def summarize_document(chunk_summaries: list[str]) -> str:

@@ -131,13 +131,26 @@ def ingest_results(conn, query: str, results: list[dict]) -> dict:
             "venue": r.get("venue"),
             "doi": r.get("doi"),
         }
+        # 内容类型（design §11）：调研条目是学术来源，一律按「事实陈述」
+        # 落库（mandatory=0 参考，不参与强制注入）；置信度维度由来源等级
+        # **确定性映射**（不调 LLM），type_source='rule' 便于追溯。
+        #   期刊 / 会议 -> high，预印本 / 学位论文 -> medium，其余 -> low
+        _lvl = r.get("confidence_level") or ""
+        if _lvl in ("期刊", "会议"):
+            tconf = "high"
+        elif _lvl in ("预印本", "学位论文"):
+            tconf = "medium"
+        else:
+            tconf = "low"
         conn.execute(
             "INSERT INTO chunks(doc_id, seq, text, summary, tags, embedding,"
-            " content_hash, source_meta) VALUES(?,?,?,?,?,?,?,?)",
+            " content_hash, source_meta, type, type_confidence,"
+            " type_mandatory, type_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (doc_id, i, text, title,
              [r.get("source") or "", r.get("confidence_level") or ""],
              emb, hashlib.sha1(text.encode()).hexdigest(),
-             json.dumps(source_meta, ensure_ascii=False)))
+             json.dumps(source_meta, ensure_ascii=False),
+             "fact", tconf, 0, "rule"))
         n += 1
     conn.commit()
     return {"document_id": doc_id, "chunks": n}

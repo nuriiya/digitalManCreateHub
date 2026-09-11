@@ -13,6 +13,8 @@ import { useToast } from '../Toast'
 interface Props {
   refreshKey: number
   chunks: number
+  /** 「从图谱种子创建」需要跳到本体图谱页；由 App 层注入（design §13.6） */
+  onOpenGraph?: () => void
 }
 
 // 数字人分类（axis = 本体从哪来，见 doc/顶层架构.md §0）
@@ -22,9 +24,16 @@ const CATEGORY_LABEL: Record<string, string> = {
 }
 const CATEGORY_ORDER = ['general', 'domain_expert']
 
-/** 数字人管理中心：三块（已有 / 备选 / 创造·删除·修改）。已有数字人卡片内嵌
- * 「本体段」与「本体装配」子模块。多数字人并存，各自独立装配与迭代。 */
-export default function IdentityPanel({ refreshKey, chunks }: Props) {
+/** 数字人工作台（design §13）：列表 — 详情（五 Tab）— 创建向导。
+ *
+ * 合并原「数字人创建台」（一键流水线/任务/事件，已移至 App 层全局抽屉）
+ * 与原「数字人管理中心」（原三块平铺）：
+ *   · 左列表：搜索 + 全部 / 已批准 / 待审 筛选，pending 项可就地批准；
+ *   · 右详情：概览 / 知识与本体 / 能力与工具 / 测试与版本 / 复盘；
+ *   · 创建向导：自主提名 / 图谱种子 / 空白模板 三来源合一；
+ *   · 任务与事件由 App 层的全局抽屉承载（不再占用本页）。
+ * 数据加载策略沿用原实现（按 identity.id 缓存的 Record）。 */
+export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: Props) {
   const [idents, setIdents] = useState<Identity[]>([])
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<number | null>(null) // anchor id being edited
@@ -53,6 +62,12 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
   // 可用 MCP 列表（所有已审批 MCP 的工具）—— 供数字人选择面板用
   const [availableMcp, setAvailableMcp] = useState<Awaited<ReturnType<typeof getAvailableMcp>>['mcp']>([])
   const [mcpBinding, setMcpBinding] = useState<Record<string, boolean>>({})  // 正在绑定的工具 key（`serverId:toolName`）
+  // ---- 工作台外壳状态（design §13.3）：列表筛选 + 选中项 + 详情 Tab + 向导步骤 ----
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [detailTab, setDetailTab] = useState('overview')
+  const [filterMode, setFilterMode] = useState('all')   // all | approved | pending
+  const [listQ, setListQ] = useState('')
+  const [wizardStep, setWizardStep] = useState(1)
   const { toast } = useToast()
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
@@ -610,21 +625,31 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
     )
   }
 
-  // 已有数字人卡片渲染（通用数字人 / 执行领域专家两组共用）
-  const renderApprovedCard = (it: Identity) => (
-    <div key={it.id} className={`id-card st-${it.status}`}>
-      <div className="id-head">
-        <b>{it.name}</b>
-        <span className={`status-pill ${it.status}`} style={{ marginLeft: 0 }}>{it.status}</span>
-        <span className="status-pill cat" style={{ marginLeft: 0 }}>{CATEGORY_LABEL[it.category] || '执行领域专家'}</span>
-        {it.reactive && <span className="status-pill running" style={{ marginLeft: 0 }}>反应式</span>}
-        <span className="ops" style={{ marginLeft: 'auto' }}>
-          <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
-          <button className="btn red small" onClick={() => identityDelete(it.id)}>删除</button>
-        </span>
-      </div>
+  // ---------------- 详情区（design §13.4）：头部 + 五个 Tab ----------------
+
+  const renderDetailHeader = (it: Identity) => (
+    <div className="id-head" style={{ marginBottom: 10 }}>
+      <b>{it.name}</b>
+      <span className={`status-pill ${it.status}`} style={{ marginLeft: 0 }}>{it.status}</span>
+      <span className="status-pill cat" style={{ marginLeft: 0 }}>{CATEGORY_LABEL[it.category] || '执行领域专家'}</span>
+      {it.reactive && <span className="status-pill running" style={{ marginLeft: 0 }}>反应式</span>}
+      <span className="ops" style={{ marginLeft: 'auto' }}>
+        {it.status === 'pending' && (
+          <button className="btn green small" onClick={() => approve(it.id)} title="批准并加入已批准列表">批准</button>
+        )}
+        <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
+        <button className="btn red small" onClick={() => identityDelete(it.id)}>
+          {it.status === 'rejected' ? '删除已拒' : '删除'}
+        </button>
+      </span>
+    </div>
+  )
+
+  // Tab ① 概览：身份编辑 + 关键词 + 锚点（锚点是「核心关注」，固定注入）
+  const tabOverview = (it: Identity) => (
+    <div className="wb-pane">
       {editingId === it.id ? (
-        <div className="id-anchor-edit" style={{ margin: '8px 0', flexDirection: 'column' }}>
+        <div className="id-anchor-edit" style={{ margin: 0, flexDirection: 'column' }}>
           <label className="dlg-field">
             <span>名称</span>
             <input value={idDraft.name} placeholder="名称" onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} />
@@ -670,138 +695,206 @@ export default function IdentityPanel({ refreshKey, chunks }: Props) {
       {it.keywords.length > 0 && (
         <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
       )}
+      <div className="id-block-title" style={{ marginTop: 4 }}>锚点 · 核心关注（对话时固定全量注入）</div>
       {anchorBlock(it)}
-      {ontologyBlock(it)}
-      {assemblyBlock(it)}
-      {benchmarkBlock(it)}
-      {mcpBlock(it)}
     </div>
   )
 
+  // Tab ② 知识与本体：本体库（装配产出）+ 装配时间线
+  const tabKnowledge = (it: Identity) => (
+    <div className="wb-pane">
+      {ontologyBlock(it)}
+      {assemblyBlock(it)}
+    </div>
+  )
+
+  // Tab ③ 能力与工具：可调用 MCP + 同步到本体规则
+  const tabCapability = (it: Identity) => (
+    <div className="wb-pane">{mcpBlock(it)}</div>
+  )
+
+  // Tab ④ 测试与版本：四臂对照 + 归因提名 + merge/回滚
+  const tabTesting = (it: Identity) => (
+    <div className="wb-pane">{benchmarkBlock(it)}</div>
+  )
+
+  // Tab ⑤ 复盘（reflection）：一期只读占位（design §9.3 / §12.5 未落地）
+  const tabReflection = () => (
+    <div className="wb-pane">
+      <div className="note">
+        复盘（reflection）闭环尚未落地（design §9.3）。一期占位：落地后此处展示
+        「本体命中率 / 拒答率 / 能力题失败归因」统计，并提名词表或本体修订（走审批，禁热更）。
+      </div>
+    </div>
+  )
+
+  const DETAIL_TABS = [
+    { id: 'overview', label: '概览' },
+    { id: 'knowledge', label: '知识与本体' },
+    { id: 'capability', label: '能力与工具' },
+    { id: 'testing', label: '测试与版本' },
+    { id: 'reflection', label: '复盘' },
+  ]
+
+  const listItems = useMemo(() => {
+    let xs = idents
+    if (filterMode === 'approved') xs = xs.filter((i) => i.status === 'approved')
+    else if (filterMode === 'pending') xs = xs.filter((i) => i.status !== 'approved')
+    const kw = listQ.trim().toLowerCase()
+    if (kw) xs = xs.filter((i) => (i.name || '').toLowerCase().includes(kw))
+    // 已批准在前，其余按 id
+    return [...xs].sort((a, b) => (a.status === b.status ? a.id - b.id
+      : a.status === 'approved' ? -1 : 1))
+  }, [idents, filterMode, listQ])
+
+  const selected = idents.find((i) => i.id === selectedId) ?? null
+
   return (
-    <div className="card">
-      <h3>
-        数字人管理中心
-        <span className="btnrow" style={{ marginLeft: 'auto', display: 'inline-flex' }}>
-          <span className="note">已批准锚点 {approvedAnchors} 个（下次提取时注入 prompt）</span>
-          <button className="btn small" onClick={nominate} disabled={busy || !chunks}
-            title={chunks ? '高频词汇总（0 LLM）→ LLM 提名 3~5 个身份与锚点 → 逐个审批' : '先入库文档'}>
+    <div>
+      <div className="grid cols4" style={{ marginBottom: 12 }}>
+        <div className="card stat"><div className="num">{idents.length}</div><div className="lbl">数字人总数</div></div>
+        <div className="card stat"><div className="num">{approved.length}</div><div className="lbl">已批准启用</div></div>
+        <div className="card stat"><div className="num">{alternates.length}</div><div className="lbl">待审 / 已拒</div></div>
+        <div className="card stat"><div className="num">{approvedAnchors}</div><div className="lbl">已批准锚点</div></div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="btnrow">
+          <button className="btn green"
+            onClick={() => { setCreateDraft({ name: '', mission: '', prompt: '', category: 'domain_expert' }); setWizardStep(1); setCreating(true) }}>
+            ＋ 新建数字人
+          </button>
+          <button className="btn ghost" onClick={nominate} disabled={busy || !chunks}
+            title={chunks ? '高频词统计（0 LLM）→ LLM 提名 3~5 个身份与锚点 → 在左侧「待审」中逐个审批' : '先入库文档'}>
             提名备选数字人
           </button>
-        </span>
-      </h3>
-      <div className="desc">
-        三块管理数字人：<b>已有</b>（已批准，各自独立本体段与装配）· <b>备选</b>（LLM 提名待批）· <b>创造·删除·修改</b>。
-        从本体图谱点选节点自定义数字人，请用下方「本体图谱」工具栏的「从图谱创建数字人」。
-      </div>
-
-      {/* 块1：已有数字人（按分类分组：通用数字人 / 执行领域专家） */}
-      <div className="id-block">
-        <div className="id-block-title">已有数字人（已批准 · 正在使用）</div>
-        {approved.length === 0 && <div className="note" style={{ padding: '8px 0' }}>尚无已批准的数字人。批准一个备选，或从图谱/手动创建。</div>}
-        {general.length > 0 && (
-          <>
-            <div className="id-cat-title">通用数字人 · {general.length}</div>
-            {general.map(renderApprovedCard)}
-          </>
-        )}
-        {experts.length > 0 && (
-          <>
-            <div className="id-cat-title">执行领域专家 · {experts.length}</div>
-            {experts.map(renderApprovedCard)}
-          </>
-        )}
-      </div>
-
-      {/* 块2：备选数字人 */}
-      <div className="id-block">
-        <div className="id-block-title">备选数字人（提名待批 / 已拒绝）</div>
-        {alternates.length === 0 && <div className="note" style={{ padding: '8px 0' }}>暂无备选。点「提名备选数字人」或从图谱自定义。</div>}
-        <div className="id-grid">
-          {alternates.map((it) => (
-            <div key={it.id} className={`id-card st-${it.status}`}>
-              <div className="id-head">
-                <b>{it.name}</b>
-                <span className={`status-pill ${it.status}`}>{it.status}</span>
-              </div>
-              {it.mission && <div className="id-mission">{it.mission}</div>}
-              {it.prompt ? (
-                <div className="id-prompt">
-                  <span className="id-prompt-lbl" title="可复制；对话与装配时作为附加指令注入，铁律不可被覆盖">附加指令</span>
-                  <span className="id-prompt-txt">{it.prompt}</span>
-                </div>
-              ) : null}
-              {it.keywords.length > 0 && (
-                <div className="id-kws">{it.keywords.map((k) => <span key={k} className="kw-chip">{k}</span>)}</div>
-              )}
-              {anchorBlock(it)}
-              <div className="btnrow">
-                {it.status === 'pending' && (
-                  <button className="btn green" onClick={() => approve(it.id)} title="批准并加入已有数字人">批准</button>
-                )}
-                <button className="btn red" onClick={() => identityDelete(it.id)}>
-                  {it.status === 'rejected' ? '删除已拒' : '拒绝'}
-                </button>
-              </div>
-            </div>
-          ))}
+          <span className="note">
+            已批准锚点 {approvedAnchors} 个（下次提取时注入 prompt）· 任务与事件见右上角「任务」抽屉
+          </span>
         </div>
       </div>
 
-      {/* 块3：创造·删除·修改 */}
-      <div className="id-block">
-        <div className="id-block-title">创造 · 删除 · 修改数字人</div>
-        <div className="btnrow">
-          <button className="btn green small" onClick={() => { setCreateDraft({ name: '', mission: '', prompt: '', category: 'domain_expert' }); setCreating(true) }}>
-            创建数字人（可预输入 · 留空=自主创建）
-          </button>
-          <span className="note">从本体图谱点选种子创建 → 用下方图谱工具栏「从图谱创建数字人」</span>
-        </div>
-
-        {creating && (
-          <div className="dlg-overlay" onClick={() => setCreating(false)}>
-            <div className="dlg" onClick={(e) => e.stopPropagation()}>
-              <div className="dlg-head">创建数字人</div>
-              <div className="dlg-tip">
-                可预输入「人名」与「初始定义」（初始定义将成为该数字人的使命）；
-                两栏都留空 → 自主创建（高频词统计 → LLM 提名身份与锚点，完成后在
-                「备选数字人」中审批）。「附加指令」可自定义数字人言行风格，仅作引导——
-                系统铁律（绝对准确 / 不知即说不知 / 你终审）由代码硬保证，不会被覆盖。
-              </div>
-              <label className="dlg-field">
-                <span>人名</span>
-                <input autoFocus placeholder="如：财务制度顾问" value={createDraft.name}
-                  onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })} />
-              </label>
-              <label className="dlg-field">
-                <span>初始定义（使命）</span>
-                <textarea rows={2} placeholder="一句话定义这个数字人负责什么（可留空）" value={createDraft.mission}
-                  onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
-              </label>
-              <label className="dlg-field">
-                <span>分类</span>
-                <select value={createDraft.category} onChange={(e) => setCreateDraft({ ...createDraft, category: e.target.value })}>
-                  {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
-                </select>
-                <div className="hint">通用数字人 = 平台通用本体（跨部门复用）；执行领域专家 = 部门文档 RAG 归纳（当前默认）。</div>
-              </label>
-              <label className="dlg-field">
-                <span>附加指令（prompt · 可留空 · 最长 4000 字）</span>
-                <textarea rows={4} maxLength={4000} placeholder="如：只引用本体术语回答；拿不准先说明不确定性…"
-                  value={createDraft.prompt}
-                  onChange={(e) => setCreateDraft({ ...createDraft, prompt: e.target.value })} />
-              </label>
-              <div className="dlg-actions">
-                <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
-                <button className="btn green small" onClick={doCreate}>
-                  {!createDraft.name.trim() && !createDraft.mission.trim()
-                    ? '自主创建（LLM 提名）' : '创建数字人'}
-                </button>
-              </div>
-            </div>
+      <div className="wb-grid">
+        <div className="card wb-list">
+          <input placeholder="搜索数字人名称…" value={listQ}
+            onChange={(e) => setListQ(e.target.value)} />
+          <div className="btnrow">
+            {([['all', '全部'], ['approved', '已批准'], ['pending', '待审 / 已拒']] as const).map(([k, l]) => (
+              <button key={k} className={`btn small ${filterMode === k ? '' : 'ghost'}`}
+                onClick={() => setFilterMode(k)}>{l}</button>
+            ))}
           </div>
-        )}
+          <div className="wb-list-body">
+            {listItems.map((it) => (
+              <button key={it.id} className={`wb-item ${selectedId === it.id ? 'on' : ''}`}
+                onClick={() => { setSelectedId(it.id); setDetailTab('overview') }}>
+                <span className="wb-item-name">{it.name}</span>
+                <span className={`status-pill ${it.status}`}>{it.status}</span>
+                <span className="note">{CATEGORY_LABEL[it.category] || '领域专家'}</span>
+              </button>
+            ))}
+            {!listItems.length && (
+              <div className="note" style={{ padding: 8 }}>
+                {idents.length ? '无匹配数字人' : '还没有数字人 —— 点上方「＋ 新建数字人」或「提名备选数字人」'}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card wb-detail">
+          {!selected ? (
+            <div className="note" style={{ padding: '28px 8px' }}>
+              ← 从左侧选择一个数字人查看详情（概览 / 知识与本体 / 能力与工具 / 测试与版本 / 复盘）
+            </div>
+          ) : (
+            <>
+              {renderDetailHeader(selected)}
+              <div className="wb-tabs">
+                {DETAIL_TABS.map((t) => (
+                  <button key={t.id} className={`wb-tab ${detailTab === t.id ? 'on' : ''}`}
+                    onClick={() => setDetailTab(t.id)}>{t.label}</button>
+                ))}
+              </div>
+              {detailTab === 'overview' && tabOverview(selected)}
+              {detailTab === 'knowledge' && tabKnowledge(selected)}
+              {detailTab === 'capability' && tabCapability(selected)}
+              {detailTab === 'testing' && tabTesting(selected)}
+              {detailTab === 'reflection' && tabReflection()}
+            </>
+          )}
+        </div>
       </div>
+
+      {creating && (
+        <div className="dlg-overlay" onClick={() => setCreating(false)}>
+          <div className="dlg" onClick={(e) => e.stopPropagation()}>
+            <div className="dlg-head">新建数字人 · 第 {wizardStep} / 2 步</div>
+
+            {wizardStep === 1 ? (
+              <>
+                <div className="dlg-tip">
+                  选择来源。三种来源最终都进入同一个列表：
+                  <b>自主提名</b>从已入库语料的高频词提名身份（完成后在左侧「待审」中审批）；
+                  <b>图谱种子</b>从本体候选节点创建；
+                  <b>空白模板</b>手动填写身份。
+                </div>
+                <div className="wb-wizard-opts">
+                  <button className="btn ghost" disabled={busy || !chunks}
+                    title={chunks ? '' : '先入库文档'}
+                    onClick={async () => { await nominate(); setCreating(false) }}>
+                    ① 自主提名（LLM 从语料高频词提名）
+                  </button>
+                  <button className="btn ghost" onClick={() => { setCreating(false); onOpenGraph?.() }}>
+                    ② 从图谱种子（去「本体图谱」页勾选候选节点后创建）
+                  </button>
+                  <button className="btn" onClick={() => setWizardStep(2)}>
+                    ③ 空白模板（手动填写身份）
+                  </button>
+                </div>
+                <div className="dlg-actions">
+                  <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="dlg-tip">
+                  填写身份信息。「附加指令」仅作言行风格引导 —— 系统铁律（绝对准确 /
+                  不知即说不知 / 你终审）由代码硬保证，不会被覆盖。
+                </div>
+                <label className="dlg-field">
+                  <span>人名</span>
+                  <input autoFocus placeholder="如：DFMEA 工程师" value={createDraft.name}
+                    onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>初始定义（使命）</span>
+                  <textarea rows={2} placeholder="一句话定义这个数字人负责什么" value={createDraft.mission}
+                    onChange={(e) => setCreateDraft({ ...createDraft, mission: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>分类</span>
+                  <select value={createDraft.category} onChange={(e) => setCreateDraft({ ...createDraft, category: e.target.value })}>
+                    {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+                  </select>
+                  <div className="hint">通用数字人 = 平台通用本体（跨部门复用）；执行领域专家 = 部门文档 RAG 归纳。</div>
+                </label>
+                <label className="dlg-field">
+                  <span>附加指令（prompt · 可留空 · 最长 4000 字）</span>
+                  <textarea rows={4} maxLength={4000} placeholder="如：只引用本体术语回答；拿不准先说明不确定性…"
+                    value={createDraft.prompt}
+                    onChange={(e) => setCreateDraft({ ...createDraft, prompt: e.target.value })} />
+                </label>
+                <div className="dlg-actions">
+                  <button className="btn ghost small" onClick={() => setWizardStep(1)}>上一步</button>
+                  <button className="btn green small" onClick={doCreate} disabled={!createDraft.name.trim()}>
+                    创建数字人
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

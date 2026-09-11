@@ -32,7 +32,7 @@ import json
 
 from pgvector import Vector
 
-from . import db, jobs, loaders, llm, embedding
+from . import db, jobs, loaders, llm, embedding, chunk_types
 from .jsonb import maybe_jsonb
 
 
@@ -143,21 +143,33 @@ def _ingest_one_file(conn, job_id: int, doc: dict, start_chunk_index: int
     try:
         chunk_summaries: list[str] = []
         done_local = 0
+        # 词表只查一次：同一份文件的所有 chunk 共用同一份裁决依据（design §11.4）。
+        # LLM 只拿到「可选 type 清单」，两个维度不交给它 —— 由 resolve() 裁决。
+        tmap = chunk_types.type_map(conn)
+        catalog = chunk_types.catalog_for_prompt(tmap)
         for c in doc["chunks"]:
             jobs.poll_control(conn, job_id)  # pause/delete at chunk boundary
-            meta = llm.summarize_chunk(c["text"])
+            meta = llm.summarize_chunk(c["text"], type_catalog=catalog)
             emb = embedding.embed(meta["summary"])  # embed the summary (retrieval entry)
+            # 提名 -> 裁决（铁律 L1）：type 不在 active 词表即回落 unknown，
+            # 置信度/强制等级一律取词表默认值（保证同 type 全库语义一致）。
+            tinfo = chunk_types.resolve(meta.get("type"), tmap)
+            tsrc = (chunk_types.SOURCE_RULE if meta.get("source") == "rule"
+                    else chunk_types.SOURCE_LLM)
             # list[str] tags -> TEXT[], list[float] embedding -> vector.
             # source_meta is the JSONB provenance block from the loader.
             conn.execute(
                 "INSERT INTO chunks(doc_id, seq, text, summary, tags,"
-                " embedding, content_hash, source_meta)"
-                " VALUES(?,?,?,?,?,?,?,?)",
+                " embedding, content_hash, source_meta,"
+                " type, type_confidence, type_mandatory, type_source)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (doc_id, c["index"], c["text"], meta["summary"],
                  meta["tags"] or [], emb,
                  _content_hash(c["text"]),
                  json.dumps(c.get("source_meta") or {},
-                            ensure_ascii=False)))
+                            ensure_ascii=False),
+                 tinfo["type"], tinfo["type_confidence"],
+                 tinfo["type_mandatory"], tsrc))
             # atomic unit: data + progress in one tx
             done_local += 1
             jobs.update_progress(conn, job_id, start_chunk_index + done_local)
@@ -216,6 +228,7 @@ def run_summary_repair(conn, job_id: int) -> None:
     rows = conn.execute(
         "SELECT c.id, c.doc_id, c.seq, c.text, c.summary, c.tags FROM chunks c"
     ).fetchall()
+    tmap = chunk_types.type_map(conn)
     targets = [r for r in rows if _is_rule_fallback(r)]
     docs = sorted({r["doc_id"] for r in targets})
     jobs.update_progress(conn, job_id, 0, len(targets))
@@ -235,8 +248,15 @@ def run_summary_repair(conn, job_id: int) -> None:
             jobs.auto_pause(conn, job_id,
                             f"LLM 调用失败，修复任务已自动暂停（检查网络/密钥后点「继续」）：{e}")
             raise jobs.JobPaused()
-        conn.execute("UPDATE chunks SET summary=?, tags=?, embedding=? WHERE id=?",
-                     (meta["summary"], meta["tags"] or [], emb, r["id"]))
+        # 修复时同步重判 type（旧数据可能带的是规则兜底类型，design §11.4）
+        tinfo = chunk_types.resolve(meta.get("type"), tmap)
+        conn.execute(
+            "UPDATE chunks SET summary=?, tags=?, embedding=?, type=?,"
+            " type_confidence=?, type_mandatory=?, type_source=? WHERE id=?",
+            (meta["summary"], meta["tags"] or [], emb, tinfo["type"],
+             tinfo["type_confidence"], tinfo["type_mandatory"],
+             chunk_types.SOURCE_RULE if meta.get("source") == "rule"
+             else chunk_types.SOURCE_LLM, r["id"]))
         fixed += 1
         jobs.update_progress(conn, job_id, fixed)
 
@@ -283,15 +303,33 @@ def list_documents(conn) -> list[dict]:
 
 
 def list_chunks(conn, page: int = 1, page_size: int = 20,
-                doc_id: int | None = None) -> dict:
-    where, params = "", []
+                doc_id: int | None = None, type: str | None = None,
+                confidence: str | None = None,
+                mandatory: int | None = None) -> dict:
+    """分页列出 chunks（design §11.6）。
+
+    新增三维过滤：`type`（词表 code）/ `confidence`（high|medium|low）/
+    `mandatory`（0|1|2）；同时输出四个类型字段供前端列与徽章使用。"""
+    clauses, params = [], []
     if doc_id:
-        where = "WHERE doc_id=?"
-        params = [doc_id]
+        clauses.append("doc_id=?")
+        params.append(doc_id)
+    if type:
+        clauses.append("type=?")
+        params.append(type)
+    if confidence:
+        clauses.append("type_confidence=?")
+        params.append(confidence)
+    if mandatory is not None:
+        clauses.append("type_mandatory=?")
+        params.append(int(mandatory))
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     total = conn.execute(f"SELECT COUNT(*) c FROM chunks {where}", params).fetchone()["c"]
     offset = max(0, (page - 1) * page_size)
     rows = conn.execute(
-        f"SELECT id, doc_id, seq, summary, tags, text, source_meta FROM chunks {where}"
+        f"SELECT id, doc_id, seq, summary, tags, text, source_meta,"
+        f" type, type_confidence, type_mandatory, type_source"
+        f" FROM chunks {where}"
         f" ORDER BY doc_id, seq LIMIT ? OFFSET ?",
         params + [page_size, offset]).fetchall()
     items = []
@@ -307,6 +345,7 @@ def list_chunks(conn, page: int = 1, page_size: int = 20,
 def get_chunk(conn, chunk_id: int) -> dict | None:
     row = conn.execute(
         "SELECT c.id, c.doc_id, c.seq, c.text, c.summary, c.tags, c.source_meta,"
+        " c.type, c.type_confidence, c.type_mandatory, c.type_source,"
         " d.name AS doc_name, d.file_type AS doc_file_type"
         " FROM chunks c JOIN documents d ON d.id=c.doc_id WHERE c.id=?",
         (chunk_id,)).fetchone()
@@ -336,29 +375,49 @@ def delete_chunks(conn, ids: list[int]) -> int:
     return cur.rowcount
 
 
-def search(conn, query: str, top_k: int = 5, tag: str | None = None) -> list[dict]:
+def search(conn, query: str, top_k: int = 5, tag: str | None = None,
+           type: str | None = None, confidence: str | None = None,
+           mandatory: int | None = None) -> list[dict]:
     """Embed the query -> pgvector cosine over stored chunk-summary vectors.
 
     `1 - (embedding <=> ?)` is the cosine similarity on vectors that the
-    embedding store pre-normalizes (pgvector cosine distance). When `tag` is
-    given we restrict to chunks whose `tags` array contains that token
-    (TEXT[] @> ?-array containment or `? = ANY(tags)` - we use the `ANY`
-    form because it is one parameter, not an array literal)."""
+    embedding store pre-normalizes (pgvector cosine distance). `tag` restricts
+    to chunks whose `tags` array contains that token (`? = ANY(tags)`).
+
+    design §11.5 新增三维过滤：
+      - `type`     词表 code 精确匹配；
+      - `mandatory` 0(参考)/1(建议)/2(强制) 精确匹配 —— 对话注入用它把
+        `mandatory=2` 的强制知识单独捞出来（必选注入，不受 top-k 截断）；
+      - `confidence` 是「**至少这么可信**」语义：high 只匹配 high，
+        medium 匹配 high+medium，low 不过滤。
+    """
     q_emb = Vector(embedding.embed(query))  # Vector -> '[...]' text so the
     # `<=> ?` operator sees a vector literal, not an untyped double[] array.
+    clauses: list[str] = []
+    params: list = []
     if tag:
-        rows = conn.execute(
-            "SELECT id, doc_id, seq, text, summary, tags, source_meta,"
-            " 1 - (embedding <=> ?::vector) AS score FROM chunks"
-            " WHERE ? = ANY(tags)"
-            " ORDER BY embedding <=> ?::vector LIMIT ?",
-            (q_emb, tag, q_emb, top_k)).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT id, doc_id, seq, text, summary, tags, source_meta,"
-            " 1 - (embedding <=> ?::vector) AS score FROM chunks"
-            " ORDER BY embedding <=> ?::vector LIMIT ?",
-            (q_emb, q_emb, top_k)).fetchall()
+        clauses.append("? = ANY(tags)")
+        params.append(tag)
+    if type:
+        clauses.append("type = ?")
+        params.append(type)
+    if mandatory is not None:
+        clauses.append("type_mandatory = ?")
+        params.append(int(mandatory))
+    if confidence:
+        allowed = {"high": ["high"], "medium": ["high", "medium"]}.get(confidence)
+        if allowed:
+            clauses.append("type_confidence IN ("
+                           + ",".join("?" for _ in allowed) + ")")
+            params.extend(allowed)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = conn.execute(
+        "SELECT id, doc_id, seq, text, summary, tags, source_meta,"
+        " type, type_confidence, type_mandatory, type_source,"
+        " 1 - (embedding <=> ?::vector) AS score FROM chunks"
+        f" {where}"
+        " ORDER BY embedding <=> ?::vector LIMIT ?",
+        [q_emb] + params + [q_emb, top_k]).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -369,5 +428,8 @@ def search(conn, query: str, top_k: int = 5, tag: str | None = None) -> list[dic
             "chunk_id": d["id"], "doc_id": d["doc_id"], "seq": d["seq"],
             "summary": d["summary"], "tags": d["tags"], "text": d["text"],
             "source_meta": d["source_meta"], "score": d["score"],
+            "type": d.get("type"), "type_confidence": d.get("type_confidence"),
+            "type_mandatory": d.get("type_mandatory"),
+            "type_source": d.get("type_source"),
         })
     return out

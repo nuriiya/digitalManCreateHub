@@ -138,8 +138,22 @@ export const deleteJob = (id: number) => api(`/api/jobs/${id}`, { method: 'DELET
 export const getJobEvents = (id: number) => api(`/api/events?job_id=${id}`)
 export const getStats = () => api('/api/rag/stats')
 export const getDocuments = () => api('/api/rag/documents')
-export const getChunks = (page: number, pageSize = 20, docId?: number) =>
-  api(`/api/rag/chunks?page=${page}&page_size=${pageSize}${docId ? `&doc_id=${docId}` : ''}`)
+export interface ChunkFilters {
+  type?: string
+  confidence?: string
+  mandatory?: number
+}
+
+export const getChunks = (page: number, pageSize = 20, docId?: number,
+  filters?: ChunkFilters) => {
+  const qs = [`page=${page}`, `page_size=${pageSize}`]
+  if (docId) qs.push(`doc_id=${docId}`)
+  if (filters?.type) qs.push(`type=${encodeURIComponent(filters.type)}`)
+  if (filters?.confidence) qs.push(`confidence=${encodeURIComponent(filters.confidence)}`)
+  if (filters?.mandatory !== undefined && filters?.mandatory !== null)
+    qs.push(`mandatory=${filters.mandatory}`)
+  return api(`/api/rag/chunks?${qs.join('&')}`)
+}
 export const getChunk = (id: number) => api(`/api/rag/chunks/${id}`)
 export const deleteDocument = (id: number) =>
   api(`/api/rag/documents/${id}`, { method: 'DELETE' })
@@ -147,8 +161,41 @@ export const deleteChunk = (id: number) =>
   api(`/api/rag/chunks/${id}`, { method: 'DELETE' })
 export const deleteChunks = (ids: number[]) =>
   api('/api/rag/chunks/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
-export const search = (query: string, topK = 5) =>
-  api('/api/rag/search', { method: 'POST', body: JSON.stringify({ query, top_k: topK }) })
+export const search = (query: string, topK = 5,
+  filters?: ChunkFilters & { tag?: string }) =>
+  api('/api/rag/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, top_k: topK, ...(filters || {}) }),
+  })
+
+// ---------------- chunk 内容类型体系（design §11） ----------------
+
+export interface ChunkType {
+  id: number
+  code: string
+  label: string
+  description: string | null
+  default_confidence: string
+  default_mandatory: number
+  priority: number
+  builtin: boolean
+  status: string
+  mandatory_label?: string
+  confidence_label?: string
+}
+
+export const getChunkTypes = (activeOnly = false) =>
+  api(`/api/rag/types${activeOnly ? '?active_only=true' : ''}`)
+export const createChunkType = (
+  body: Partial<ChunkType> & { code: string; label: string }) =>
+  api('/api/rag/types', { method: 'POST', body: JSON.stringify(body) })
+export const updateChunkType = (id: number, body: Partial<ChunkType>) =>
+  api(`/api/rag/types/${id}`, { method: 'PUT', body: JSON.stringify(body) })
+export const deleteChunkType = (id: number) =>
+  api(`/api/rag/types/${id}`, { method: 'DELETE' })
+export const setChunkType = (chunkId: number, type: string) =>
+  api(`/api/rag/chunks/${chunkId}/type`,
+    { method: 'POST', body: JSON.stringify({ type }) })
 
 export const getGraph = () => api('/api/ontology/graph')
 export const getCandidate = (id: number) => api(`/api/ontology/candidates/${id}`)

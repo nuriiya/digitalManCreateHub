@@ -657,20 +657,9 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
 
 
 # ---------------- 对话命令：自然语言 → pipeline 设计 → 落库（draft 待审批） ----------------
-def _extract_json(text: str):
-    """从 LLM 输出提取 JSON（容错 markdown 代码块 + 前后杂文）。"""
-    import re
-    text = (text or "").strip()
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if m:
-        text = m.group(1).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        return json.loads(text[start:end + 1])
-    except Exception:
-        return None
+# design §10.4：原私有解析器 `_extract_json` 已删除，统一走 `protocol.parse_json`。
+# （旧实现只认 `{..}` 不认 `[..]`，且围栏正则与 llm.extract_json 不一致 —— 正是
+#  「四套解析器行为各不相同」的典型症状。）
 
 
 def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
@@ -704,7 +693,8 @@ def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
                 else llm.chat2(messages))
     except Exception as e:
         return {"ok": False, "error": f"LLM 生成失败：{e}"}
-    data = _extract_json(text)
+    from . import protocol  # design §10.4：JSON 抠取统一入口
+    data = protocol.parse_json(text)
     if data is None:
         return {"ok": False, "error": "未能解析 LLM 输出的 JSON", "raw": text[:500]}
     name = (data.get("name") or "").strip()

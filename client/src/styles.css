@@ -58,6 +58,10 @@ input, select {
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px;
 }
 input:focus, select:focus { outline: 1px solid var(--accent); }
+/* checkbox 必须豁免上面的 input{width:100%}：它出现在 flex 行里（MCP 工具勾选、
+   ont-row、chunk 全选、筛选行等），被撑满后会把同行后续文字整行挤到右侧 ——
+   2026-09-11 修「可用 MCP（勾选绑定）」面板显示错乱的根因。 */
+input[type="checkbox"] { width: auto; flex: 0 0 auto; }
 
 button.btn {
   background: var(--accent); border: none; color: #fff; padding: 8px 16px;
@@ -369,6 +373,51 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
 }
 .mcp-tool-pick input { cursor: pointer; }
 .mcp-tool-pick input:disabled { cursor: not-allowed; opacity: 0.7; }
+
+/* ---------------- 数字人工作台（design §13）：列表 — 详情五 Tab — 全局抽屉 ---------------- */
+.wb-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 900px) { .wb-grid { grid-template-columns: 1fr; } }
+.wb-list { display: flex; flex-direction: column; gap: 8px; max-height: 72vh; }
+.wb-list-body { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.wb-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; cursor: pointer; color: var(--text); font-size: 13px;
+}
+.wb-item:hover { border-color: var(--accent); }
+.wb-item.on { border-color: var(--accent); background: rgba(79, 131, 204, .12); }
+.wb-item-name {
+  font-weight: 600; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wb-detail { min-height: 340px; }
+.wb-tabs {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 10px;
+}
+.wb-tab {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.wb-tab:hover { color: var(--text); }
+.wb-tab.on { background: var(--accent); color: #fff; }
+.wb-pane { display: flex; flex-direction: column; gap: 8px; }
+.wb-wizard-opts { display: flex; flex-direction: column; gap: 8px; }
+
+/* 全局抽屉（任务与事件，design §13.2） */
+.drawer-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 60;
+  display: flex; justify-content: flex-end;
+}
+.drawer {
+  width: min(820px, 94vw); height: 100%; background: var(--bg);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+}
+.drawer-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.drawer-body { padding: 14px 16px; overflow-y: auto; }
 .ont-def {  flex: 1 1 0; min-width: 0; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
