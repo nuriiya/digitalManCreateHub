@@ -216,7 +216,11 @@ def update_type(conn, type_id: int, patch: dict) -> dict:
         " default_mandatory=?, priority=?, status=? WHERE id=?",
         (label, description, confidence, mandatory, priority, status, type_id))
     conn.commit()
-    return get_by_id(conn, type_id)
+    out = get_by_id(conn, type_id)
+    # 影响面提示：维度是写入时快照，本次改动**不回溯**存量行（见 resolve）。
+    # 返回存量引用数，供 API/前端提示「存量 N 条仍保持旧维度」。
+    out["usage_count"] = usage_count(conn, cur_row["code"])
+    return out
 
 
 def delete_type(conn, type_id: int) -> None:
@@ -247,11 +251,16 @@ def resolve(code: str | None, tmap: dict[str, dict]) -> dict:
     """**确定性裁决**：把 LLM 提名的 type 映射成落库三元组。
 
     - code 不在 active 词表（含 None / 空 / 拼错）-> 回落 `unknown`；
-    - `type_confidence` / `type_mandatory` **一律取词表默认值**
-      （LLM 若额外提名 confidence 也不采用 —— 保证同一 type 全库语义一致）。
+    - `type_confidence` / `type_mandatory` **一律取词表默认值**（LLM 若额外
+      提名 confidence 也不采用 —— 维度语义只由词表定义，不由模型定义）。
+      注意这是**写入时刻的快照**：`update_type` 改词表默认值只影响此后写入的
+      行，**不回溯**存量（自审 2026-09-11 明确此语义）；
+    - **入参归一化**：词表 code 恒为小写（`create_type` 保证），故此处统一
+      `strip().lower()`，避免调用方传 `"Hard_Rule"` 被静默判为未知类型
+      （自审 2026-09-11 加固）。
 
     返回 {"type", "type_confidence", "type_mandatory"}。"""
-    key = (code or "").strip()
+    key = (code or "").strip().lower()
     t = tmap.get(key)
     if not t:
         key = UNKNOWN

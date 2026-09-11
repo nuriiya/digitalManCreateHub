@@ -197,17 +197,20 @@
 
 > **已落地（2026-09-11，design §11）**。验证工具：
 > `docker exec -w /app/backend -e PYTHONPATH=/app/backend rag_backend python scripts/verify_chunk_types.py`
-> （DDL / 词表 seed / `resolve` 裁决）与 `scripts/verify_chunk_types_flow.py`
-> （写路径 · 读路径 · 列表过滤 · 检索过滤 · 两路注入，跑完自动回滚）。两者容器内全绿。
+> （DDL / 词表 seed / `resolve` 裁决 / 入参归一化）· `scripts/verify_chunk_types_flow.py`
+> （写路径 · 读路径 · 列表过滤 · 检索过滤 · 两路注入，跑完自动回滚）·
+> `scripts/verify_search_split.py`（两路检索共享一次 embedding + 两组不重叠）。
+> 三者容器内全绿（自审修复见 design §11.8）。
 
 | 指标 | 定义/口径 | 阈值/目标 |
 |---|---|---|
 | I-1 type 覆盖率 | 非 `unknown` 的 chunk / 总 chunk | ≥85%（词表覆盖度） |
 | I-2 判定一致率 | LLM 提名 type 与人工标注一致 / 抽检 50 条 | ≥80% |
-| I-3 两维度一致性 | 同一 type 的 chunk 两维度 == 词表默认值 | **100%**（确定性裁决，硬约束） |
-| I-4 强制注入命中 | `mandatory=2` 命中全部进入上下文（不被 top-k 截断） | **100%** |
+| I-3 两维度一致性 | chunk 两维度 == **落库时**词表默认值（写入快照；改词表不回溯存量） | **100%**（确定性裁决，硬约束） |
+| I-4 强制注入配额 | `mandatory=2` 不参与普通 top-K 竞争，走独立配额（上限 `RAG_RULES_MAX=4`） | **100%** 进上下文（配额内） |
 | I-5 词表自定义生效 | 新增/改词表后，新 chunk 按新默认值落库 | 即时（延迟 0） |
 | I-6 引用完整性 | 删除被 chunk 引用的 type 被拒绝 | **100%** |
+| I-7 检索开销 | 对话两路注入的 embedding 调用次数 | **= 1**（共享查询向量） |
 
 ## T-K DFMEA 自动编排链路（design §15）
 

@@ -897,12 +897,26 @@ CREATE INDEX IF NOT EXISTS idx_chunks_type ON chunks(type);
 | `backend/app/llm.py` | `summarize_chunk(text, type_catalog)` 返回 `summary/tags/type/source`（**只提名 type**） |
 | `backend/app/ingest.py` | 写路径（`_ingest_one_file` / `run_summary_repair`）裁决落库；读路径（`list_chunks` / `get_chunk` / `search`）三维过滤与输出 |
 | `backend/app/research.py` | 调研入库按来源等级映射置信度，`type='fact'`、`mandatory=0` |
-| `backend/app/chat.py` | `_rag_snippets` 分两路（`rules` 必选 / `texts` top-K）；`_system_prompt` 新增【强制约束】段与对应铁律 |
+| `backend/app/chat.py` | `_rag_snippets` 分两路（`rules` 独立配额 / `texts` top-K，**共享一次 embedding**）；`_system_prompt` 新增【强制约束】段与对应铁律 |
 | `backend/app/main.py` | `GET/POST/PUT/DELETE /api/rag/types`、`POST /api/rag/chunks/{id}/type`、search/chunks 三维参数 |
 | `client/src/pages/RagPage.tsx` | type 徽章列（配色由 mandatory 决定）+ 三维筛选 chips + 类型词表管理面板 + 单条终审改类型 |
-| `backend/scripts/verify_chunk_types*.py` | 两个验证脚本（DDL/词表/裁决 + 数据流四步），容器内运行 |
+| `backend/scripts/verify_chunk_types*.py` | 三个验证脚本（DDL/词表/裁决 + 数据流四步 + 两路检索共享 embedding），容器内运行 |
 
 > **踩坑记录**：`CREATE INDEX ... ON chunks(type)` **不能**写在 `_SCHEMA_SQL` 里 —— 老库上 `CREATE TABLE IF NOT EXISTS chunks` 会被跳过，索引语句随即引用尚未 ALTER 出来的列，`_init_schema` 直接抛 `column "type" does not exist` 导致后端启动失败（2026-09-11 实测）。索引创建必须在迁移块里、ALTER 之后。
+
+### 11.8 自审修复（2026-09-11）
+
+实现完成后的自查发现三处缺陷，均已修复并加验证（`scripts/verify_search_split.py`）：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | **每轮对话 embedding 调用翻倍** | 两路注入各调一次 `ingest.search()`，而 `search()` 内部每次都 `embedding.embed(query)` → 多一次 Ollama 网络往返 | 新增 `ingest.search_split()`：一次 embed、两次查询，两组互不重叠；`_rag_snippets` 改走它。实测 embed 次数 **2 → 1** |
+| 2 | **`hits` 命中数重复计数** | `len(hits) + len(rule_hits)` 中 `hits` 已含 `rule_hits` 的成员，交集被算两次 | `search_split` 返回前即剔除交集；计数 = 两组之和 |
+| 3 | **类型入参未归一化** | `resolve()` 与 `POST /chunks/{id}/type` 都用原始输入比对小写 code，传 `"Hard_Rule"` 会被判未知 | `resolve()` 统一 `strip().lower()`；API 层同样归一化后再查词表 |
+
+> **措辞修正**：`mandatory=2` 原表述为「不受 top-k 截断」，实际存在独立配额上限 `RAG_RULES_MAX = 4`（`chat.py:79`）。已改为准确表述「**独立配额**，不参与普通 top-K 竞争」——强制知识超过 4 条时仍按相似度取前 4 条。
+>
+> **语义明确**：两维度是**写入时刻的快照**。`update_type` 改词表默认值只影响此后写入的行，**不回溯**存量；`update_type` 返回值新增 `usage_count`，供前端提示「存量 N 条仍保持旧维度」。是否需要「改词表即全库回填」属产品决策，见待决项。
 
 需求 R-14；指标 test-metrics §T-I。
 

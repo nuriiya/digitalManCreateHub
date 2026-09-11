@@ -842,12 +842,13 @@ def rag_chunk_set_type(chunk_id: int, body: ChunkTypeSet):
     type_source 置为 'user'，与 LLM 提名（'llm'）/ 规则兜底（'rule'）区分。"""
     conn = db.get_conn()
     tmap = chunk_types.type_map(conn)
-    if body.type not in tmap:
+    code = (body.type or "").strip().lower()   # 词表 code 恒为小写，先归一化
+    if code not in tmap:
         return JSONResponse({"error": f"未知类型：{body.type}"}, status_code=400)
     row = conn.execute("SELECT id FROM chunks WHERE id=?", (chunk_id,)).fetchone()
     if not row:
         return JSONResponse({"error": "chunk not found"}, status_code=404)
-    tinfo = chunk_types.resolve(body.type, tmap)
+    tinfo = chunk_types.resolve(code, tmap)
     conn.execute(
         "UPDATE chunks SET type=?, type_confidence=?, type_mandatory=?,"
         " type_source=? WHERE id=?",

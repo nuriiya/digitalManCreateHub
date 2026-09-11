@@ -76,8 +76,10 @@ DEFAULT_OLLAMA_MODEL = os.environ.get("RAG_OLLAMA_MODEL", "qwen2.5:7b-cpu")
 # 相互独立、可叠加；检索 0 LLM（仅 embedding 余弦），失败时优雅降级为
 # 「资料不可用」（不注入、不中断对话）。
 RAG_TOP_K = 6
-#: mandatory=2（强制等级）的知识单独注入的上限 —— **不受 RAG_TOP_K 截断影响**
-#: （design §11.5：强制约束是 chunk 的数据属性，不是「参考资料」里的一员）
+#: mandatory=2（强制等级）的知识单独注入的**配额上限** —— 与 RAG_TOP_K 各自
+#: 独立、不与普通参考资料竞争名额（design §11.5：强制约束是 chunk 的数据属性，
+#: 不是「参考资料」里的一员）。注意这是**配额**而非「无上限」：强制知识超过
+#: 4 条时仍按相似度取前 4 条（措辞修正，自审 2026-09-11）。
 RAG_RULES_MAX = 4
 RAG_SNIPPET_MAX = 500          # 单条片段截断字符数（保留证据语义）
 
@@ -549,8 +551,10 @@ def _rag_snippets(conn, message: str, top_k: int = RAG_TOP_K) -> dict:
     """Retrieve corpus chunks for the message (0 LLM, embedding cosine).
 
     design §11.5 起分两路注入：
-      - `rules`：`mandatory=2`（强制等级）的命中 —— **必选注入**，不参与
-        top-K 竞争，在 system prompt 里单独成【强制约束】段；
+      - `rules`：`mandatory=2`（强制等级）的命中 —— **独立配额**（上限
+        `RAG_RULES_MAX`），不参与普通 top-K 竞争，在 system prompt 里单独成
+        【强制约束】段。注意是「独立配额」而非「无上限」：强制知识超过配额时
+        仍按相似度取前 N 条（措辞修正，自审 2026-09-11）；
       - `texts`：其余命中走原 top-K，进【参考资料】段（已剔除上面的强制项，
         避免同一段内容重复注入）。
 
@@ -560,23 +564,17 @@ def _rag_snippets(conn, message: str, top_k: int = RAG_TOP_K) -> dict:
     silently fabricates a retrieval)."""
     try:
         from . import ingest
-        rule_hits = ingest.search(conn, message, top_k=RAG_RULES_MAX,
-                                  mandatory=2)
-        hits = ingest.search(conn, message, top_k=top_k)
+        # search_split 共享一次 embedding（自审 2026-09-11：原两次 search 会让
+        # 每轮对话多一次 Ollama 网络往返），并返回互不重叠的两组。
+        rule_hits, other_hits = ingest.search_split(
+            conn, message, top_k=top_k, rules_max=RAG_RULES_MAX)
     except Exception as e:  # embedding unconfigured / corpus empty / store error
         return {"used": True, "hits": 0, "error": str(e)[:160],
                 "texts": [], "rules": []}
-    rule_ids = {h.get("chunk_id") for h in rule_hits}
     rules = [s for s in (_snippet_text(h) for h in rule_hits) if s]
-    texts: list[str] = []
-    for h in hits:
-        if h.get("chunk_id") in rule_ids:
-            continue  # 已进【强制约束】段，不重复
-        s = _snippet_text(h)
-        if s:
-            texts.append(s)
-    return {"used": True, "hits": len(hits) + len(rule_hits), "error": None,
-            "texts": texts, "rules": rules}
+    texts = [s for s in (_snippet_text(h) for h in other_hits) if s]
+    return {"used": True, "hits": len(rule_hits) + len(other_hits),
+            "error": None, "texts": texts, "rules": rules}
 
 
 # ---------------- dynamic retrieval window (0 LLM) ----------------

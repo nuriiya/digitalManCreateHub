@@ -50,12 +50,19 @@ def main() -> int:
     print("[4] resolve() 裁决抽样：")
     for code in ("hard_rule", "not_in_vocab", None, ""):
         print(f"    {str(code):<14} -> {chunk_types.resolve(code, tmap)}")
+    # 自审 2026-09-11：词表 code 恒为小写，resolve 必须容忍大小写/空白输入
+    # （否则 API 层传 "Hard_Rule" 会被静默判为未知类型）。
+    norm = [("Hard_Rule", "hard_rule"), ("  hard_rule  ", "hard_rule"),
+            ("HARD_RULE", "hard_rule")]
+    bad = [src for src, want in norm
+           if chunk_types.resolve(src, tmap)["type"] != want]
+    print(f"    入参归一化断言（大小写/空白）异常 = {bad or '无'}")
     print(f"    rule_type('必须遵守以下规定') -> "
           f"{chunk_types.rule_type('必须遵守以下规定')}")
     print(f"    rule_type('本季度同比增长 12%') -> "
           f"{chunk_types.rule_type('本季度同比增长 12%')}")
 
-    ok = len(rows) >= len(chunk_types.BUILTIN_TYPES) and not missing
+    ok = len(rows) >= len(chunk_types.BUILTIN_TYPES) and not missing and not bad
     print("\nRESULT:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

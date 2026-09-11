@@ -387,12 +387,41 @@ def search(conn, query: str, top_k: int = 5, tag: str | None = None,
     design §11.5 新增三维过滤：
       - `type`     词表 code 精确匹配；
       - `mandatory` 0(参考)/1(建议)/2(强制) 精确匹配 —— 对话注入用它把
-        `mandatory=2` 的强制知识单独捞出来（必选注入，不受 top-k 截断）；
+        `mandatory=2` 的强制知识单独捞出来（独立配额，不参与普通 top-K 竞争）；
       - `confidence` 是「**至少这么可信**」语义：high 只匹配 high，
         medium 匹配 high+medium，low 不过滤。
+
+    需要「同一 query 跑两组过滤」时（对话注入的两路）请用 `search_split` ——
+    它共享一次 embedding，避免重复调用 embedding 后端。
     """
     q_emb = Vector(embedding.embed(query))  # Vector -> '[...]' text so the
     # `<=> ?` operator sees a vector literal, not an untyped double[] array.
+    return _search_with_emb(conn, q_emb, top_k, tag, type, confidence,
+                            mandatory)
+
+
+def search_split(conn, query: str, top_k: int = 5, rules_max: int = 4):
+    """对话注入专用：**一次 embed**，两次查询（强制项 / 普通参考资料）。
+
+    design §11.5 的两路注入若各调一次 `search()`，会重复调用 embedding 后端
+    （每轮对话多一次 Ollama 网络往返）。自审发现（2026-09-11）：原实现确实
+    调了两次。此处共享同一查询向量，并保证两组结果**互不重叠**。
+
+    Returns `(rule_hits, other_hits)`：
+      - `rule_hits`  —— `mandatory=2`，独立配额上限 `rules_max`；
+      - `other_hits` —— 其余命中（已剔除 rule_hits 的成员），上限 `top_k`。
+    """
+    q_emb = Vector(embedding.embed(query))
+    rule_hits = _search_with_emb(conn, q_emb, rules_max, mandatory=2)
+    hits = _search_with_emb(conn, q_emb, top_k)
+    rule_ids = {h["chunk_id"] for h in rule_hits}
+    return rule_hits, [h for h in hits if h["chunk_id"] not in rule_ids]
+
+
+def _search_with_emb(conn, q_emb, top_k: int = 5, tag: str | None = None,
+                     type: str | None = None, confidence: str | None = None,
+                     mandatory: int | None = None) -> list[dict]:
+    """`search` 的向量已就绪版本（供复用同一 query 向量的多次调用）。"""
     clauses: list[str] = []
     params: list = []
     if tag:
