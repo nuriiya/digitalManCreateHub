@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   getIdentities, nominateIdentities, setIdentityStatus, deleteIdentity,
   updateIdentity, setAnchorStatus, updateAnchor, addAnchor, createIdentity,
@@ -9,6 +9,7 @@ import {
   type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
 } from '../api'
 import { useToast } from '../Toast'
+import { useWorkbench } from '../hooks/useWorkbench'
 
 interface Props {
   refreshKey: number
@@ -34,75 +35,21 @@ const CATEGORY_ORDER = ['general', 'domain_expert']
  *   · 任务与事件由 App 层的全局抽屉承载（不再占用本页）。
  * 数据加载策略沿用原实现（按 identity.id 缓存的 Record）。 */
 export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: Props) {
-  const [idents, setIdents] = useState<Identity[]>([])
-  const [busy, setBusy] = useState(false)
-  const [editing, setEditing] = useState<number | null>(null) // anchor id being edited
-  const [draft, setDraft] = useState({ name: '', type: '概念', definition: '' })
-  const [adding, setAdding] = useState<number | null>(null) // identity id being extended
-  const [newAnchor, setNewAnchor] = useState({ name: '', type: '概念', definition: '' })
-  const [editingId, setEditingId] = useState<number | null>(null) // identity being edited
-  const [idDraft, setIdDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert', reactive: false })
-  const [creating, setCreating] = useState(false)
-  const [createDraft, setCreateDraft] = useState({ name: '', mission: '', prompt: '', category: 'domain_expert' })
-  // assembly per persona
-  const [asm, setAsm] = useState<Record<number, AsmSummary>>({})
-  const [personaOnt, setPersonaOnt] = useState<Record<number, PersonaOntItem[]>>({})
-  const [assemblingId, setAssemblingId] = useState<number | null>(null)
-  const [confirmingId, setConfirmingId] = useState<number | null>(null)
-  // collapsible ontology library + assembly per persona
-  const [ontOpen, setOntOpen] = useState<Record<number, boolean>>({})
-  const [asmOpen, setAsmOpen] = useState<Record<number, boolean>>({})
-  // benchmark (四组对照测试 + 归因提名 + 版本管理) per persona
-  const [bench, setBench] = useState<Record<number, BenchSummary>>({})
-  const [bchOpen, setBchOpen] = useState<Record<number, boolean>>({})
-  const [bchBusy, setBchBusy] = useState<number | null>(null)
-  // MCP 绑定（可调用 MCP 工具清单 + 同步到本体）per persona
-  const [mcpMap, setMcpMap] = useState<Record<number, PersonaMcp[]>>({})
-  const [mcpOpen, setMcpOpen] = useState<Record<number, boolean>>({})
-  // 可用 MCP 列表（所有已审批 MCP 的工具）—— 供数字人选择面板用
-  const [availableMcp, setAvailableMcp] = useState<Awaited<ReturnType<typeof getAvailableMcp>>['mcp']>([])
-  const [mcpBinding, setMcpBinding] = useState<Record<string, boolean>>({})  // 正在绑定的工具 key（`serverId:toolName`）
-  // ---- 工作台外壳状态（design §13.3）：列表筛选 + 选中项 + 详情 Tab + 向导步骤 ----
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [detailTab, setDetailTab] = useState('overview')
-  const [filterMode, setFilterMode] = useState('all')   // all | approved | pending
-  const [listQ, setListQ] = useState('')
-  const [wizardStep, setWizardStep] = useState(1)
-  const { toast } = useToast()
-
-  const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
-  const alternates = useMemo(() => idents.filter((i) => i.status !== 'approved'), [idents])
-  // 已有数字人按分类分组：通用数字人（general）在前，执行领域专家（domain_expert）在后
-  const general = useMemo(() => approved.filter((i) => i.category === 'general'), [approved])
-  const experts = useMemo(() => approved.filter((i) => i.category !== 'general'), [approved])
-
-  const reload = useCallback(() => {
-    getIdentities().then((r) => setIdents(r.identities ?? [])).catch(() => { })
-  }, [])
-  useEffect(() => { reload() }, [reload, refreshKey])
-
-  // load each approved persona's own assembly + ontology 段
-  const reloadAsm = useCallback(() => {
-    approved.forEach((it) => {
-      getAssembly(it.id).then((s) => setAsm((m) => ({ ...m, [it.id]: s }))).catch(() => { })
-      getPersonaOntology(it.id).then((p) => setPersonaOnt((m) => ({ ...m, [it.id]: p }))).catch(() => { })
-    })
-  }, [approved])
-  useEffect(() => { reloadAsm() }, [reloadAsm, refreshKey])
-
-  // load each approved persona's benchmark summary; poll while a run is active
-  const reloadBench = useCallback(() => {
-    approved.forEach((it) => {
-      getBenchmark(it.id).then((s) => setBench((m) => ({ ...m, [it.id]: s }))).catch(() => { })
-    })
-  }, [approved])
-  useEffect(() => { reloadBench() }, [reloadBench, refreshKey])
-  const benchRunning = approved.some((it) => bench[it.id]?.benchmark?.status === 'running')
-  useEffect(() => {
-    if (!benchRunning) return
-    const t = setTimeout(reloadBench, 5000)
-    return () => clearTimeout(t)
-  }, [benchRunning, reloadBench, bench])
+  // 数据层收敛到 useWorkbench（design §13.5 / test-metrics T-J J-4）：
+  // 组件内**不再有 useState** —— 状态 / 派生值 / 加载副作用全部在 hook 内。
+  // 解构后渲染代码无需改造（变量名保持一致）。
+  const {
+    idents, busy, editing, draft, setDraft, adding, setAdding, newAnchor, setNewAnchor,
+    editingId, setEditingId, idDraft, setIdDraft, creating, setCreating,
+    createDraft, setCreateDraft, asm, personaOnt, assemblingId, setAssemblingId,
+    confirmingId, setConfirmingId, ontOpen, setOntOpen, asmOpen, setAsmOpen,
+    bench, bchOpen, setBchOpen, bchBusy, setBchBusy, mcpMap, setMcpMap,
+    mcpOpen, setMcpOpen, availableMcp, mcpBinding, setMcpBinding,
+    selectedId, setSelectedId, detailTab, setDetailTab, filterMode, setFilterMode,
+    listQ, setListQ, wizardStep, setWizardStep, toast,
+    approved, alternates, approvedAnchors, reload, reloadAsm, reloadBench,
+    setBusy, setEditing,
+  } = useWorkbench(refreshKey)
 
   const nominate = async () => {
     setBusy(true)
@@ -241,11 +188,7 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
       toast(`已同步 ${r.synced} 个 MCP 工具到本体规则`, 'ok')
     } catch (e: any) { toast(e.message, 'err') }
   }
-  // 首次加载可用 MCP 列表（所有已审批 MCP 的工具，用于勾选面板）
-  useEffect(() => {
-    if (availableMcp.length > 0) return
-    getAvailableMcp().then((r) => setAvailableMcp(r.mcp ?? [])).catch(() => { })
-  }, [availableMcp.length])
+  // 注：可用 MCP 列表的首次加载已移入 useWorkbench（组件内不再残留 useEffect）
   // 勾选/取消绑定 MCP 工具
   const doBindMcpTool = async (personaId: number, serverId: number, toolName: string, bind: boolean, actionId?: number) => {
     const key = `${serverId}:${toolName}`
@@ -554,7 +497,7 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     )
   }
 
-  const approvedAnchors = approved.reduce((n, i) => n + i.anchors.filter((a) => a.status === 'approved').length, 0)
+  // 注：approvedAnchors 已移入 useWorkbench（见上方解构）
 
   // ---- MCP 绑定子模块（可调用 MCP 工具清单 + 同步到本体规则）----
   const mcpBlock = (it: Identity) => {
