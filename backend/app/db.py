@@ -324,8 +324,9 @@ def _ensure_schema(conn: _Conn) -> None:
             # 不覆盖用户改动。失败不阻断启动 —— 读取端对未知 type 有 unknown
             # 兜底，词表缺失最多让全部 chunk 落在 unknown。
             try:
-                from . import chunk_types
+                from . import chunk_types, persona_templates
                 chunk_types.ensure_seed(conn)
+                persona_templates.ensure_seed(conn)
             except Exception:  # noqa: BLE001 - 启动健壮性优先
                 conn.rollback()
             _schema_ready = True
@@ -479,6 +480,23 @@ CREATE TABLE IF NOT EXISTS dfmea_rows (
     created_at DOUBLE PRECISION NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dfmea_rows_run ON dfmea_rows(run_id);
+
+-- 数字人模板（design §16）：把「一次性 seed 脚本」沉淀为**可复用的六元组蓝图**。
+-- 模板 = 身份骨架 + 锚点 + 本体条目 + 动作清单 + **填空槽位**；用户选模板、
+-- 填槽位即可生成一个完整数字人。渲染是确定性的（占位符替换），不经过 LLM。
+-- 动作只存 `builtin_name`，input_schema 从 actions.BUILTIN_ACTIONS 取（单一事实源）。
+CREATE TABLE IF NOT EXISTS persona_templates (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,                       -- 模板标识（英文小写下划线）
+    label TEXT NOT NULL,                             -- 显示名
+    description TEXT,
+    category TEXT NOT NULL DEFAULT 'general',        -- general | domain_expert
+    slots JSONB NOT NULL DEFAULT '[]'::jsonb,        -- 填空项 [{key,label,required,default,placeholder,hint}]
+    blueprint JSONB NOT NULL DEFAULT '{}'::jsonb,    -- 蓝图（含 {{slot}} 占位符）
+    builtin BOOLEAN NOT NULL DEFAULT FALSE,          -- 内置模板不可删
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at DOUBLE PRECISION NOT NULL
+);
 
 -- chunk 内容类型词表（design §11）：用户可自定义；builtin 与 unknown 不可删。
 -- 每个 type 内嵌默认两维度，chunk 落库时由此确定性裁决（LLM 只提名 type）。

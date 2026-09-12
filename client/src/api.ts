@@ -725,3 +725,56 @@ export const getDfmeaRows = (runId?: number) =>
   api<{ rows: DfmeaRow[] }>(`/api/dfmea/rows${runId ? `?run_id=${runId}` : ''}`)
 export const getDfmeaPending = (runId?: number) =>
   api<{ pending: DfmeaPending[] }>(`/api/dfmea/pending${runId ? `?run_id=${runId}` : ''}`)
+
+// ---- 数字人模板（design §16）----
+// 选模板 + 填槽位 → 生成完整数字人（身份 + 锚点 + 本体 + 动作）。
+// 渲染是确定性的（不经过 LLM）；动作的 input_schema 由后端从注册表取。
+export interface PersonaTemplateSlot {
+  key: string
+  label: string
+  required?: boolean
+  default?: string
+  placeholder?: string
+  hint?: string
+  /** "ontology" 表示该槽位是多行「类型|名称|定义」文本，会被解析成本体条目 */
+  type?: string
+}
+export interface PersonaTemplate {
+  id: number
+  code: string
+  label: string
+  description: string | null
+  category: string
+  slots: PersonaTemplateSlot[]
+  blueprint: Record<string, any>
+  builtin: boolean
+  status: string
+  stats: { anchors: number; ontology: number; actions: number }
+}
+export interface TemplateRender {
+  ok: boolean
+  errors?: string[]
+  name?: string
+  mission?: string
+  description?: string
+  prompt?: string
+  keywords?: string[]
+  anchors?: any[]
+  ontology?: any[]
+  actions?: any[]
+}
+
+export const getPersonaTemplates = (activeOnly = false) =>
+  api<{ templates: PersonaTemplate[] }>(
+    `/api/persona-templates${activeOnly ? '?active_only=true' : ''}`)
+export const previewPersonaTemplate = (id: number, values: Record<string, string>) =>
+  api<TemplateRender>(`/api/persona-templates/${id}/preview`,
+    { method: 'POST', body: JSON.stringify({ values }) })
+export const instantiatePersonaTemplate = (
+  id: number, values: Record<string, string>, status = 'approved') =>
+  api<{ ok: boolean; identity_id: number; name: string; category: string
+        counts: { anchors: number; ontology: number; actions_bound: number } }>(
+    `/api/persona-templates/${id}/instantiate`,
+    { method: 'POST', body: JSON.stringify({ values, status }) })
+export const deletePersonaTemplate = (id: number) =>
+  api<{ ok: boolean }>(`/api/persona-templates/${id}`, { method: 'DELETE' })

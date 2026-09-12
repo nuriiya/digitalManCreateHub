@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research, chunk_types, fmea
+from . import db, jobs, settings_store, ingest, loaders, ontology, orchestration, assembly, llm, embedding, identity, chat, auth, mcp, actions, pipeline, capability, trainer, backup, research, chunk_types, fmea, persona_templates
 
 
 def _sha256(text: str) -> str:
@@ -1276,6 +1276,112 @@ def nominate_persona_actions(body: ActionNominateBody):
 def set_persona_action_status(action_id: int, body: ActionStatusBody):
     if not actions.set_action_status(db.get_conn(), action_id, body.status):
         return JSONResponse({"error": "invalid status or id"}, status_code=400)
+    return {"ok": True}
+
+
+# ---------------- 数字人模板（design §16）----------------
+# 把「一次性 seed 脚本」沉淀为可复用蓝图：选模板 + 填槽位 → 生成完整数字人
+# （身份 + 锚点 + 本体 + 动作）。渲染是确定性的，**不经过 LLM**。
+
+class TemplateInstantiateBody(BaseModel):
+    values: dict = {}
+    status: str = "approved"
+    name: str | None = None          # 便捷：等价于 values["name"]
+
+
+class TemplatePreviewBody(BaseModel):
+    values: dict = {}
+
+
+class TemplateCreateBody(BaseModel):
+    code: str
+    label: str
+    category: str = "domain_expert"
+    description: str = ""
+    slots: list = []
+    blueprint: dict = {}
+
+
+class TemplateUpdateBody(BaseModel):
+    label: str | None = None
+    description: str | None = None
+    category: str | None = None
+    slots: list | None = None
+    blueprint: dict | None = None
+    status: str | None = None
+
+
+@app.get("/api/persona-templates")
+def list_persona_templates(active_only: bool = False):
+    return {"templates": persona_templates.list_templates(db.get_conn(),
+                                                          active_only)}
+
+
+@app.get("/api/persona-templates/{template_id}")
+def get_persona_template(template_id: int):
+    t = persona_templates.get_by_id(db.get_conn(), template_id)
+    if not t:
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    return {"template": t}
+
+
+@app.post("/api/persona-templates/{template_id}/preview")
+def preview_persona_template(template_id: int, body: TemplatePreviewBody):
+    """按槽位值渲染蓝图（**不落库**），供 UI 实时预览「将生成什么」。"""
+    conn = db.get_conn()
+    t = persona_templates.get_by_id(conn, template_id)
+    if not t:
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    return persona_templates.render(t, body.values or {})
+
+
+@app.post("/api/persona-templates/{template_id}/instantiate")
+def instantiate_persona_template(template_id: int,
+                                 body: TemplateInstantiateBody):
+    """按模板 + 槽位值创建（幂等）一个完整数字人。"""
+    conn = db.get_conn()
+    t = persona_templates.get_by_id(conn, template_id)
+    if not t:
+        return JSONResponse({"error": "template not found"}, status_code=404)
+    if t.get("status") != "active":
+        return JSONResponse({"error": "模板已停用"}, status_code=400)
+    values = dict(body.values or {})
+    if body.name:
+        values["__name__"] = body.name
+    r = persona_templates.instantiate(conn, t, values, status=body.status)
+    if not r.get("ok"):
+        return JSONResponse({"error": "；".join(r.get("errors") or ["创建失败"])},
+                            status_code=400)
+    return r
+
+
+@app.post("/api/persona-templates")
+def create_persona_template(body: TemplateCreateBody):
+    try:
+        t = persona_templates.create_template(
+            db.get_conn(), body.code, body.label, body.category,
+            body.description, body.slots, body.blueprint)
+    except persona_templates.TemplateError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "template": t}
+
+
+@app.put("/api/persona-templates/{template_id}")
+def update_persona_template(template_id: int, body: TemplateUpdateBody):
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        t = persona_templates.update_template(db.get_conn(), template_id, patch)
+    except persona_templates.TemplateError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "template": t}
+
+
+@app.delete("/api/persona-templates/{template_id}")
+def delete_persona_template(template_id: int):
+    try:
+        persona_templates.delete_template(db.get_conn(), template_id)
+    except persona_templates.TemplateError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True}
 
 

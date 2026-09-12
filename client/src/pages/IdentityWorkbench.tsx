@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import {
   getIdentities, nominateIdentities, setIdentityStatus, deleteIdentity,
   updateIdentity, setAnchorStatus, updateAnchor, addAnchor, createIdentity,
@@ -6,7 +6,9 @@ import {
   dismissAsmItem, getPersonaOntology, getIdentityMcp, syncIdentityMcp,
   bindIdentityMcp, unbindIdentityMcp, getAvailableMcp,
   runBenchmark, getBenchmark, rejectBenchChange, mergeBenchmark, rollbackBenchmark,
+  previewPersonaTemplate, instantiatePersonaTemplate,
   type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
+  type PersonaTemplate, type TemplateRender,
 } from '../api'
 import { useToast } from '../Toast'
 import { useWorkbench } from '../hooks/useWorkbench'
@@ -47,6 +49,8 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     mcpOpen, setMcpOpen, availableMcp, mcpBinding, setMcpBinding,
     selectedId, setSelectedId, detailTab, setDetailTab, filterMode, setFilterMode,
     listQ, setListQ, wizardStep, setWizardStep, toast,
+    templates, tplMode, setTplMode, tplId, setTplId, tplValues, setTplValues,
+    tplPreview, setTplPreview,
     approved, alternates, approvedAnchors, reload, reloadAsm, reloadBench,
     setBusy, setEditing,
   } = useWorkbench(refreshKey)
@@ -115,6 +119,46 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
       setCreating(false)
       reload()
     } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  // ---- 从模板创建（design §16）：选模板 → 填空位 → 实时预览 → 一键生成 ----
+  const curTpl = useMemo(
+    () => templates.find((t) => t.id === tplId) ?? null, [templates, tplId])
+
+  const openTplWizard = () => {
+    setCreating(false)
+    setTplId(templates[0]?.id ?? null)
+    setTplValues({})
+    setTplPreview(null)
+    setTplMode(true)
+  }
+  const pickTemplate = (id: number) => {
+    setTplId(id)
+    setTplValues({})
+    setTplPreview(null)
+  }
+  // 实时预览：防抖 300ms，避免每敲一个键都打后端
+  useEffect(() => {
+    if (!tplMode || !tplId) return
+    const t = setTimeout(() => {
+      previewPersonaTemplate(tplId, tplValues)
+        .then(setTplPreview).catch(() => setTplPreview(null))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [tplMode, tplId, tplValues])
+
+  const doInstantiate = async () => {
+    if (!tplId) return
+    setBusy(true)
+    try {
+      const r = await instantiatePersonaTemplate(tplId, tplValues)
+      const c = r.counts
+      toast(`已按模板创建「${r.name}」：本体 ${c.ontology} 条 / 锚点 ${c.anchors} 个`
+        + ` / 动作 ${c.actions_bound} 个`, 'ok')
+      setTplMode(false)
+      reload()
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setBusy(false) }
   }
 
   const anchorAct = async (id: number, status: string) => {
@@ -776,10 +820,11 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
             {wizardStep === 1 ? (
               <>
                 <div className="dlg-tip">
-                  选择来源。三种来源最终都进入同一个列表：
+                  选择来源。四种来源最终都进入同一个列表：
                   <b>自主提名</b>从已入库语料的高频词提名身份（完成后在左侧「待审」中审批）；
                   <b>图谱种子</b>从本体候选节点创建；
-                  <b>空白模板</b>手动填写身份。
+                  <b>套用模板</b>选模板填空位，一次生成<b>身份 + 锚点 + 本体 + 动作</b>；
+                  <b>空白</b>只填身份。
                 </div>
                 <div className="wb-wizard-opts">
                   <button className="btn ghost" disabled={busy || !chunks}
@@ -790,8 +835,12 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
                   <button className="btn ghost" onClick={() => { setCreating(false); onOpenGraph?.() }}>
                     ② 从图谱种子（去「本体图谱」页勾选候选节点后创建）
                   </button>
+                  <button className="btn green" onClick={openTplWizard}
+                    title="选一个模板，填几个空位即可生成完整数字人（含本体与动作）">
+                    ③ 套用模板（含本体 + 锚点 + 动作）
+                  </button>
                   <button className="btn" onClick={() => setWizardStep(2)}>
-                    ③ 空白模板（手动填写身份）
+                    ④ 空白（只填身份，本体后续再补）
                   </button>
                 </div>
                 <div className="dlg-actions">
@@ -835,6 +884,82 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 套用模板创建（design §16）：选模板 → 填空位 → 实时预览 → 一键生成 */}
+      {tplMode && (
+        <div className="dlg-overlay" onClick={() => setTplMode(false)}>
+          <div className="dlg" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+            <div className="dlg-head">套用模板创建数字人</div>
+            <div className="dlg-tip">
+              选一个模板，填写空位即可生成<b>完整</b>数字人：身份 + 锚点 + 本体段 + 动作绑定。
+              渲染是确定性的（不经过 LLM）—— 与内置 seed 脚本走的是<b>同一条路径</b>。
+            </div>
+
+            <label className="dlg-field">
+              <span>模板</span>
+              <select value={tplId ?? ''}
+                onChange={(e) => pickTemplate(Number(e.target.value))}>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}（本体 {t.stats.ontology} · 锚点 {t.stats.anchors} · 动作 {t.stats.actions}）
+                  </option>
+                ))}
+              </select>
+              {curTpl?.description && <div className="hint">{curTpl.description}</div>}
+            </label>
+
+            {curTpl?.slots.map((s) => (
+              <label className="dlg-field" key={s.key}>
+                <span>
+                  {s.label}{s.required ? ' *' : ''}
+                  {s.type === 'ontology' ? '（每行：类型|名称|定义）' : ''}
+                </span>
+                {s.type === 'ontology' ? (
+                  <textarea rows={6} placeholder={s.placeholder}
+                    value={tplValues[s.key] ?? ''}
+                    onChange={(e) => setTplValues({ ...tplValues, [s.key]: e.target.value })} />
+                ) : (
+                  <input placeholder={s.placeholder} value={tplValues[s.key] ?? ''}
+                    onChange={(e) => setTplValues({ ...tplValues, [s.key]: e.target.value })} />
+                )}
+                {s.hint && <div className="hint">{s.hint}</div>}
+              </label>
+            ))}
+
+            {/* 实时预览：明确「将生成什么」，避免盲填 */}
+            {tplPreview && (
+              <div style={{
+                border: '1px solid rgba(156,124,255,0.4)', borderRadius: 8,
+                padding: 10, margin: '6px 0', background: 'rgba(42,37,64,0.3)',
+              }}>
+                <b>将生成</b>
+                {tplPreview.ok ? (
+                  <>
+                    <div className="note" style={{ marginTop: 4 }}>
+                      「{tplPreview.name}」 · 本体 {tplPreview.ontology?.length ?? 0} 条 ·
+                      锚点 {tplPreview.anchors?.length ?? 0} 个 ·
+                      动作 {tplPreview.actions?.length ?? 0} 个
+                    </div>
+                    <div className="note" style={{ marginTop: 4 }}>使命：{tplPreview.mission}</div>
+                  </>
+                ) : (
+                  <div className="note" style={{ color: '#FF6B6B', marginTop: 4 }}>
+                    {(tplPreview.errors || ['无法渲染']).join('；')}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="dlg-actions">
+              <button className="btn ghost small" onClick={() => setTplMode(false)}>取消</button>
+              <button className="btn green small" onClick={doInstantiate}
+                disabled={busy || !tplId || !tplPreview?.ok}>
+                创建数字人
+              </button>
+            </div>
           </div>
         </div>
       )}

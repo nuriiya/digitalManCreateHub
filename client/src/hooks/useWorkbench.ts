@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getIdentities, getAssembly, getPersonaOntology, getBenchmark, getAvailableMcp,
+  getPersonaTemplates,
   type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
+  type PersonaTemplate, type TemplateRender,
 } from '../api'
 import { useToast } from '../Toast'
 
@@ -53,6 +55,12 @@ export function useWorkbench(refreshKey: number) {
   const [filterMode, setFilterMode] = useState('all')   // all | approved | pending
   const [listQ, setListQ] = useState('')
   const [wizardStep, setWizardStep] = useState(1)
+  // 从模板创建（design §16）：模板列表 + 当前选择 + 槽位值 + 实时预览
+  const [templates, setTemplates] = useState<PersonaTemplate[]>([])
+  const [tplMode, setTplMode] = useState(false)
+  const [tplId, setTplId] = useState<number | null>(null)
+  const [tplValues, setTplValues] = useState<Record<string, string>>({})
+  const [tplPreview, setTplPreview] = useState<TemplateRender | null>(null)
 
   const { toast } = useToast()
 
@@ -100,6 +108,11 @@ export function useWorkbench(refreshKey: number) {
     getAvailableMcp().then((r) => setAvailableMcp(r.mcp ?? [])).catch(() => { })
   }, [availableMcp.length])
 
+  // 数字人模板（design §16）：进「新建数字人」前预取一次
+  useEffect(() => {
+    getPersonaTemplates(true).then((r) => setTemplates(r.templates ?? [])).catch(() => { })
+  }, [refreshKey])
+
   return {
     idents, setIdents, busy, setBusy,
     editing, setEditing, draft, setDraft, adding, setAdding, newAnchor, setNewAnchor,
@@ -113,6 +126,8 @@ export function useWorkbench(refreshKey: number) {
     mcpBinding, setMcpBinding,
     selectedId, setSelectedId, detailTab, setDetailTab,
     filterMode, setFilterMode, listQ, setListQ, wizardStep, setWizardStep,
+    templates, tplMode, setTplMode, tplId, setTplId, tplValues, setTplValues,
+    tplPreview, setTplPreview,
     toast, approved, alternates, approvedAnchors,
     reload, reloadAsm, reloadBench,
   }

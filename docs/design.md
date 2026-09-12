@@ -1,6 +1,6 @@
 # 数字人全链路平台 · 系统设计（design.md）
 
-> **文档版本**：v1.4（2026-09-11）· 状态：**§11 / §12 / §13 已实现；§10 协议层 + JSON 解析器收敛已实现（业务链路切换未做）；§15 设计已定、未实现。逐项见 §9.6**
+> **文档版本**：v1.5（2026-09-12）· 状态：**§11 / §12 / §13 / §15 / §16 已实现；§10 协议层 + JSON 解析器收敛已实现（业务链路切换未做）。逐项见 §9.6**
 > **配套文档**：需求见 `docs/requirement.md`；测试指标见 `docs/test-metrics.md`（Test Metrics）。
 > **维护约定（硬性）**：任何设计变更（架构/流程/实体/指标/入口）都必须**同步更新**本文件与 `docs/requirement.md`、`docs/test-metrics.md` 三份文档的对应条目；代码提交前先改文档，或在同一提交内完成（详见 §14）。
 
@@ -1459,6 +1459,87 @@ LLM 提名产出，代码只做校验与落库，未硬编码任何拓扑。
 **状态**：**已实现（2026-09-11）**。需求编号 R-17；指标 test-metrics §T-K。
 
 ---
+
+## 16. 数字人模板（六元组蓝图 + 填空槽位）—— 已实现（2026-09-12）
+
+> **编号说明**：§14 是收尾约定、编号冻结，新设计从 §15 起追加。
+>
+> **问题**：DFMEA 那批数字人的身份 / 本体 / 锚点 / 动作，当时是**写死在一个
+> seed 脚本**里的（`seed_dfmea_identities.py`，确定性写入、不经过 LLM）。这带来
+> 两个后果：① 平台上「新建数字人」只能得到**身份 + 可选动作提名**，本体与锚点要
+> 手工补 —— 想做"带方法论本体的数字人"只能写脚本；② 同一种数字人在脚本与 UI
+> 之间存在**两份定义**。
+
+### 16.1 模板结构
+
+模板 = **槽位（slots）** + **蓝图（blueprint）**：
+
+| 字段 | 含义 |
+|---|---|
+| `code` | 模板标识（英文小写下划线，唯一） |
+| `slots` | 填空项 `[{key,label,required,default,placeholder,hint,type?}]` |
+| `blueprint` | 六元组蓝图 —— `mission` / `description` / `prompt` / `keywords` / `anchors` / `ontology` / `actions` / `owns`；字符串里用 `{{slot}}` 占位 |
+
+**槽位类型**：普通槽位渲染为输入框；`type="ontology"` 的槽位渲染为多行文本，
+每行 `类型|名称|定义`，解析后**追加**到模板自带本体之后 —— 于是「通用部件专家」
+一个模板就能派生任意领域的专家，不必为每个领域硬编码一个模板。
+
+**动作只存 `builtin_name`**：`input_schema` 从 `actions.BUILTIN_ACTIONS` 取。
+（早前 seed 脚本逐个重定义 schema，实际并不生效 —— 该重复已消除。）
+
+### 16.2 渲染与落库（确定性，不经过 LLM）
+
+```
+render(tpl, values)     槽位默认值 + 用户值 → 必填校验 → {{slot}} 递归替换 → 完整结构
+instantiate(conn, tpl)  落库：身份 + 锚点 + persona_ontology + persona_actions(approved)
+                        + 「角色 --owns--> 条目」关系；按 name 幂等（重跑不产生重复）
+```
+
+渲染全程是**字符串替换 + 校验**，零 LLM 调用 —— 与「代码定路径、LLM 只做节点」
+一致；因此结果**可复现**。
+
+### 16.3 与 seed 脚本的关系（单一事实源）
+
+`seed_dfmea_identities.py` 已改为**薄壳**：只声明「用哪个模板 + 填什么槽位值」，
+调用 `persona_templates.instantiate`。于是：
+
+- 内置 seed 与 UI「新建数字人 → 套用模板」走的是**同一条代码路径**；
+- DFMEA 那批数字人的定义只存在**一份**（在 `app/persona_templates.py`）；
+- 4 个部件专家的领域知识作为 `domain_ontology` 槽位值传入，与用户在 UI 填写的是同一个入口。
+
+### 16.4 内置模板与 API
+
+内置 4 个（`dfmea_engineer` / `dfmea_reviewer` / `part_expert` / `knowledge_ingestor`），
+**可改不可删**（与 `chunk_types` 词表同一策略）；用户可自建模板。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/persona-templates` | 列表（含 slots 与 `stats`：本体/锚点/动作条数） |
+| GET | `/api/persona-templates/{id}` | 详情 |
+| POST | `/api/persona-templates/{id}/preview` | 按槽位值渲染（**不落库**），供 UI 实时预览 |
+| POST | `/api/persona-templates/{id}/instantiate` | 按槽位值创建（幂等）完整数字人 |
+| POST/PUT/DELETE | `/api/persona-templates[/{id}]` | 用户自定义模板 CRUD |
+
+**前端**：数字人工作台「＋ 新建数字人」第 1 步现有四种来源（自主提名 / 图谱种子 /
+**套用模板** / 空白）。选「套用模板」后进入模板弹窗：选模板 → 按 slots 动态渲染
+输入框 → **防抖 300ms 实时预览**（显示"将生成：本体 N 条 · 锚点 N 个 · 动作 N 个"
+与替换后的使命）→ 一键生成。
+
+### 16.5 落地位置
+
+| 落地位置 | 内容 |
+|---|---|
+| `backend/app/persona_templates.py`（新模块） | 内置模板数据 + `ensure_seed` / `render` / `instantiate` / CRUD |
+| `backend/app/db.py` | `persona_templates` 表 + 启动时 `ensure_seed` |
+| `backend/app/main.py` | 7 个路由（列表/详情/预览/实例化/增改删） |
+| `backend/seed_dfmea_identities.py` | 改为模板驱动（薄壳，不再是第二份定义） |
+| `client/src/pages/IdentityWorkbench.tsx` + `hooks/useWorkbench.ts` + `api.ts` | 第 1 步加「③ 套用模板」+ 模板弹窗（动态槽位 + 实时预览） |
+| `backend/scripts/verify_persona_templates.py` | 验证脚本（22 项断言，容器内全绿） |
+
+**状态**：**已实现（2026-09-12）**。需求编号 R-18；指标 test-metrics §T-L。
+
+---
+*v1.5（2026-09-12）新增 §16 数字人模板（六元组蓝图 + 填空槽位）；§15 DFMEA 链路落地实现。*
 *维护说明：本文档由 2026-09-09 代码库现状 + doc/ 历史设计（顶层架构、pipeline、DESIGN/DESIGN_MVP、编排示例）整理生成；所有标注「未实现」项以 §9 为准。*
 *v1.1（2026-09-10）新增 §10 统一消息协议 / §11 内容类型体系 / §12 RAG 摄取数字人 / §13 数字人工作台，并新增 §9.6 未实现清单；原 §10 设计变更流程顺延为 §14。*
 *v1.2（2026-09-11）§11 落地实现（chunk_types 词表 + 正交两维度 + mandatory 强制注入）；新增 §15 DFMEA 自动编排链路设计（含流程图与 21 项自动化缺口清单）。*
