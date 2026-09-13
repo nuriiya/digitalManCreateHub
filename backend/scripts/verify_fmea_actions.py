@@ -137,6 +137,88 @@ check("写入 2 行、拒绝 1 行",
       and r13["result"]["failed"] == 1,
       f"written={r13.get('result', {}).get('written')} failed={r13.get('result', {}).get('failed')}")
 
+print("[14] run 内幂等：同 (part, failure_mode) 重复写入不新增行")
+# 为什么必须测：pipeline 里「汇总 / 查表 / 写行」常由同一个数字人分几个节点承担，
+# 每个节点都有独立 tool-use 循环 —— 实测 WiFi 那轮同一批 29 条被写了两遍（58 行）。
+fmea.set_run_id(SENTINEL_RUN)
+dup_row = {"part": "幂等测试部件", "failure_mode": "幂等测试失效模式",
+           "severity": 5, "occurrence": 3, "detection": 4,
+           "sources": {"failure_mode": "ai_inferred"}}
+d1 = actions.execute_builtin(conn, 0, "fmea_write_row", dup_row)
+d2 = actions.execute_builtin(conn, 0, "fmea_write_row", dup_row)
+check("首次写入 ok 且未标记 updated",
+      d1.get("ok") and not d1["result"].get("updated"))
+check("二次写入复用同一行 id",
+      d2.get("ok") and d2["result"]["row_id"] == d1["result"]["row_id"],
+      f"{d1.get('result', {}).get('row_id')} vs {d2.get('result', {}).get('row_id')}")
+check("二次写入标记 updated", d2.get("ok") and d2["result"].get("updated") is True)
+n_dup = conn.execute("SELECT COUNT(*) c FROM dfmea_rows WHERE run_id=?"
+                     " AND part=?", (SENTINEL_RUN, "幂等测试部件")).fetchone()["c"]
+check("行数仍为 1（未重复落库）", n_dup == 1, f"{n_dup}")
+
+print("[15] AP 来源以表为准（值来自表 → 来源格不得标 AI 推断）")
+sod_ap = fmea.ap_lookup(conn, 8, 3, 3)
+ap_row = {"part": "AP来源测试部件", "failure_mode": "AP来源测试失效模式",
+          "severity": 8, "occurrence": 3, "detection": 3,
+          "sources": {"ap": "ai_inferred", "failure_mode": "ai_inferred"}}
+a1 = actions.execute_builtin(conn, 0, "fmea_write_row", ap_row)
+check("写入 ok", a1.get("ok"), str(a1.get("error") or ""))
+check(f"AP 取表值 {sod_ap['result']['ap']}",
+      a1.get("ok") and a1["result"]["ap"] == sod_ap["result"]["ap"],
+      str(a1.get("result", {}).get("ap")))
+check("标记 ap_src_fixed", a1.get("ok") and a1["result"].get("ap_src_fixed") is True)
+saved = conn.execute("SELECT sources FROM dfmea_rows WHERE id=?",
+                     (a1["result"]["row_id"],)).fetchone()["sources"]
+if isinstance(saved, str):
+    import json as _json
+    saved = _json.loads(saved)
+check("sources.ap 已校正为 table#ap",
+      str((saved or {}).get("ap")) == "table#ap", str((saved or {}).get("ap")))
+check("其余格来源未被改动",
+      str((saved or {}).get("failure_mode")) == "ai_inferred",
+      str((saved or {}).get("failure_mode")))
+print("[16] 非法 sources 必须优雅报错，不得抛异常")
+# 为什么必须测：LLM 可能把 sources 传成 list / 字符串（实测 2026-09-12 因此
+# 让整条 pipeline 在 7 分钟时崩掉）。原实现靠 validate_sources 兜住；若在它
+# 之前就先 `dict(...)`，异常会直接冒泡。
+for bad in (["history#1", "expert:x"], "history", 123,
+            {"failure_mode": "not_a_kind"}):
+    label = f"sources={type(bad).__name__}"
+    try:
+        rb = actions.execute_builtin(
+            conn, 0, "fmea_write_row",
+            {"part": "非法来源测试", "failure_mode": "非法来源测试失效",
+             "sources": bad})
+        check(f"{label} 返回错误而非抛异常", rb.get("ok") is False,
+              str(rb.get("error"))[:58])
+    except Exception as e:  # noqa: BLE001
+        check(f"{label} 返回错误而非抛异常", False, f"抛了 {type(e).__name__}")
+fmea.set_run_id(None)
+
+print("[17] 历史库按**部件族**检索（同类案例类比的主路径）")
+# 为什么必须测：第 4 轮实测"按中文部件名查必然 0 命中"，历史引用整体归零。
+for fam, lo in (("ANT", 2), ("RF", 2), ("PMU", 1)):
+    rf = fmea.history_query(conn, family=fam)
+    items = rf.get("result", {}).get("items", []) if rf.get("ok") else []
+    in_fam = all(str(i.get("part_no", "")).split("-")[1] == fam
+                 for i in items if "-" in str(i.get("part_no", "")))
+    check(f"family={fam} 命中 ≥{lo} 条", len(items) >= lo, f"{len(items)} 条")
+    check(f"family={fam} 结果全部属于该族", in_fam)
+check("未知族返回 0 条",
+      fmea.history_query(conn, family="ZZZ").get("result", {}).get("hits") == 0)
+ps = actions.execute_builtin(conn, 0, "fmea_part_search", {"product": "WiFi 模块"})
+fams = [p.get("analogy_family")
+        for p in (ps.get("result", {}).get("parts") or [])]
+check("部件清单每个部件都带 analogy_family",
+      bool(fams) and all(fams) and len(fams) >= 12, str(fams[:5]))
+check("analogy_family 可直接用于 family 查询（拿去就用）",
+      fmea.history_query(conn, family=fams[0]).get("result", {}).get("hits", 0) > 0,
+      f"family={fams[0]}")
+check("family 可与 keyword 组合",
+      fmea.history_query(conn, family="ANT", keyword="阻抗").get("ok") is True)
+check("三参数全空时给出可读错误",
+      fmea.history_query(conn).get("ok") is False)
+
 # ---- 清理 ----
 n = conn.execute("DELETE FROM dfmea_rows WHERE run_id=?", (SENTINEL_RUN,))
 conn.commit()

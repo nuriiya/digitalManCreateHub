@@ -1311,6 +1311,16 @@ class TemplateUpdateBody(BaseModel):
     status: str | None = None
 
 
+class TemplateFromIdentityBody(BaseModel):
+    identity_id: int
+    code: str
+    label: str = ""
+    description: str = ""
+    category: str | None = None
+    #: [{"find": "手机蓝牙模块", "key": "domain", "label": "应用领域"}]
+    parametrize: list = []
+
+
 @app.get("/api/persona-templates")
 def list_persona_templates(active_only: bool = False):
     return {"templates": persona_templates.list_templates(db.get_conn(),
@@ -1351,6 +1361,22 @@ def instantiate_persona_template(template_id: int,
     r = persona_templates.instantiate(conn, t, values, status=body.status)
     if not r.get("ok"):
         return JSONResponse({"error": "；".join(r.get("errors") or ["创建失败"])},
+                            status_code=400)
+    return r
+
+
+@app.post("/api/persona-templates/from-identity")
+def template_from_identity(body: TemplateFromIdentityBody):
+    """把一个**已存在的数字人**反向沉淀为模板（六元组蓝图 + 槽位）。
+
+    槽位 default 取原词 → 空填写渲染即还原原数字人（往返一致性，见
+    `persona_templates.identity_to_template`）。
+    """
+    r = persona_templates.identity_to_template(
+        db.get_conn(), body.identity_id, body.code, body.label,
+        body.description, body.category, body.parametrize)
+    if not r.get("ok"):
+        return JSONResponse({"error": "；".join(r.get("errors") or ["生成失败"])},
                             status_code=400)
     return r
 

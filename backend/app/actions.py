@@ -66,15 +66,32 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                          "required": ["path", "content"]},
         "category": "fs",
     },
-    # ---- DFMEA 领域动作（design §15.3 的 C1~C4）----
-    # 取值优先级链的执行体：查历史(1) → 查表(2) → 问专家(3) → AI 推断(4)。
+    # ---- DFMEA 领域动作（design §15.3 的 C0~C4）----
+    # 取值优先级链的执行体：搜部件(起) → 查历史(1) → 查表(2) → 问专家(3) → AI 推断(4)。
     # 都是**读证据 / 写结果**的知识型动作，不含任何领域判定逻辑。
+    "fmea_part_search": {
+        "name": "搜索部件清单",
+        "description": ("自主搜索待分析产品的**子系统清单**（分析起点）：返回各子系统的"
+                        "功能/工况/关键词与「可类比的历史部件族」，以及历史库里现有案例的"
+                        "部件族统计。**不含失效模式** —— 失效模式必须由你自行推导"),
+        "input_schema": {"type": "object",
+                         "properties": {"product": {"type": "string"},
+                                        "query": {"type": "string"},
+                                        "limit": {"type": "integer"}},
+                         "required": ["product"]},
+    },
     "fmea_history_query": {
         "name": "查询历史 FMEA",
-        "description": "按部件名/编号或关键词检索历史 FMEA 库，返回失效模式、后果、S/O/D、措施与出处（取值优先级第 1 级证据，每条带可引用编号）",
+        "description": ("检索历史 FMEA 库（取值优先级第 1 级证据，每条带可引用编号）。"
+                        "三种查法：① **family —— 按部件族查**（如 family=\"ANT\" / "
+                        "\"RF\" / \"PMU\"，取值来自「搜索部件清单」返回的 "
+                        "analogy_family）；**目标产品在库里没有直接记录时，用它对每个"
+                        "子系统做同类案例类比**；② part 按部件名/编号；③ keyword "
+                        "按失效模式 / 原因 / 后果的文本"),
         "input_schema": {"type": "object",
                          "properties": {"part": {"type": "string"},
-                                        "keyword": {"type": "string"}},
+                                        "keyword": {"type": "string"},
+                                        "family": {"type": "string"}},
                          "required": []},
     },
     "fmea_ap_table": {
@@ -164,7 +181,9 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_read_file(conn, identity_id, args)
     if builtin_name == "write_file":
         return _exec_write_file(conn, identity_id, args)
-    # DFMEA 领域动作（design §15.3 C1~C4）
+    # DFMEA 领域动作（design §15.3 C0~C4）
+    if builtin_name == "fmea_part_search":
+        return _exec_fmea_part_search(conn, args)
     if builtin_name == "fmea_history_query":
         return _exec_fmea_history_query(conn, args)
     if builtin_name == "fmea_ap_table":
@@ -177,18 +196,47 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
 
 
 def _exec_ontology_retrieve(conn, identity_id: int, query: str) -> dict:
+    """在本体段检索相关条目。
+
+    匹配策略（自审 2026-09-12 修）：原实现是「**整串** query 必须包含在 name 或
+    definition 里，或 name 是 query 的子串」—— 但调用方（专家数字人）的 query 是
+    **多关键词拼接**（如 `"供电 LDO 去耦 浪涌 失效模式 机理"`），永远不可能整体
+    落进短的 name，于是**恒返回 0 条**。实测 WiFi 那轮供电专家因此报告
+    「我的知识库里没有这方面内容」，进而拖垮子系统覆盖率。
+
+    现改为**分词 + 双向包含 + 打分排序**：整串命中权重最高，词级命中次之
+    （命中 name 高于命中 definition），按分排序取前 10。
+    """
+    import re as _re
     q = (query or "").strip().lower()
     rows = conn.execute(
         "SELECT name, definition FROM persona_ontology"
         " WHERE identity_id=? AND status='active' ORDER BY id",
         (identity_id,)).fetchall()
-    items = []
+    if not q:
+        return {"ok": True, "result": {"hits": 0, "items": []}}
+    # 查询分词：空格 / 常见标点切分；丢弃单字（噪声大、易误命中）
+    terms = [t for t in _re.split(r"[\s,，、;；/|·:：()（）\[\]【】]+", q)
+             if len(t) >= 2]
+    scored = []
     for r in rows:
         nm = (r["name"] or "").lower()
         df = (r["definition"] or "").lower()
-        if q and (q in nm or q in df or (len(nm) >= 3 and nm in q)):
-            items.append({"name": r["name"], "definition": r["definition"]})
-    return {"ok": True, "result": {"hits": len(items), "items": items[:10]}}
+        score = 0
+        if q in nm or q in df:
+            score += 10                       # 整串命中
+        if len(nm) >= 3 and nm in q:
+            score += 10                       # name 被查询完整包含
+        for t in terms:
+            if t in nm:
+                score += 3                    # 词命中条目名（高相关）
+            elif t in df:
+                score += 1                    # 词命中定义（弱相关）
+        if score:
+            scored.append((score, r["name"], r["definition"]))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    items = [{"name": n, "definition": d} for _, n, d in scored[:10]]
+    return {"ok": True, "result": {"hits": len(items), "items": items}}
 
 
 def _exec_rag_retrieve(conn, query: str) -> dict:
@@ -301,13 +349,21 @@ def _exec_write_file(conn, identity_id: int, args: dict) -> dict:
     return {"ok": True, "result": {"path": path, "written": len(content)}}
 
 
-# ---------------- DFMEA 领域动作执行器（design §15.3 C1~C4） ----------------
+# ---------------- DFMEA 领域动作执行器（design §15.3 C0~C4） ----------------
 # 薄封装：领域逻辑在 fmea.py（确定性数据访问 + 来源裁决），这里只做参数搬运。
+
+def _exec_fmea_part_search(conn, args: dict) -> dict:
+    from . import fmea
+    a = args or {}
+    return fmea.part_search(conn, a.get("product", ""), a.get("query", ""),
+                            a.get("limit") or 30)
+
 
 def _exec_fmea_history_query(conn, args: dict) -> dict:
     from . import fmea
     a = args or {}
-    return fmea.history_query(conn, a.get("part", ""), a.get("keyword", ""))
+    return fmea.history_query(conn, a.get("part", ""), a.get("keyword", ""),
+                              a.get("family", ""))
 
 
 def _exec_fmea_ap_table(conn, args: dict) -> dict:
@@ -666,6 +722,8 @@ def _match_action(conn, identity_id: int, name: str):
 _ARG_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
     ("ask_expert", "question"): ("query", "q", "text", "prompt", "ask"),
     ("fmea_history_query", "part"): ("query", "q", "part_name"),
+    ("fmea_history_query", "family"): ("family_name", "part_family", "族",
+                                       "部件族", "part_type"),
     ("fmea_write_row", "failure_mode"): ("mode", "failure", "failure_mode_name"),
     ("fmea_write_row", "sources"): ("source", "source_map"),
 }

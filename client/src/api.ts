@@ -778,3 +778,22 @@ export const instantiatePersonaTemplate = (
     { method: 'POST', body: JSON.stringify({ values, status }) })
 export const deletePersonaTemplate = (id: number) =>
   api<{ ok: boolean }>(`/api/persona-templates/${id}`, { method: 'DELETE' })
+export const createPersonaTemplate = (body: {
+  code: string; label: string; category?: string; description?: string
+  slots?: any[]; blueprint?: any
+}) => api<{ ok: boolean; template: PersonaTemplate }>(
+  '/api/persona-templates', { method: 'POST', body: JSON.stringify(body) })
+export const updatePersonaTemplate = (id: number, patch: {
+  label?: string; description?: string; category?: string
+  slots?: any[]; blueprint?: any; status?: string
+}) => api<{ ok: boolean; template: PersonaTemplate }>(
+  `/api/persona-templates/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
+/** 把一个已存在的数字人反向沉淀为模板（design §16.5）。 */
+export const templateFromIdentity = (body: {
+  identity_id: number; code: string; label?: string; description?: string
+  category?: string
+  parametrize?: { find: string; key: string; label?: string }[]
+}) => api<{ ok: boolean; template: PersonaTemplate; skipped_actions?: string[]
+           counts: { anchors: number; ontology: number; actions: number; slots: number } }>(
+  '/api/persona-templates/from-identity',
+  { method: 'POST', body: JSON.stringify(body) })

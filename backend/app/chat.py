@@ -523,6 +523,16 @@ def _context_window(provider: str, model: str) -> tuple[int, int | None]:
     return CONTEXT_WINDOWS.get(provider, 1_000_000), None
 
 
+_degrade_count = 0
+
+
+def _llm_fallback_enabled() -> bool:
+    """llm2 不可用时是否降级到 llm1。`LLM_FALLBACK=off` 可关闭（要求严格异源时）。"""
+    import os as _os
+    return _os.environ.get("LLM_FALLBACK", "1").lower() not in (
+        "0", "off", "false", "no", "")
+
+
 def _dispatch(provider: str, messages: list[dict], ollama_model: str | None,
               usage_out: dict | None = None) -> str:
     if provider == "ollama":
@@ -530,7 +540,24 @@ def _dispatch(provider: str, messages: list[dict], ollama_model: str | None,
                                usage_out=usage_out)
     if provider == "llm":
         return llm.chat(messages, temperature=0.5, usage_out=usage_out)
-    return llm.chat_persona(messages, usage_out=usage_out)  # llm2 (GLM 5.2)
+    # llm2（GLM 5.2）：设计上承担「异源核验」。若该通道**不可用**（余额 / 配额 /
+    # 网络），降级到 llm1 而不是让整条链路崩 —— 外部资源失败不该表现为产品故障
+    # （实测 2026-09-12：GLM 账户余额耗尽返回 429，整个 pipeline job 直接 failed）。
+    # 注意：降级意味着**异源校验降为同源**，因此这里会打印降级日志，便于事后辨别；
+    # 需要严格异源时设 `LLM_FALLBACK=off` 让异常照常抛出。
+    try:
+        return llm.chat_persona(messages, usage_out=usage_out)
+    except Exception as e:  # noqa: BLE001
+        if not _llm_fallback_enabled():
+            raise
+        global _degrade_count
+        _degrade_count += 1
+        try:
+            print(f"[llm-fallback] llm2 不可用，已降级到 llm1（第 {_degrade_count} 次）："
+                  f"{type(e).__name__}: {str(e)[:140]}", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return llm.chat(messages, temperature=0.5, usage_out=usage_out)
 
 
 # ---------------- optional RAG reference injection (「使用 RAG」开关) ----------------
@@ -1114,7 +1141,17 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
                 tool_calls.append({"name": name, "ok": False, "reason": reason})
                 lines.append(f"· 动作「{name}」被拒绝：{reason}（请改用正确的参数名）")
                 continue
-            result = actions_mod.execute_action(conn, identity_id, action_row, args)
+            try:
+                result = actions_mod.execute_action(conn, identity_id,
+                                                    action_row, args)
+            except Exception as e:  # noqa: BLE001
+                # **单个动作异常不得让整条 pipeline 崩**：实测 2026-09-12，
+                # 模型把 fmea_write_row 的 sources 传成 list，领域层抛 ValueError
+                # 一路上冒泡，整个 job 在 7 分钟时以 status=failed 结束（前面
+                # 已跑完的节点全部白做）。这里转为错误结果**回灌给模型**，
+                # 由它自行纠正参数或换一种方式完成。
+                result = {"ok": False,
+                          "error": f"动作执行异常：{type(e).__name__}: {e}"}
             tool_calls.append({"name": name, "ok": result.get("ok", False),
                                "result": (result.get("result") if result.get("ok")
                                           else result.get("error"))})

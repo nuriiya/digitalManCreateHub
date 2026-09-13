@@ -117,19 +117,99 @@ def validate_sources(sources) -> tuple[bool, list[str]]:
     return (not errs), errs
 
 
+# ---------------- 搜索部件（分析的起点） ----------------
+
+def part_search(conn, product: str = "", query: str = "",
+                limit: int = 30) -> dict:
+    """自主搜索待分析产品的**子系统清单**（design §15.7，分析起点）。
+
+    两路信息，供 DFMEA 工程师决定「分析哪些部件、每个部件去哪找证据」：
+
+      - `parts`：**部件知识库**里该产品的子系统（功能 / 工况 / 关键词 / 类比线索）。
+        `product` 留空时返回库里有哪些产品可选。
+      - `history_parts`：**历史 FMEA 库**出现过的部件编号族与条目数 —— 即
+        「现有案例」的清单，据此判断哪些子系统能找到同类历史证据、哪些得靠
+        专家或推断。
+
+    **刻意不返回失效模式**：失效模式必须由 DFMEA 工程师自行推导（领域推理 +
+    同类案例类比）。本动作只回答「有哪些部件」「历史上哪一族可类比」。
+    """
+    product = (product or "").strip()
+    query = (query or "").strip()
+    if not product:
+        prods = [r["product"] for r in conn.execute(
+            "SELECT DISTINCT product FROM fmea_parts ORDER BY product").fetchall()]
+        return {"ok": True, "result": {
+            "products": prods, "parts": [], "history_parts": [], "count": 0,
+            "hint": "请指定 product（如「WiFi 模块」）后再搜索"}}
+    clauses, params = ["product = ?"], [product]
+    if query:
+        clauses.append("(subsystem LIKE ? OR function LIKE ? OR condition LIKE ?"
+                       " OR ? = ANY(keywords))")
+        params += [f"%{query}%"] * 3 + [query]
+    try:
+        lim = max(1, min(int(limit or 30), 60))
+    except Exception:  # noqa: BLE001
+        lim = 30
+    rows = conn.execute(
+        "SELECT id, subsystem, function, condition, keywords, note"
+        " FROM fmea_parts WHERE " + " AND ".join(clauses) +
+        " ORDER BY id LIMIT ?", params + [lim]).fetchall()
+    # 额外抽出 `analogy_family`（如 `ANT`）：这是**可直接喂给 history_query 的
+    # 族代码**，让"类比推导"从"靠模型从提示文字里抠缩写"变成"拿去就用"。
+    import re as _re
+    parts = []
+    for r in rows:
+        note = r["note"] or ""
+        m = _re.search(r"BT-([A-Z]+)", note)
+        parts.append({"subsystem": r["subsystem"], "function": r["function"],
+                      "condition": r["condition"],
+                      "keywords": list(r["keywords"] or []),
+                      "analogy_family": m.group(1) if m else "",
+                      "analogy_hint": note})
+    # 历史库里出现过的部件编号族（现有案例的可类比落点）
+    hist = conn.execute(
+        "SELECT split_part(part_no, '-', 2) AS fam, COUNT(*) AS n"
+        " FROM fmea_cases WHERE part_no <> '' GROUP BY 1 ORDER BY 1").fetchall()
+    hist_parts = [{"family": h["fam"], "cases": h["n"]} for h in hist]
+    return {"ok": True, "result": {
+        "product": product, "parts": parts, "count": len(parts),
+        "history_parts": hist_parts,
+        "history_total": sum(h["cases"] for h in hist_parts),
+        "next_step": "对每个子系统调用 fmea_history_query(family=该部件的 "
+                     "analogy_family) 取回同类历史案例，再据此推导 S/O/D"}}
+
+
 # ---------------- 查历史 FMEA ----------------
 
-def history_query(conn, part: str = "", keyword: str = "",
+def history_query(conn, part: str = "", keyword: str = "", family: str = "",
                   limit: int = 8) -> dict:
-    """按部件/编号或关键词检索历史 FMEA 条目（取值优先级链第 1 级）。
+    """检索历史 FMEA 条目（取值优先级链第 1 级）。
+
+    三种查法可单用或组合：
+
+      - `part`：按部件名/编号模糊匹配；
+      - `keyword`：按失效模式 / 原因 / 后果的文本匹配；
+      - **`family`：按「部件族」检索**（`part_no` 的第 2 段，如 `ANT` / `RF` /
+        `PMU` / `CLK` / `SW` / `CON` / `EMC`）—— 这是**同类案例类比的主路径**。
+
+    为什么必须有 `family`（2026-09-12 实测）：目标产品（WiFi 模块）在库里没有
+    直接记录时，DFMEA 工程师知道"WiFi 天线 ← ANT 族"（`part_search` 给了提示），
+    但按 `part="天线"` 查**必然 0 命中** —— 历史库的 `part` 是「手机蓝牙模块」、
+    `part_no` 是英文编号 `BT-ANT-01`，中英文两边都对不上。实测第 4 轮因此
+    **历史引用归零**、整表退化成 AI 推断（ai_new 占比 38%），复核门只能记观察项。
+    按族查询才是这条链路的正确入口。
 
     每条返回带 `ref`（形如 `history#12`）—— 供 DFMEA 逐格标注来源时引用，
     使「这一格从哪来」可被复核门逐条追溯。
     """
     part = (part or "").strip()
     keyword = (keyword or "").strip()
-    if not part and not keyword:
-        return {"ok": False, "error": "part 与 keyword 至少提供一个"}
+    family = (family or "").strip().upper()
+    if not part and not keyword and not family:
+        return {"ok": False,
+                "error": "part / keyword / family 至少提供一个"
+                         "（类比推导建议用 family，如 family='ANT'）"}
     clauses, params = [], []
     if part:
         clauses.append("(part LIKE ? OR part_no LIKE ?)")
@@ -138,6 +218,9 @@ def history_query(conn, part: str = "", keyword: str = "",
         clauses.append("(failure_mode LIKE ? OR failure_cause LIKE ?"
                        " OR failure_effect LIKE ?)")
         params += [f"%{keyword}%"] * 3
+    if family:
+        clauses.append("upper(split_part(part_no, '-', 2)) = ?")
+        params.append(family)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     try:
         lim = max(1, min(int(limit or 8), 20))
@@ -251,21 +334,44 @@ def _as_int(v):
         return None
 
 
+def _src_base(s) -> str:
+    s = str(s or "").strip()
+    if s.startswith(SRC_EXPERT_PREFIX):
+        return "expert"
+    return s.split("#", 1)[0]
+
+
 def write_row(conn, row: dict, run_id=None) -> dict:
-    """写一行 DFMEA 记录。来源非法即拒绝；AP 一律以 AP 表为准。"""
+    """写一行 DFMEA 记录。来源非法即拒绝；**AP 与 AP 来源都以表为准**。
+
+    **run 内幂等（(part, failure_mode) 唯一）**：同一 run 下同一 (part,
+    failure_mode) 已存在则**更新**该行，不新增重复行。为什么必须做：pipeline 里
+    「汇总 / 查表 / 写行」常由同一个数字人（DFMEA 工程师）分几个节点承担，每个
+    节点都有独立的 tool-use 循环 —— 实测 WiFi 那轮同一批 29 条被写了**两遍**
+    （58 行，row_id 34–62 与 63–91），复核门直接判 FAIL（row_id 区间不一致、
+    下游无法确定以哪套为准）。这是**数据完整性**问题，放在领域层修，不靠提示词自觉。
+
+    **AP 来源校正**：AP 由 AP 表查出时，来源格必须标 `table#ap` —— 否则会出现
+    「值来自表、却标 ai_inferred」的自相矛盾（实测被复核门抓为 P1）。
+    """
     row = row or {}
     fm = (row.get("failure_mode") or "").strip()
     if not fm:
         return {"ok": False, "error": "failure_mode 不能为空"}
-    sources = row.get("sources") or {}
-    ok, errs = validate_sources(sources)
+    # 先校验再取副本 —— `validate_sources` 负责判定「不是对象」并返回可读错误；
+    # 若在它之前就 `dict(...)`，模型把 sources 传成 list 时会直接抛 ValueError
+    # 冒泡出去（自审 2026-09-12：这个顺序错误让整条 pipeline 在 7 分钟内崩掉）。
+    raw_sources = row.get("sources")
+    ok, errs = validate_sources(raw_sources)
     if not ok:
         return {"ok": False, "error": "来源标注非法：" + "；".join(errs)}
+    sources = dict(raw_sources)
 
     s, o, d = _as_int(row.get("severity")), _as_int(row.get("occurrence")), \
         _as_int(row.get("detection"))
     ap = (row.get("ap") or "").strip().upper() or None
     ap_corrected = False
+    ap_src_fixed = False
     # AP 以表为准（S/O/D 齐备时）。查不到组合不阻断写入 —— 记为修正未生效。
     if s and o and d:
         looked = ap_lookup(conn, s, o, d)
@@ -274,26 +380,47 @@ def write_row(conn, row: dict, run_id=None) -> dict:
             if ap != table_ap:
                 ap_corrected = ap is not None
                 ap = table_ap
+            # 来源格同步以表为准：未标 / 标成 AI 推断的，一律改判 table#ap
+            if ap is not None and _src_base(sources.get("ap")) in (
+                    "", SRC_AI_INFERRED, SRC_AI_NEW):
+                sources["ap"] = f"{SRC_TABLE}#ap"
+                ap_src_fixed = True
         elif ap is None:
             return {"ok": False, "error": looked.get("error", "AP 查表失败")}
 
     rid = run_id if run_id is not None else current_run_id()
-    cur = conn.execute(
-        "INSERT INTO dfmea_rows(run_id, part, function, failure_mode,"
-        " failure_effect, severity, failure_cause, occurrence,"
-        " prevention_control, detection_control, detection, ap, action,"
-        " sources, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (rid, (row.get("part") or "").strip(), row.get("function"), fm,
-         row.get("failure_effect"), s, row.get("failure_cause"), o,
-         row.get("prevention_control"), row.get("detection_control"), d, ap,
-         row.get("action"),
-         json.dumps(sources, ensure_ascii=False), time.time()))
+    part = (row.get("part") or "").strip()
+    dup = None
+    if rid is not None:
+        dup = conn.execute(
+            "SELECT id FROM dfmea_rows WHERE run_id=? AND part=?"
+            " AND failure_mode=?", (rid, part, fm)).fetchone()
+    payload = (part, row.get("function"), fm, row.get("failure_effect"), s,
+               row.get("failure_cause"), o, row.get("prevention_control"),
+               row.get("detection_control"), d, ap, row.get("action"),
+               json.dumps(sources, ensure_ascii=False))
+    if dup:
+        conn.execute(
+            "UPDATE dfmea_rows SET part=?, function=?, failure_mode=?,"
+            " failure_effect=?, severity=?, failure_cause=?, occurrence=?,"
+            " prevention_control=?, detection_control=?, detection=?, ap=?,"
+            " action=?, sources=? WHERE id=?", payload + (dup["id"],))
+        row_id, updated = dup["id"], True
+    else:
+        cur = conn.execute(
+            "INSERT INTO dfmea_rows(run_id, part, function, failure_mode,"
+            " failure_effect, severity, failure_cause, occurrence,"
+            " prevention_control, detection_control, detection, ap, action,"
+            " sources, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rid,) + payload + (time.time(),))
+        row_id, updated = cur.lastrowid, False
     conn.commit()
     ai_new_fields = [f for f, v in sources.items()
                      if str(v).startswith(SRC_AI_NEW)]
     return {"ok": True, "result": {
-        "row_id": cur.lastrowid, "run_id": rid, "ap": ap,
-        "ap_corrected": ap_corrected,
+        "row_id": row_id, "run_id": rid, "ap": ap,
+        "updated": updated, "ap_corrected": ap_corrected,
+        "ap_src_fixed": ap_src_fixed,
         "ai_new_fields": ai_new_fields}}
 
 
@@ -306,6 +433,7 @@ def write_rows(conn, rows: list, run_id=None) -> dict:
     只是把往返次数从 N 降到 1。失败的行走 `errors` 逐条返回，不静默吞掉。
     """
     ok_ids, errs = [], []
+    n_upd = 0
     for i, row in enumerate(rows or []):
         if not isinstance(row, dict):
             errs.append({"index": i, "error": "元素必须是对象"})
@@ -313,12 +441,14 @@ def write_rows(conn, rows: list, run_id=None) -> dict:
         r = write_row(conn, row, run_id)
         if r.get("ok"):
             ok_ids.append(r["result"])
+            if r["result"].get("updated"):
+                n_upd += 1
         else:
             errs.append({"index": i,
                          "failure_mode": row.get("failure_mode"),
                          "error": r.get("error")})
     return {"ok": True, "result": {
-        "written": len(ok_ids), "failed": len(errs),
+        "written": len(ok_ids), "updated": n_upd, "failed": len(errs),
         "items": ok_ids, "errors": errs}}
 
 

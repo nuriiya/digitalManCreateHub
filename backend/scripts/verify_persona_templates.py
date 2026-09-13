@@ -38,7 +38,9 @@ check("含 dfmea_engineer / part_expert / dfmea_reviewer",
 eng = pt.get_by_code(conn, "dfmea_engineer")
 check("DFMEA 工程师模板有槽位", len(eng["slots"]) >= 2,
       f"slots={[s['key'] for s in eng['slots']]}")
-check("统计字段正确", eng["stats"]["ontology"] > 0 and eng["stats"]["actions"] == 4,
+# 用「>=」而非硬编码条数：内置模板会随平台演进增删条目（如 §15.7 给 DFMEA 工程师
+# 加了「搜索部件清单」），硬编码会让断言随功能升级而假失败。
+check("统计字段正确", eng["stats"]["ontology"] > 0 and eng["stats"]["actions"] >= 4,
       f"stats={eng['stats']}")
 
 print("[2] 槽位替换（{{domain}}）")
@@ -148,8 +150,12 @@ for sql in (
     "DELETE FROM identities WHERE name LIKE ?",
 ):
     conn.execute(sql, (PAT,))
-conn.execute("DELETE FROM persona_templates WHERE code IN"
-             " ('verifycustom', 'verifyupper')")
+# 测试模板的 code 一律以 `verify` 开头 —— 用前缀一次性清干净（含早期用例
+# `BadCode` 归一化后留下的 `badcode` 历史残留）。
+# 注意：`verify%` 必须**作为参数**传入，不能写进 SQL 字面量（`%` 会被 psycopg
+# 当成占位符报错 —— 这个坑记在项目记忆里，本次又踩了一次）。
+conn.execute("DELETE FROM persona_templates WHERE code LIKE ? OR code = ?",
+             ("verify%", "badcode"))
 conn.commit()
 left = conn.execute("SELECT COUNT(*) c FROM identities WHERE name LIKE ?",
                     (PAT,)).fetchone()["c"]

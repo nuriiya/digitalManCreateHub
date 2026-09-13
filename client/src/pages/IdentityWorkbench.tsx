@@ -6,7 +6,8 @@ import {
   dismissAsmItem, getPersonaOntology, getIdentityMcp, syncIdentityMcp,
   bindIdentityMcp, unbindIdentityMcp, getAvailableMcp,
   runBenchmark, getBenchmark, rejectBenchChange, mergeBenchmark, rollbackBenchmark,
-  previewPersonaTemplate, instantiatePersonaTemplate,
+  previewPersonaTemplate, instantiatePersonaTemplate, createPersonaTemplate,
+  updatePersonaTemplate, templateFromIdentity, deletePersonaTemplate,
   type Identity, type AsmSummary, type PersonaOntItem, type BenchSummary, type PersonaMcp,
   type PersonaTemplate, type TemplateRender,
 } from '../api'
@@ -51,6 +52,10 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     listQ, setListQ, wizardStep, setWizardStep, toast,
     templates, tplMode, setTplMode, tplId, setTplId, tplValues, setTplValues,
     tplPreview, setTplPreview,
+    saveTplFor, setSaveTplFor, saveTplDraft, setSaveTplDraft,
+    tplAdminMode, setTplAdminMode, tplEditId, setTplEditId,
+    tplEditDraft, setTplEditDraft, tplNewOpen, setTplNewOpen,
+    tplNewDraft, setTplNewDraft, reloadTemplates,
     approved, alternates, approvedAnchors, reload, reloadAsm, reloadBench,
     setBusy, setEditing,
   } = useWorkbench(refreshKey)
@@ -159,6 +164,113 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
       reload()
     } catch (e: any) { toast(e.message, 'err') }
     finally { setBusy(false) }
+  }
+
+  // ---- 存为模板（design §16.5）：把现有数字人反向沉淀为可复用模板 ----
+  const curEditTpl = useMemo(
+    () => templates.find((t) => t.id === tplEditId) ?? null, [templates, tplEditId])
+  const origBpText = useMemo(
+    () => (curEditTpl ? JSON.stringify(curEditTpl.blueprint, null, 2) : ''),
+    [curEditTpl])
+
+  const openSaveTpl = (it: Identity) => {
+    const slug = (it.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '').slice(0, 26)
+    setSaveTplFor(it)
+    setSaveTplDraft({
+      code: slug ? `my_${slug}` : `tpl_${it.id}`,
+      label: `${it.name} 模板`,
+      description: `由数字人「${it.name}」沉淀`,
+      findWord: '', slotKey: 'domain', slotLabel: '应用领域',
+    })
+  }
+  const doSaveTpl = async () => {
+    if (!saveTplFor) return
+    const findW = saveTplDraft.findWord.trim()
+    const slotK = saveTplDraft.slotKey.trim()
+    setBusy(true)
+    try {
+      const r = await templateFromIdentity({
+        identity_id: saveTplFor.id,
+        code: saveTplDraft.code.trim(),
+        label: saveTplDraft.label.trim(),
+        description: saveTplDraft.description.trim(),
+        parametrize: findW && slotK
+          ? [{ find: findW, key: slotK, label: saveTplDraft.slotLabel.trim() || slotK }]
+          : [],
+      })
+      const c = r.counts
+      toast(`已存为模板「${r.template.label}」：槽位 ${c.slots} · 本体 ${c.ontology} 条`
+        + ` · 锚点 ${c.anchors} · 动作 ${c.actions}`
+        + (r.skipped_actions?.length
+          ? `（${r.skipped_actions.length} 个非内置动作未纳入模板）` : ''), 'ok')
+      setSaveTplFor(null)
+      reloadTemplates()
+    } catch (e: any) { toast(e.message, 'err') }
+    finally { setBusy(false) }
+  }
+
+  // ---- 模板管理（编辑 / 停用 / 删除 / 新建）----
+  const openTplAdmin = () => {
+    setTplEditId(null)
+    setTplNewOpen(false)
+    setTplAdminMode(true)
+  }
+  const startEditTpl = (t: PersonaTemplate) => {
+    setTplEditId(t.id)
+    setTplEditDraft({
+      label: t.label, description: t.description || '',
+      category: t.category, status: t.status,
+      blueprintText: JSON.stringify(t.blueprint, null, 2),
+    })
+  }
+  const doUpdateTpl = async () => {
+    if (!tplEditId) return
+    const patch: any = {
+      label: tplEditDraft.label.trim(),
+      description: tplEditDraft.description,
+      category: tplEditDraft.category,
+      status: tplEditDraft.status,
+    }
+    const bt = tplEditDraft.blueprintText.trim()
+    if (bt && bt !== origBpText.trim()) {
+      try { patch.blueprint = JSON.parse(bt) }
+      catch { toast('蓝图 JSON 解析失败，请检查语法', 'err'); return }
+    }
+    try {
+      await updatePersonaTemplate(tplEditId, patch)
+      toast('模板已更新', 'ok')
+      setTplEditId(null)
+      reloadTemplates()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+  const doDeleteTpl = async (t: PersonaTemplate) => {
+    if (!confirm(`确认删除模板「${t.label}」？（已用它创建的数字人不受影响）`)) return
+    try {
+      await deletePersonaTemplate(t.id)
+      toast('模板已删除', 'ok')
+      if (tplEditId === t.id) setTplEditId(null)
+      reloadTemplates()
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+  const doCreateTpl = async () => {
+    try {
+      await createPersonaTemplate({
+        code: tplNewDraft.code.trim(),
+        label: tplNewDraft.label.trim(),
+        description: tplNewDraft.description,
+        category: tplNewDraft.category,
+        slots: [{ key: 'name', label: '数字人名', required: true, default: '' }],
+        blueprint: {
+          mission: '', description: '', prompt: '', keywords: [],
+          anchors: [], ontology: [], actions: [], owns: [],
+        },
+      })
+      toast('空模板已创建，请在管理面板补蓝图', 'ok')
+      setTplNewOpen(false)
+      setTplNewDraft({ code: '', label: '', description: '', category: 'domain_expert' })
+      reloadTemplates()
+    } catch (e: any) { toast(e.message, 'err') }
   }
 
   const anchorAct = async (id: number, status: string) => {
@@ -625,6 +737,10 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
           <button className="btn green small" onClick={() => approve(it.id)} title="批准并加入已批准列表">批准</button>
         )}
         <button className="btn ghost small" onClick={() => startEditId(it)}>修改</button>
+        <button className="btn ghost small" onClick={() => openSaveTpl(it)}
+          title="把这个数字人的身份 + 锚点 + 本体 + 动作沉淀成可复用模板（可留空位）">
+          存为模板
+        </button>
         <button className="btn red small" onClick={() => identityDelete(it.id)}>
           {it.status === 'rejected' ? '删除已拒' : '删除'}
         </button>
@@ -844,6 +960,10 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
                   </button>
                 </div>
                 <div className="dlg-actions">
+                  <button className="btn ghost small" onClick={openTplAdmin}
+                    title="查看 / 编辑 / 停用 / 删除模板；也可把现有数字人沉淀成模板">
+                    管理模板
+                  </button>
                   <button className="btn ghost small" onClick={() => setCreating(false)}>取消</button>
                 </div>
               </>
@@ -954,11 +1074,196 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
             )}
 
             <div className="dlg-actions">
+              <button className="btn ghost small"
+                onClick={() => { setTplMode(false); openTplAdmin() }}>
+                管理模板
+              </button>
               <button className="btn ghost small" onClick={() => setTplMode(false)}>取消</button>
               <button className="btn green small" onClick={doInstantiate}
                 disabled={busy || !tplId || !tplPreview?.ok}>
                 创建数字人
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 存为模板（design §16.5）：现有数字人 → 可复用模板（可留空位） */}
+      {saveTplFor && (
+        <div className="dlg-overlay" onClick={() => setSaveTplFor(null)}>
+          <div className="dlg" style={{ maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
+            <div className="dlg-head">存为模板 · {saveTplFor.name}</div>
+            <div className="dlg-tip">
+              把「{saveTplFor.name}」的<b>身份 + 锚点 + 本体 + 动作</b>沉淀为可复用模板。
+              每个空位的<b>默认值 = 原词</b>，因此什么都不填也能还原出这个数字人（往返一致）；
+              填上「要参数化的词」后，即可换个领域复用同一套方法论。
+            </div>
+            <label className="dlg-field">
+              <span>模板 code *（小写字母开头 · 3~32 位 · 只含 a-z0-9_）</span>
+              <input value={saveTplDraft.code} placeholder="my_dfmea_engineer"
+                onChange={(e) => setSaveTplDraft({ ...saveTplDraft, code: e.target.value })} />
+            </label>
+            <label className="dlg-field">
+              <span>模板名称 *</span>
+              <input value={saveTplDraft.label}
+                onChange={(e) => setSaveTplDraft({ ...saveTplDraft, label: e.target.value })} />
+            </label>
+            <label className="dlg-field">
+              <span>说明</span>
+              <input value={saveTplDraft.description}
+                onChange={(e) => setSaveTplDraft({ ...saveTplDraft, description: e.target.value })} />
+            </label>
+            <div className="dlg-tip" style={{ marginTop: 6 }}>
+              <b>可选：留空位</b> —— 把数字人里某个具体词变成填空。例如把「手机蓝牙模块」
+              变成 <code>{'{{domain}}'}</code>，以后就能用同一模板派生任意领域的专家。
+            </div>
+            <label className="dlg-field">
+              <span>要参数化的词（留空则不参数化）</span>
+              <input value={saveTplDraft.findWord} placeholder="如：手机蓝牙模块"
+                onChange={(e) => setSaveTplDraft({ ...saveTplDraft, findWord: e.target.value })} />
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <label className="dlg-field" style={{ flex: 1 }}>
+                <span>空位 key</span>
+                <input value={saveTplDraft.slotKey} placeholder="domain"
+                  onChange={(e) => setSaveTplDraft({ ...saveTplDraft, slotKey: e.target.value })} />
+              </label>
+              <label className="dlg-field" style={{ flex: 1 }}>
+                <span>空位显示名</span>
+                <input value={saveTplDraft.slotLabel} placeholder="应用领域"
+                  onChange={(e) => setSaveTplDraft({ ...saveTplDraft, slotLabel: e.target.value })} />
+              </label>
+            </div>
+            <div className="dlg-actions">
+              <button className="btn ghost small" onClick={() => setSaveTplFor(null)}>取消</button>
+              <button className="btn green small" onClick={doSaveTpl}
+                disabled={busy || !saveTplDraft.code.trim() || !saveTplDraft.label.trim()}>
+                存为模板
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 模板管理（design §16）：列表 + 编辑 / 停用 / 删除 / 新建 */}
+      {tplAdminMode && (
+        <div className="dlg-overlay" onClick={() => setTplAdminMode(false)}>
+          <div className="dlg" style={{ maxWidth: 780 }} onClick={(e) => e.stopPropagation()}>
+            <div className="dlg-head">模板管理</div>
+            <div className="dlg-tip">
+              内置模板<b>可改不可删</b>（与内容类型词表同一策略）；自建模板可增删改。
+              编辑蓝图 JSON 时请保持 <code>{'{{slot}}'}</code> 占位与槽位声明一致。
+            </div>
+            <div className="wb-list-body" style={{ maxHeight: 240, overflow: 'auto' }}>
+              {templates.map((t) => (
+                <div key={t.id} className={`wb-item ${tplEditId === t.id ? 'on' : ''}`}
+                  style={{ cursor: 'default' }}>
+                  <span className="wb-item-name">{t.label}</span>
+                  <span className="status-pill cat">{t.builtin ? '内置' : '自建'}</span>
+                  <span className="status-pill">{t.status}</span>
+                  <span className="note" style={{ marginLeft: 8 }}>
+                    本体 {t.stats.ontology} · 锚点 {t.stats.anchors} · 动作 {t.stats.actions}
+                  </span>
+                  <span className="ops" style={{ marginLeft: 'auto' }}>
+                    <button className="btn ghost small" onClick={() => startEditTpl(t)}>编辑</button>
+                    <button className="btn red small" disabled={t.builtin}
+                      title={t.builtin ? '内置模板不可删除（可停用）' : ''}
+                      onClick={() => doDeleteTpl(t)}>删除</button>
+                  </span>
+                </div>
+              ))}
+              {!templates.length && <div className="note" style={{ padding: 8 }}>暂无模板</div>}
+            </div>
+
+            {tplNewOpen && (
+              <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                <div className="dlg-tip">新建空模板：先给身份骨架，槽位与蓝图之后在下方编辑。</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label className="dlg-field" style={{ flex: 1 }}>
+                    <span>code *</span>
+                    <input value={tplNewDraft.code} placeholder="my_template"
+                      onChange={(e) => setTplNewDraft({ ...tplNewDraft, code: e.target.value })} />
+                  </label>
+                  <label className="dlg-field" style={{ flex: 1 }}>
+                    <span>名称 *</span>
+                    <input value={tplNewDraft.label}
+                      onChange={(e) => setTplNewDraft({ ...tplNewDraft, label: e.target.value })} />
+                  </label>
+                </div>
+                <label className="dlg-field">
+                  <span>说明</span>
+                  <input value={tplNewDraft.description}
+                    onChange={(e) => setTplNewDraft({ ...tplNewDraft, description: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>分类</span>
+                  <select value={tplNewDraft.category}
+                    onChange={(e) => setTplNewDraft({ ...tplNewDraft, category: e.target.value })}>
+                    {CATEGORY_ORDER.map((c) => (
+                      <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="dlg-actions">
+                  <button className="btn green small" onClick={doCreateTpl}
+                    disabled={!tplNewDraft.code.trim() || !tplNewDraft.label.trim()}>
+                    创建
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {tplEditId && curEditTpl && (
+              <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                <div className="dlg-tip">编辑「{curEditTpl.label}」</div>
+                <label className="dlg-field">
+                  <span>名称 *</span>
+                  <input value={tplEditDraft.label}
+                    onChange={(e) => setTplEditDraft({ ...tplEditDraft, label: e.target.value })} />
+                </label>
+                <label className="dlg-field">
+                  <span>说明</span>
+                  <input value={tplEditDraft.description}
+                    onChange={(e) => setTplEditDraft({ ...tplEditDraft, description: e.target.value })} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label className="dlg-field" style={{ flex: 1 }}>
+                    <span>分类</span>
+                    <select value={tplEditDraft.category}
+                      onChange={(e) => setTplEditDraft({ ...tplEditDraft, category: e.target.value })}>
+                      {CATEGORY_ORDER.map((c) => (
+                        <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="dlg-field" style={{ flex: 1 }}>
+                    <span>状态</span>
+                    <select value={tplEditDraft.status}
+                      onChange={(e) => setTplEditDraft({ ...tplEditDraft, status: e.target.value })}>
+                      <option value="active">active（可用）</option>
+                      <option value="disabled">disabled（停用）</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="dlg-field">
+                  <span>蓝图 JSON（高级 · 改动会立即影响之后用该模板创建的数字人）</span>
+                  <textarea rows={10} value={tplEditDraft.blueprintText}
+                    style={{ fontFamily: 'monospace', fontSize: 12 }}
+                    onChange={(e) => setTplEditDraft({ ...tplEditDraft, blueprintText: e.target.value })} />
+                </label>
+                <div className="dlg-actions">
+                  <button className="btn ghost small" onClick={() => setTplEditId(null)}>取消</button>
+                  <button className="btn green small" onClick={doUpdateTpl}
+                    disabled={!tplEditDraft.label.trim()}>保存</button>
+                </div>
+              </div>
+            )}
+
+            <div className="dlg-actions">
+              <button className="btn ghost small" onClick={() => setTplNewOpen((v) => !v)}>
+                ＋ 新建空模板
+              </button>
+              <button className="btn small" onClick={() => setTplAdminMode(false)}>关闭</button>
             </div>
           </div>
         </div>

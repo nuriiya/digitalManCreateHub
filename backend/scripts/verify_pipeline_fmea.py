@@ -44,6 +44,18 @@ check("kind 闭集含 3 个 FMEA 项",
 eng = cm.allowed_kinds_for("DFMEA 工程师", list(cm.KINDS))
 check("DFMEA 工程师能收 DFMEA 表", cm.KIND_DFMEA in eng)
 check("DFMEA 工程师能收需求规格", cm.KIND_REQUIREMENT in eng)
+# 复核门只该拿到"表" —— 否则上游原文会把表挤到截断线外（实测判 FAIL 的原因）
+rev = cm.allowed_kinds_for("DFMEA 复核员", list(cm.KINDS))
+# 注意：KIND_CODE 是「直接产物」的通用豁免（见 allowed_kinds_for），会始终放行；
+# 汇总节点的产出也常被判为「失效模式清单」，故清单与评分一并放行。
+check("复核员只收 表/清单/评分（+代码豁免）",
+      set(rev) <= {cm.KIND_DFMEA, cm.KIND_FAILURE_MODES, cm.KIND_SOD,
+                   cm.KIND_CODE}, f"{rev}")
+check("复核员白名单独立于汇总者（不含需求/任务原文）",
+      cm.KIND_REQUIREMENT not in rev and cm.KIND_TASK not in rev, f"{rev}")
+check("DFMEA 表入站预算足够放下整表",
+      cm.KIND_INPUT_BUDGET[cm.KIND_DFMEA] >= 12000,
+      f"{cm.KIND_INPUT_BUDGET[cm.KIND_DFMEA]}")
 
 # ---- E2 review 门控 ----
 print("[2] E2 review 门控判定")

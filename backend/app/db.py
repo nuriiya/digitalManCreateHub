@@ -481,6 +481,21 @@ CREATE TABLE IF NOT EXISTS dfmea_rows (
 );
 CREATE INDEX IF NOT EXISTS idx_dfmea_rows_run ON dfmea_rows(run_id);
 
+-- B3 部件知识库（design §15.7）：待分析产品的子系统清单（功能 / 工况 / 关键词）。
+-- **只给「有哪些部件、各干什么」，不给失效模式** —— 失效模式必须由 DFMEA 工程师
+-- 自行推导（领域推理 + 与历史库同类部件类比），否则这一环就退化成读表抄答案。
+CREATE TABLE IF NOT EXISTS fmea_parts (
+    id BIGSERIAL PRIMARY KEY,
+    product TEXT NOT NULL,                -- 产品/模块，如「WiFi 模块」
+    subsystem TEXT NOT NULL,              -- 子系统，如「天线」
+    function TEXT NOT NULL DEFAULT '',    -- 该子系统承担的功能
+    condition TEXT NOT NULL DEFAULT '',   -- 工况 / 环境边界
+    keywords TEXT[] NOT NULL DEFAULT '{}',
+    note TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fmea_parts_product ON fmea_parts(product);
+
 -- 数字人模板（design §16）：把「一次性 seed 脚本」沉淀为**可复用的六元组蓝图**。
 -- 模板 = 身份骨架 + 锚点 + 本体条目 + 动作清单 + **填空槽位**；用户选模板、
 -- 填槽位即可生成一个完整数字人。渲染是确定性的（占位符替换），不经过 LLM。

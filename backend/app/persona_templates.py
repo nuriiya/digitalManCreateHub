@@ -67,6 +67,20 @@ BUILTIN_TEMPLATES: list[dict] = [
                  "现有探测控制在失效流出前发现它的能力 1~10；探测能力越强分值越低，须对照 D 准则表取值"],
                 ["概念", "行动优先级 AP",
                  "由 (S, O, D) 三元组查 AP 矩阵得到的 High / Medium / Low；决定改进措施的紧迫度"],
+                ["规则", "部件清单先行",
+                 "接到分析需求后**第一步**是搜索目标产品的部件清单（用「搜索部件清单」动作），"
+                 "逐个部件分析；不得跳过部件清单直接编造失效模式"],
+                ["规则", "同类案例类比",
+                 "目标产品在历史库若没有直接记录，按三步做类比：① 从「搜索部件清单」结果里"
+                 "取每个子系统的 `analogy_family`；② 用它调"
+                 "`查询历史 FMEA(family=...)` 取回**同族全部历史案例**；"
+                 "③ 据其失效模式与 S/O/D 做类比推导，来源标 `history#<编号>`。"
+                 "**不要拿中文部件名当 part 去查** —— 历史库的 part 是原产品名、"
+                 "part_no 是英文编号，中文名必然 0 命中（实测踩过）"],
+                ["规则", "部件覆盖完整性",
+                 "**逐个子系统覆盖**：搜索到的部件清单里**每个子系统都必须至少产出 1 条"
+                 "失效模式**；上游专家未覆盖、或明确声明知识缺失的子系统，由你自行分析"
+                 "（标 ai_inferred / ai_new）或改问其他专家补齐 —— 不得留空"],
                 ["规则", "取值优先级链",
                  "每一格按四级顺序取值：① 历史 FMEA 库 → ② AP/S-O-D 准则表 → ③ 询问部件专家数字人 → ④ AI 推断"],
                 ["规则", "不得越级代填",
@@ -83,6 +97,12 @@ BUILTIN_TEMPLATES: list[dict] = [
                  "有类推依据的推断标 ai_inferred，二者不可混用"],
                 ["规则", "AP 以表为准",
                  "AP 必须由 (S,O,D) 查 AP 矩阵得到，不得自行给值；与表不一致时以表为准"],
+                ["规则", "表必完整可复核",
+                 "**汇总阶段就要产出可直接逐格核对的完整表**：每行含 失效模式 / 后果 / "
+                 "原因 / S / O / D / AP / 建议措施，并**逐格标注来源**。"
+                 "**S/O/D 必须是 1~10 的单个整数，严禁写区间**（`S7-8` ✗）—— "
+                 "AP 查表依赖确定的 (S,O,D) 三元组，区间无法核对、复核门会直接判 FAIL。"
+                 "交给复核门的必须是**表**，不是\"失效模式清单\""],
                 ["规则", "S-O-D 先查准则",
                  "给 S/O/D 打分前必须先查对应维度的评分准则，确保分值有可引用的判定依据"],
                 ["规则", "证据可追溯",
@@ -93,7 +113,10 @@ BUILTIN_TEMPLATES: list[dict] = [
                 ["规则", "询问专家规则",
                  "仅在历史库与准则表都无结果时才询问专家；一次问一个专家，问题须具体到部件与失效模式"],
                 ["规则", "写行自检",
-                 "写行前自检：每格是否都有来源；AP 是否与表一致；ai_new 项是否已列入待确认清单"],
+                 "写行前自检：① 每格是否都有来源；② AP 是否与表一致；"
+                 "③ ai_new 项是否已列入待确认清单；"
+                 "④ **每条都必须有建议措施 action**（确实无需措施时写"
+                 "「暂无需措施，按现有控制执行」，不留空）"],
                 ["规则", "必须落库",
                  "完成分析后**必须**调用「写入 DFMEA 记录」把每条失效模式落库"
                  "（用 rows 数组一次写入多行）；只输出文本而未落库视为未完成"],
@@ -103,8 +126,13 @@ BUILTIN_TEMPLATES: list[dict] = [
                  "批量调用能显著减少往返，应优先使用"],
             ],
             "actions": [
+                {"builtin_name": "fmea_part_search", "name": "搜索部件清单",
+                 "description": "自主搜索待分析产品的子系统清单；每个部件带 "
+                                "analogy_family（可直接喂给「查询历史 FMEA」做同类案例类比）"},
                 {"builtin_name": "fmea_history_query", "name": "查询历史 FMEA",
-                 "description": "检索历史 FMEA 库（取值优先级第 1 级），返回失效模式/S-O-D/措施与出处"},
+                 "description": "检索历史 FMEA 库（第 1 级证据）；"
+                                "family=部件族（如 ANT/RF/PMU，取自部件清单的 "
+                                "analogy_family）做同类案例类比，也可按 part/keyword 查"},
                 {"builtin_name": "fmea_ap_table", "name": "查 AP / S-O-D 准则表",
                  "description": "不传参数一次取回 S/O/D 全部准则；传 severity/occurrence/detection 查 AP；传 items 批量查"},
                 {"builtin_name": "ask_expert", "name": "询问专家数字人",
@@ -284,6 +312,43 @@ def ensure_seed(conn) -> int:
     if added:
         conn.commit()
     return added
+
+
+def reset_builtin(conn, codes=None) -> int:
+    """把内置模板**恢复为代码里的蓝图**（显式操作，返回恢复条数）。
+
+    为什么需要：`ensure_seed` 只补缺失、不覆盖 —— 这是为了尊重用户对内置换模板的
+    修改。但**平台自身升级内置蓝图**时（例如给 DFMEA 工程师新增「搜索部件清单」
+    动作）需要一个显式入口，否则代码改了、库里还是旧蓝图，seed 出去的仍是旧数字人。
+
+    语义是**恢复出厂**：用户对内置模板的改动会被覆盖。因此只应由 seed / 运维脚本
+    显式调用，绝不放进启动路径。
+    """
+    tgt = set(codes) if codes else set(BUILTIN_CODES)
+    n = 0
+    for t in BUILTIN_TEMPLATES:
+        if t["code"] not in tgt:
+            continue
+        row = get_by_code(conn, t["code"])
+        if not row:
+            conn.execute(
+                "INSERT INTO persona_templates(code, label, description,"
+                " category, slots, blueprint, builtin, status, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (t["code"], t["label"], t.get("description", ""), t["category"],
+                 json.dumps(t["slots"], ensure_ascii=False),
+                 json.dumps(t["blueprint"], ensure_ascii=False),
+                 True, "active", _now()))
+        else:
+            conn.execute(
+                "UPDATE persona_templates SET label=?, description=?, category=?,"
+                " slots=?, blueprint=?, builtin=TRUE, status='active' WHERE id=?",
+                (t["label"], t.get("description", ""), t["category"],
+                 json.dumps(t["slots"], ensure_ascii=False),
+                 json.dumps(t["blueprint"], ensure_ascii=False), row["id"]))
+        n += 1
+    conn.commit()
+    return n
 
 
 # ---------------- 读取 ----------------
@@ -625,3 +690,130 @@ def usage_count(conn, code: str) -> int:
     return conn.execute(
         "SELECT COUNT(DISTINCT identity_id) c FROM persona_ontology WHERE note=?",
         (f"template:{code}",)).fetchone()["c"]
+
+
+# ---------------- 反向：把现有数字人沉淀为模板 ----------------
+
+def _parametrize(node, pairs: list[tuple[str, str]]):
+    """把蓝图里出现的**具体词**换成 `{{slot}}` 占位 —— `_subst` 的逆操作。
+
+    pairs 按 find 长度**降序**替换，避免短词先命中把长词切碎
+    （如 name="DFMEA 工程师"、domain="DFMEA"，若先换 domain 会残成
+    `{{domain}} 工程师`，再换 name 就匹配不到了）。
+    """
+    if not pairs:
+        return node
+    ordered = sorted(pairs, key=lambda p: -len(p[0]))
+    if isinstance(node, str):
+        s = node
+        for find, key in ordered:
+            if find:
+                s = s.replace(find, "{{%s}}" % key)
+        return s
+    if isinstance(node, list):
+        return [_parametrize(x, ordered) for x in node]
+    if isinstance(node, dict):
+        return {k: _parametrize(v, ordered) for k, v in node.items()}
+    return node
+
+
+def identity_to_template(conn, identity_id: int, code: str, label: str = "",
+                         description: str = "", category: str | None = None,
+                         parametrize=None) -> dict:
+    """把已存在的数字人**反向沉淀为模板**（六元组蓝图 + 槽位）。
+
+    `parametrize` 是「词 → 槽位」映射列表，形如
+    ``[{"find": "手机蓝牙模块", "key": "domain", "label": "应用领域"}]``；
+    映射到的词在蓝图里被替换为 `{{domain}}`，并自动生成对应槽位声明。
+    默认总会把**数字人名**参数化为 `name` 槽位。
+
+    **往返一致性**：每个槽位的 `default` 都取原词，因此「空填写渲染」应还原出
+    与原数字人等价的蓝图（`render()` 的结果与原记录逐字段相等）—— 这是本函数
+    的验收口径，保证"沉淀下来的模板"没丢信息。
+
+    非 builtin 的动作（MCP / 其它）无法用模板表达，会列在 `skipped_actions` 里
+    如实上报，不静默丢弃。
+    """
+    row = conn.execute("SELECT * FROM identities WHERE id=?",
+                       (identity_id,)).fetchone()
+    if not row:
+        return {"ok": False, "errors": [f"数字人 {identity_id} 不存在"]}
+    ident = dict(row)
+
+    anchors = [[r["name"], r["type"] or "规则"] for r in conn.execute(
+        "SELECT name, type FROM anchors WHERE identity_id=? ORDER BY id",
+        (identity_id,)).fetchall()]
+    ontology = [[r["kind"], r["name"], r["definition"] or ""] for r in
+                conn.execute("SELECT kind, name, definition FROM persona_ontology"
+                             " WHERE identity_id=? ORDER BY id",
+                             (identity_id,)).fetchall()]
+    acts: list[dict] = []
+    skipped: list[str] = []
+    for r in conn.execute(
+            "SELECT name, description, kind, builtin_name FROM persona_actions"
+            " WHERE identity_id=? ORDER BY id", (identity_id,)).fetchall():
+        if r["kind"] == "builtin" and r["builtin_name"]:
+            acts.append({"builtin_name": r["builtin_name"], "name": r["name"],
+                         "description": r["description"] or ""})
+        else:
+            skipped.append(r["name"])
+
+    # owns：优先取图谱里该「角色」真实 owns 的条目；缺失时退化为锚点名
+    owns = [x["target_name"] for x in conn.execute(
+        "SELECT r.target_name FROM relations r JOIN candidates c"
+        " ON r.source_id=c.id WHERE c.name=? AND c.kind='角色'"
+        " AND r.relation_type='owns'", (ident["name"],)).fetchall()]
+    if not owns:
+        owns = [a[0] for a in anchors]
+
+    kw = ident.get("keywords") or "[]"
+    if isinstance(kw, str):
+        try:
+            kw = json.loads(kw)
+        except Exception:  # noqa: BLE001
+            kw = []
+    if not isinstance(kw, list):
+        kw = []
+
+    # 槽位：name 恒有；其余来自 parametrize（default = 原词）
+    slots: list[dict] = [{"key": "name", "label": "数字人名", "required": True,
+                          "default": ident["name"],
+                          "placeholder": f"如：{ident['name']}"}]
+    pairs: list[tuple[str, str]] = []
+    if ident["name"]:
+        pairs.append((ident["name"], "name"))
+    seen = {"name"}
+    for p in (parametrize or []):
+        if not isinstance(p, dict):
+            continue
+        find = str(p.get("find") or "").strip()
+        key = re.sub(r"[^a-z0-9_]", "", str(p.get("key") or "").strip().lower())
+        if not find or not key or key in seen:
+            continue
+        seen.add(key)
+        pairs.append((find, key))
+        slots.append({"key": key, "label": p.get("label") or key,
+                      "required": False, "default": find})
+
+    bp = _parametrize({
+        "mission": (ident.get("mission") or "").strip(),
+        "description": (ident.get("description") or "").strip(),
+        "prompt": (ident.get("prompt") or "").strip(),
+        "keywords": kw,
+        "anchors": anchors,
+        "ontology": ontology,
+        "actions": acts,
+        "owns": owns,
+    }, pairs)
+
+    try:
+        tpl = create_template(
+            conn, code, label or ident["name"],
+            category or ident.get("category") or "domain_expert",
+            description, slots, bp)
+    except TemplateError as e:
+        return {"ok": False, "errors": [str(e)]}
+    return {"ok": True, "template": tpl, "skipped_actions": skipped,
+            "source": {"identity_id": identity_id, "name": ident["name"]},
+            "counts": {"anchors": len(anchors), "ontology": len(ontology),
+                       "actions": len(acts), "slots": len(slots)}}

@@ -65,7 +65,7 @@ KIND_BUDGET = {
     KIND_TASK: 2000,
     KIND_TEST_ASSERT: 4000,
     KIND_RESEARCH: 3000,
-    KIND_FAILURE_MODES: 3000,
+    KIND_FAILURE_MODES: 4000,   # 逐部件失效模式清单条目多（3000 实测被截断）
     KIND_SOD: 2000,
     KIND_DFMEA: 6000,        # 表格行多，预算给大（xlsx 导出的主要载体）
     KIND_GENERIC: 2000,
@@ -82,9 +82,13 @@ KIND_INPUT_BUDGET = {
     KIND_TASK: 2000,
     KIND_TEST_ASSERT: 4000,
     KIND_RESEARCH: 3000,
-    KIND_FAILURE_MODES: 3000,
-    KIND_SOD: 2000,
-    KIND_DFMEA: 6000,
+    # 汇总节点产出常被判为「失效模式清单」kind，要容纳 各专家原文 + 汇总表，
+    # 预算给足（实测 2026-09-12：4000 时复核门拿不到完整内容 → FAIL）
+    KIND_FAILURE_MODES: 12000,
+    KIND_SOD: 4000,
+    # DFMEA 表是复核门的唯一核对对象 —— 入站预算必须够放下完整表
+    # （实测 2026-09-12：6000 时复核员拿到的表被截断成"[已省略]"→ 直接 FAIL）
+    KIND_DFMEA: 12000,
     KIND_GENERIC: 2000,
 }
 
@@ -100,9 +104,16 @@ ROLE_INPUT_KINDS: dict[str, list[str]] = {
     "代码": [KIND_REQUIREMENT, KIND_DESIGN, KIND_TASK, KIND_TEST_ASSERT],
     "设计": [KIND_REQUIREMENT, KIND_TASK],
     "需求": [KIND_TASK],
-    # ---- DFMEA（注意：键按子串匹配，"DFMEA 工程师" 会先命中 "DFMEA"，故具体→泛化排序）----
-    "DFMEA": [KIND_REQUIREMENT, KIND_TASK, KIND_FAILURE_MODES, KIND_SOD,
-              KIND_DFMEA],
+    # ---- DFMEA（键按**最长优先**匹配，见 `allowed_kinds_for`）----
+    # 「DFMEA 工程师」= 汇总者：要看需求 / 任务 / 失效模式清单 / 评分 / 表；
+    # 「复核」= **复核门只看表** —— 收一堆上游原文只会把"表"挤到截断线外
+    # （实测 2026-09-12：复核员拿到的表被标成"[该上游交接物过长已省略]"，
+    # 于是"无表可核"直接判 FAIL）。
+    "DFMEA 工程师": [KIND_REQUIREMENT, KIND_TASK, KIND_FAILURE_MODES,
+                     KIND_SOD, KIND_DFMEA],
+    # 复核门要的"表"未必被标成 DFMEA 表 —— 汇总节点的 step_name 多半含"失效模式"，
+    # kind 判定会落到「失效模式清单」。故一并放行清单与评分，只把纯上游原文挡在外面。
+    "复核": [KIND_DFMEA, KIND_FAILURE_MODES, KIND_SOD],
     "失效模式": [KIND_REQUIREMENT, KIND_TASK, KIND_DFMEA],
     "专家": [KIND_REQUIREMENT, KIND_TASK, KIND_FAILURE_MODES],
 }
@@ -111,12 +122,18 @@ ROLE_INPUT_ALLOW_ALL = ()  # 未来可放宽
 
 
 def allowed_kinds_for(role_name: str, candidates: list[str]) -> list[str]:
-    """按角色名过滤候选 kind（白名单命中的保留；角色未知则全收）。"""
+    """按角色名过滤候选 kind（白名单命中的保留；角色未知则全收）。
+
+    匹配规则：**键最长者优先**。「DFMEA 复核员」既含 `DFMEA` 也含 `复核`，
+    长键更具体、应胜出；早前按字典插入顺序取第一个命中，顺序一乱就选错白名单
+    （实测 2026-09-12：复核员被当成汇总者收下全部上游原文，"表"被挤到截断线外）。
+    """
     if not candidates:
         return []
     role = role_name or ""
-    for key, allow in ROLE_INPUT_KINDS.items():
+    for key in sorted(ROLE_INPUT_KINDS, key=len, reverse=True):
         if key in role:
+            allow = ROLE_INPUT_KINDS[key]
             return [k for k in candidates if k in allow or k == KIND_CODE]
     return list(candidates)
 

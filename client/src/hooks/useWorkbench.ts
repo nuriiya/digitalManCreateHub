@@ -61,8 +61,30 @@ export function useWorkbench(refreshKey: number) {
   const [tplId, setTplId] = useState<number | null>(null)
   const [tplValues, setTplValues] = useState<Record<string, string>>({})
   const [tplPreview, setTplPreview] = useState<TemplateRender | null>(null)
+  // 反向沉淀：把现有数字人存为模板（design §16.5）
+  const [saveTplFor, setSaveTplFor] = useState<Identity | null>(null)
+  const [saveTplDraft, setSaveTplDraft] = useState({
+    code: '', label: '', description: '', findWord: '', slotKey: 'domain',
+    slotLabel: '应用领域',
+  })
+  // 模板管理面板（编辑 / 停用 / 删除 / 新建）
+  const [tplAdminMode, setTplAdminMode] = useState(false)
+  const [tplEditId, setTplEditId] = useState<number | null>(null)
+  const [tplEditDraft, setTplEditDraft] = useState({
+    label: '', description: '', category: 'domain_expert', status: 'active',
+    blueprintText: '',
+  })
+  const [tplNewOpen, setTplNewOpen] = useState(false)
+  const [tplNewDraft, setTplNewDraft] = useState({
+    code: '', label: '', description: '', category: 'domain_expert',
+  })
 
   const { toast } = useToast()
+
+  const reloadTemplates = useCallback(() => {
+    getPersonaTemplates(false).then((r) => setTemplates(r.templates ?? []))
+      .catch(() => { })
+  }, [])
 
   const approved = useMemo(() => idents.filter((i) => i.status === 'approved'), [idents])
   const alternates = useMemo(() => idents.filter((i) => i.status !== 'approved'), [idents])
@@ -128,6 +150,10 @@ export function useWorkbench(refreshKey: number) {
     filterMode, setFilterMode, listQ, setListQ, wizardStep, setWizardStep,
     templates, tplMode, setTplMode, tplId, setTplId, tplValues, setTplValues,
     tplPreview, setTplPreview,
+    saveTplFor, setSaveTplFor, saveTplDraft, setSaveTplDraft,
+    tplAdminMode, setTplAdminMode, tplEditId, setTplEditId,
+    tplEditDraft, setTplEditDraft, tplNewOpen, setTplNewOpen,
+    tplNewDraft, setTplNewDraft, reloadTemplates,
     toast, approved, alternates, approvedAnchors,
     reload, reloadAsm, reloadBench,
   }

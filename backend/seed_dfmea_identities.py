@@ -47,10 +47,14 @@ _FIRMWARE_DOMAIN = """概念|连接状态机|管理待机/广播/连接/断连�
 概念|GATT 服务发现|客户端枚举服务与特征值的过程；缓冲区不足会造成分包丢失与超时
 概念|MTU 协商|决定单包有效载荷大小；评估不足会导致长报文分片失败
 概念|固件升级回滚|升级中断时需有可回退的分区（A/B）与完整性校验，否则模块变砖
+概念|SSID 扫描与认证|扫描各信道发现接入点并完成认证；认证超时或凭据/加密方式不匹配表现为连不上
+概念|漫游切换|在多 AP 之间依据信号强度与门限切换；门限设置不当会造成频繁重连或掉线
+概念|重连与保活|链路中断后自动重连与心跳保活；重连策略缺陷表现为"假在线"（显示已连但收不到数据）
 规则|固件失效答复要求|回答应给出失效模式、触发条件（弱信号/断电/边界负载）与验证方法；涉及具体协议版本行为时说明依据来源，不臆造版本差异"""
 
 INSTANCES: list[tuple[str, dict]] = [
-    ("dfmea_engineer", {"name": "DFMEA 工程师", "domain": "产品"}),
+    ("dfmea_engineer", {"name": "DFMEA 工程师",
+                        "domain": "射频无线模块（蓝牙 / WiFi）"}),
     ("part_expert", {"name": "射频硬件专家",
                      "subsystem": "射频链路（天线、匹配网络、PA/LNA、滤波器）",
                      "scope": "射频链路的材料、工况边界与常见失效",
@@ -69,7 +73,8 @@ INSTANCES: list[tuple[str, dict]] = [
     ("part_expert", {"name": "嵌入式固件专家",
                      "subsystem": "协议栈、连接状态机与固件升级",
                      "scope": "协议行为、状态迁移与升级可靠性",
-                     "keywords": "协议栈, 状态机, 配对, GATT, MTU, 固件升级, 回滚",
+                     "keywords": "协议栈, 状态机, 连接管理, 漫游, 认证, SSID, 扫描, "
+                                 "重连, MTU, 固件升级, 回滚",
                      "domain_ontology": _FIRMWARE_DOMAIN}),
     ("dfmea_reviewer", {"name": "DFMEA 复核员", "domain": "产品"}),
 ]
@@ -79,7 +84,15 @@ def main() -> int:
     conn = db.get_conn()
     n_seed = pt.ensure_seed(conn)
     print(f"内置模板：新增 {n_seed} 个"
-          f"（库中共 {len(pt.list_templates(conn))} 个）\n")
+          f"（库中共 {len(pt.list_templates(conn))} 个）")
+
+    # 内置模板**恢复为代码里的蓝图**：否则平台升级了内置蓝图（例如给 DFMEA 工程师
+    # 加「搜索部件清单」动作与「同类案例类比」规则），库里仍是旧版，seed 出去的
+    # 还是旧数字人。ensure_seed 只补缺失、不覆盖（尊重用户改内置模板），
+    # 所以「代码蓝图 → 库」这条路必须由 seed 显式走一遍（恢复出厂语义）。
+    codes = sorted({c for c, _ in INSTANCES})
+    n_reset = pt.reset_builtin(conn, codes)
+    print(f"内置模板已同步为代码蓝图：{n_reset} 个（{', '.join(codes)}）\n")
 
     print("=== 由模板实例化 DFMEA 数字人 ===")
     rows = []

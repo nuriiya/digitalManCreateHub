@@ -794,9 +794,22 @@ def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
     personas = [dict(r) for r in conn.execute(
         "SELECT id, name, category FROM identities WHERE status='approved' ORDER BY id"
     ).fetchall()]
-    persona_str = "\n".join(
-        f"  - id={p['id']} name={p['name']} category={p['category']}" for p in personas
-    ) or "（无）"
+    # 把每个数字人**已批准的动作**一并给出（design §15.7）。
+    # 否则 LLM 只能凭名字猜谁干什么 —— 实测会把「搜索部件清单」派给名字像
+    # 检索角色的「知识摄取官」，而该动作其实只绑在 DFMEA 工程师上，导致节点空转。
+    # 这只是**给足信息**让 LLM 正确分工，不改变「生成仍由 LLM 完成」。
+    acts: dict[int, list[str]] = {}
+    for r in conn.execute(
+            "SELECT identity_id, name FROM persona_actions WHERE status='approved'"
+            " ORDER BY identity_id, id").fetchall():
+        acts.setdefault(r["identity_id"], []).append(r["name"])
+
+    def _p_line(p: dict) -> str:
+        a = acts.get(p["id"]) or []
+        astr = ("｜动作：" + "、".join(a)) if a else "｜动作：（无）"
+        return f"  - id={p['id']} name={p['name']} category={p['category']}{astr}"
+
+    persona_str = "\n".join(_p_line(p) for p in personas) or "（无）"
     prompt = (
         "你是 pipeline 编排设计师。根据需求设计一个数字人协作的 pipeline "
         "（节点 + 关系），输出 JSON 落库待审批。\n\n"
@@ -808,7 +821,10 @@ def generate_from_request(conn, request: str, provider: str = "llm") -> dict:
         '"relations":[{"from_node_key":"step1","to_node_key":"step2",'
         '"relation_type":"supply"}]}\n\n'
         "要求：node_key 唯一英文小写连字符；persona_id 必须是上面可用数字人的 id；"
-        "关系形成 DAG 不能成环。\n\n"
+        "关系形成 DAG 不能成环。\n"
+        "**分工必须看「动作」**：某个步骤需要特定动作时，只能派给**已绑定该动作**"
+        "的数字人（例如「搜索部件清单」只有绑了该动作的数字人才能执行）——"
+        "派给没有该动作的数字人会导致该步骤空转。\n\n"
         "**关系类型语义（必须按语义选择，不要一律用 supply）**：\n"
         "  - design：流程设计师设计编排（把需求/方案交给下游去分析）\n"
         "  - supply：上游向下游**供给**产物（专家把领域结论给汇总者，数据顺势流动）\n"
