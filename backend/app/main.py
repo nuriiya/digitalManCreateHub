@@ -1911,6 +1911,16 @@ def chat_route(body: RouteBody):
     return {"route": r}
 
 
+@app.post("/api/chat/route-pipeline")
+def chat_route_pipeline(body: RouteBody):
+    """确定性 pipeline 匹配（design §23 / R-25）：把用户消息匹配到最佳
+    pipeline（approved + 非归档）。对话层命中后直接触发运行，不再让数字人
+    手撸 tool-use（手撸有格式漂移/跳步/问是否开始三个坑）。"""
+    from . import pipeline as pipeline_mod
+    r = pipeline_mod.route_pipeline(db.get_conn(), body.message)
+    return {"pipeline": r}
+
+
 @app.post("/api/chat")
 def persona_chat(body: ChatBody):
     """One turn of conversation with a digital person, answered by the chosen

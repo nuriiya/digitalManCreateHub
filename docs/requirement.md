@@ -373,6 +373,10 @@
 | R-24.6 | 绑定到会提问的数字人（需求分析师 #1 / DFMEA 工程师 #9）并入模板蓝图 | **已实现**（design §22.2） | 幂等绑定 + verify_persona_templates OK |
 | R-24.7 | **自发执行**：命中执行意图后立即调用动作，不先描述计划再问"是否开始" | **已实现**（design §22.3） | `_actions_block` 注入「执行触发」纪律 |
 | R-24.8 | **会话继承路由**：同一 session 后续消息沿用已绑定数字人，短词"开始"不再路由失败 | **已实现**（design §22.3） | `/api/chat/route` 加 session_id；实测 session 继承→#9，无 session「开始」→None |
+| R-25 | **对话层 pipeline 触发**：消息命中 pipeline 直接运行，不数字人手撸 tool-use | **已实现**（design §23） | route_pipeline 确定性匹配（name/tags/description）+ doSend 命中即跑 |
+| R-25.1 | `route_pipeline` 匹配：仅 approved+非归档；name token +4 / tags +3 / description +2 | **已实现**（design §23.1①） | 实测「给我 FMEA 报告」→#44 score=17 |
+| R-25.2 | 命中→触发运行→PipelineCard；未命中→fallback 数字人路由 | **已实现**（design §23.1③） | doSend 前置匹配分支 |
+| R-25.3 | 与 factory「未命中自动生成」不冲突（命中跑/未命中生成两分支） | **已实现**（design §23.2） | 未命中生成走 §18 factory，后续接对话层 |
 
 ---
 

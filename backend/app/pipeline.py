@@ -87,6 +87,63 @@ def get_pipeline(conn, pipeline_id) -> dict | None:
     return d
 
 
+def route_pipeline(conn, message: str) -> dict | None:
+    """确定性 pipeline 匹配（0 LLM，design §23 / R-25）：把用户消息匹配到
+    最佳 pipeline（仅 approved + 非归档）。
+
+    匹配分（复用 chat.route_identity 的 token 思路）：
+      - pipeline **name token**（按空格/中点拆分）= +4 each
+      - pipeline **tags** 子串命中 = +3 each
+      - pipeline **description** 子串命中 = +2
+    返回 {"pipeline_id","name","score","matched"} 或 None（无命中）。
+
+    用途：对话层「命中 pipeline → 直接运行」，而非让数字人手撸 tool-use
+    （后者有格式漂移/跳步/问是否开始三个坑，见 design §22.3）。
+    """
+    msg = (message or "").strip().lower()
+    if not msg:
+        return None
+    rows = conn.execute(
+        "SELECT id, name, description, tags FROM pipelines"
+        " WHERE status=? AND COALESCE(is_archived, false)=false ORDER BY id DESC",
+        (STATUS_APPROVED,)).fetchall()
+
+    def _name_tokens(n: str) -> list[str]:
+        out: list[str] = []
+        for sep in (" ", "\t", "/", "｜", "|", "·", "・", "-", "_"):
+            n = n.replace(sep, " ")
+        for t in n.lower().split():
+            t = t.strip(".,;()[]{}「」（）")
+            if len(t) >= 2:
+                out.append(t)
+        return out
+
+    best: dict | None = None
+    for p in rows:
+        score = 0
+        matched: list[str] = []
+        # 1) name token
+        for tok in _name_tokens(p["name"] or ""):
+            if tok and (tok in msg or (len(tok) >= 3 and msg in tok)):
+                score += 4
+                matched.append(f"名:{tok}")
+        # 2) tags
+        for tag in (p["tags"] or []):
+            tg = str(tag).strip().lower()
+            if tg and tg in msg:
+                score += 3
+                matched.append(f"标签:{tag}")
+        # 3) description
+        desc = (p["description"] or "").lower()
+        if desc and len(desc) >= 2 and (desc in msg or msg in desc):
+            score += 2
+            matched.append("描述")
+        if score > 0 and (best is None or score > best["score"]):
+            best = {"pipeline_id": p["id"], "name": p["name"],
+                    "score": score, "matched": list(dict.fromkeys(matched))}
+    return best
+
+
 # ---------------- 运行记录 / 交接物（读取侧） ----------------
 # 此前 pipeline_runs / pipeline_run_handoffs **只写不读** —— 运行完用户看不到
 # 任何产出。对话页要展示「生成 → 运行 → 结果」，故补这两个读取函数。

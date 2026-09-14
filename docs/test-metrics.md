@@ -508,6 +508,9 @@
 | N-87 执行触发注入 | 有动作的 persona 动作清单含「执行触发」纪律 | 含 | PASS ✅ |
 | N-88 会话继承路由 | session 内后续消息沿用绑定数字人 | 继承（score=-1） | session→#9 ✅ |
 | N-89 短词不误路由 | 无 session 时"开始"应返回 None | None | PASS ✅ |
+| N-90 pipeline 匹配命中 | "给我 FMEA 报告" 命中 #44 | score≥1 | score=17 ✅ |
+| N-91 pipeline 匹配不误杀 | "你好"/"写代码" 应 None | None | PASS ✅ |
+| N-92 route-pipeline API | POST 返回 pipeline 或 null | 200 | 冒烟通过 ✅ |
 
 ---
 

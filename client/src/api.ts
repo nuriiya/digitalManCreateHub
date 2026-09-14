@@ -488,6 +488,15 @@ export const routeChat = (message: string, sessionId?: number | null) =>
   api<{ route: ChatRoute | null }>('/api/chat/route', {
     method: 'POST', body: JSON.stringify({ message, session_id: sessionId ?? null }),
   })
+
+// pipeline 匹配（design §23 / R-25）：对话层命中后直接触发运行
+export interface PipelineRoute {
+  pipeline_id: number; name: string; score: number; matched: string[]
+}
+export const routePipeline = (message: string) =>
+  api<{ pipeline: PipelineRoute | null }>('/api/chat/route-pipeline', {
+    method: 'POST', body: JSON.stringify({ message }),
+  })
 export const sendChat = (
   identityId: number, message: string,
   opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null; session_id?: number | null } = {},

@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
+  routePipeline, runPipeline,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -175,8 +176,8 @@ export default function ConversationPage({ refreshKey }: Props) {
       }
       return
     }
-    // 普通对话：路由 → 流式生成。每一步都在气泡里可见，不再"发送后黑屏"。
-    // 临时 id 用负数避免与后端真实 id 冲突；最终用后端全量 messages 替换。
+    // 普通对话：**先做 pipeline 匹配**（design §23 / R-25）——
+    // 命中就触发运行 + 展示 PipelineCard，不路由数字人手撸；未命中走数字人路由。
     const tempBase = -Date.now()
     const userMsg: ChatMessage = {
       id: tempBase,
@@ -203,6 +204,37 @@ export default function ConversationPage({ refreshKey }: Props) {
     let streamFinished = false
     // 工具执行进度（拼在 assistant 气泡文本后）
     const toolLines: string[] = []
+
+    // —— pipeline 命中分支：直接触发运行 ——
+    try {
+      const pr = await routePipeline(text)
+      const matchedPipeline = pr.pipeline
+      if (matchedPipeline) {
+        setSending(false)
+        updateAssistant({
+          identity_name: `pipeline「${matchedPipeline.name}」`,
+          content: `已匹配到 pipeline「${matchedPipeline.name}」，直接触发运行…`,
+        })
+        try {
+          const run = await runPipeline(matchedPipeline.pipeline_id)
+          updateAssistant({
+            identity_name: `pipeline「${matchedPipeline.name}」`,
+            content: `已触发 pipeline「${matchedPipeline.name}」运行（job #${run.job_id}）。运行进度与 DFMEA 产出见下方卡片，可就地查看并下载 Excel 报告。`,
+          })
+          setPipelineIds((v) => v.includes(matchedPipeline.pipeline_id) ? v : [...v, matchedPipeline.pipeline_id])
+          toast(`已触发 pipeline「${matchedPipeline.name}」运行`, 'ok')
+          refreshSessions()
+        } catch (e: any) {
+          updateAssistant({
+            identity_name: `pipeline「${matchedPipeline.name}」`,
+            content: `pipeline 匹配到了但运行失败：${e?.message || e}`,
+          })
+          toast(e?.message || String(e), 'err')
+        }
+        return
+      }
+    } catch { /* 匹配失败就 fallback 数字人路由 */ }
+
     try {
       // 阶段 A：路由（确定性 0 LLM）。同一 session 的后续消息（如「开始」）
       // 沿用 session 绑定的数字人，不重新匹配（design §22.3）。

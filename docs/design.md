@@ -2657,6 +2657,46 @@ part=天线 过滤命中 1 行；API 三通道（Bearer / query-token / 中文 p
 
 **状态**：**已实现（2026-09-14）**。需求编号 R-24（续）。
 
+## 23. 对话层 pipeline 触发（命中即跑）—— 已实现（2026-09-14）
+
+用户诉求贯穿多轮：对话里说「给我 FMEA 报告」不该让数字人**手撸** tool-use
+（手撸有三个坑：tool_call 格式漂移 / 跳步 / 问是否开始，见 §22.3），而应
+**命中 pipeline → 直接运行**。
+
+### 23.1 机制
+
+**① `pipeline.route_pipeline(conn, message)`（确定性 0 LLM）**：把用户消息
+匹配到最佳 pipeline（仅 approved + 非归档）。分值：name token +4 / tags +3 /
+description +2（复用 route_identity 的 token 思路）。
+
+**② API `POST /api/chat/route-pipeline`**：返回 `{pipeline}` 或 `{pipeline: null}`。
+
+**③ 前端 doSend 接入**：发送前先 routePipeline ——
+- **命中** → `runPipeline` 触发运行 → 展示 PipelineCard（进度 + DFMEA 产出 +
+  Excel 下载）→ 不路由数字人
+- **未命中** → fallback 现有数字人路由（routeChat）
+
+### 23.2 与 §18 factory 的关系（不冲突，互补）
+
+「命中 → 跑」与「未命中 → 自动生成」是 **pipeline-factory 闭环的两个分支**：
+- 命中现有 pipeline → 直接运行（本节）
+- 未命中 → 触发 factory m1~m9 生成新 pipeline（§18，已有能力）
+
+即 m1 需求解析本意「先找现有 pipeline，命中复用、未命中生成」——本节只把
+「命中复用」前移为对话层自动触发 + 具体化为「命中直接运行」。
+
+### 23.3 实测
+
+approved 非归档 pipeline 仅 #44 wifi-module-dfmea-pipeline（tags=DFMEA/WiFi/射频）：
+- 「给我一份WiFi射频模块的dfmea报告」→ #44 score=17 ✅
+- 「导出wifi中射频部件的fmea报告」→ #44 score=10 ✅
+- 「你好」→ None ✅、「写一段Python代码」→ None ✅
+
+**状态**：**已实现（2026-09-14）**。需求编号 R-25；指标 test-metrics §T-N 续。
+
+---
+*v1.14（2026-09-14）新增 §23 对话层 pipeline 触发：route_pipeline 匹配 + route-pipeline API + doSend 命中即跑、未命中 fallback 数字人。*
+
 ---
 *v1.13（2026-09-14）§22.3 自发执行纪律 + 会话继承路由：数字人不再问"是否开始"，同会话后续消息沿用已绑定数字人。*
 
