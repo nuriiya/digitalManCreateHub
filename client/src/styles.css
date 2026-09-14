@@ -628,6 +628,22 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .chat-sess-count { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+/* 对话进行中 — 当前会话行的加载动画（2026-09-14）：
+   三个点依次 opacity 脉动，整体效果像打字机等待 */
+.chat-sess-loading {
+  flex-shrink: 0; margin-left: 4px;
+  display: inline-flex; gap: 1px; align-items: center;
+  font-size: 12px; color: var(--accent);
+}
+.chat-sess-loading .dot {
+  animation: chat-loading-pulse 1.2s ease-in-out infinite;
+}
+.chat-sess-loading .dot:nth-child(2) { animation-delay: 0.18s; }
+.chat-sess-loading .dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes chat-loading-pulse {
+  0%, 60%, 100% { opacity: 0.25; }
+  30%           { opacity: 1; }
+}
 .chat-sess-ops { display: none; gap: 2px; flex-shrink: 0; }
 .chat-sess:hover .chat-sess-ops { display: inline-flex; }
 .chat-sess-ops .op {

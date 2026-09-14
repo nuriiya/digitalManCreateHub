@@ -1372,13 +1372,17 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
     Event shape (each `data:` line is one JSON object):
       - {"event": "session", "session_id": int}             # when auto-created
       - {"event": "token",   "text": str}                   # per content delta
+      - {"event": "tool_executing", "name": str, "ok": bool,
+                                              "result"?: any}  # 工具执行中
       - {"event": "done",    "reply": str, "session_id": int,
                             "messages": [...], "context": {...}}
       - {"event": "error",   "error": str}                  # recoverable failure
 
-    Scope: stream path DOES NOT run the tool-call loop (action 调用循环保持非
-    流式，避免半路 tool_call + token 交错；如数字人需要 tool_call，会话路径
-    走 `/api/chat` 一次性端点）。Tool_use 数字人极少出现在对话里。
+    **2026-09-14 修复**：原版本「stream path DOES NOT run the tool-call loop」——
+    DFMEA 工程师等 tool-use 数字人在对话里被路由后，LLM 输出 `<tool_call>`
+    不会真正执行，链路在"裸 tool_call 草稿"处中断（user 截图复现）。
+    改为：stream 第一段 → 若含 tool_call 则执行 → 再 stream 第二段续答 →
+    只把**最终续答**作为 assistant 消息入库（tool_call 草稿不存）。
     """
     ident = _identity(conn, identity_id)
     if not ident:
@@ -1462,28 +1466,117 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
         {"role": "user", "content": message}]
 
     usage: dict = {}
-    parts: list[str] = []
-    from . import llm as llm_mod
-    try:
+
+    # ---- 工具调用循环（stream 版，复用 chat_answer 的语义） ----
+    from . import actions as actions_mod, llm as llm_mod
+    tool_calls: list[dict] = []
+    seen: set[str] = set()
+
+    def _sig(n: str, a: dict) -> str:
+        return n + "|" + json.dumps(a, ensure_ascii=False, sort_keys=True)
+
+    def _stream_one() -> str:
+        """stream 一次 LLM 调用，yield token 事件，return 完整 reply。"""
+        parts: list[str] = []
         for tok in llm_mod.stream_pick(provider, messages, ollama_model,
                                        usage_out=usage):
             parts.append(tok)
             yield {"event": "token", "text": tok}
+        return "".join(parts)
+
+    def _drain(gen):
+        """把内部生成器的事件转发出来并捕获最终 reply。"""
+        while True:
+            try:
+                ev = next(gen)
+            except StopIteration as stop:
+                return stop.value
+            yield ev
+
+    # 第一段：stream 出 LLM 的开头（可能含 tool_call）
+    try:
+        reply = yield from _drain(_stream_one())
     except llm_mod.LLMError as e:
-        # 失败也持久化 user 消息（不让对话组丢失提问）
-        try:
-            _save(conn, identity_id, "user", message, session_id)
-        except Exception:
-            pass
+        try: _save(conn, identity_id, "user", message, session_id)
+        except Exception: pass
         yield {"event": "error", "error": f"模型调用失败：{e}"}
         return
     except Exception as e:  # noqa: BLE001
+        try: _save(conn, identity_id, "user", message, session_id)
+        except Exception: pass
         yield {"event": "error", "error": f"{type(e).__name__}: {str(e)[:200]}"}
         return
 
-    reply = "".join(parts)
+    # 工具循环：reply 含 tool_call → 执行 → 续答（再 stream 一段）
+    for _round in range(MAX_ACTION_ROUNDS):
+        calls = _parse_tool_calls(reply)
+        if not calls:
+            break
+        lines: list[str] = []
+        attempted = 0
+        for name, args in calls:
+            sig = _sig(name, args)
+            if sig in seen:
+                lines.append(f"· 动作「{name}」（同参数）已执行过，结果见上文。")
+                continue
+            seen.add(sig)
+            attempted += 1
+            ok, reason, action_row = actions_mod.guard_action(
+                conn, identity_id, name, args)
+            if not ok:
+                tool_calls.append({"name": name, "ok": False, "reason": reason})
+                yield {"event": "tool_executing", "name": name,
+                       "ok": False, "reason": reason}
+                lines.append(f"· 动作「{name}」被拒绝：{reason}（请改用正确的参数名）")
+                continue
+            try:
+                result = actions_mod.execute_action(conn, identity_id,
+                                                    action_row, args)
+            except Exception as e:  # noqa: BLE001
+                result = {"ok": False,
+                          "error": f"动作执行异常：{type(e).__name__}: {e}"}
+            tool_calls.append({"name": name,
+                               "ok": result.get("ok", False),
+                               "result": (result.get("result")
+                                          if result.get("ok")
+                                          else result.get("error"))})
+            yield {"event": "tool_executing", "name": name,
+                   "ok": result.get("ok", False),
+                   "reason": None if result.get("ok") else reason,
+                   "result": (result.get("result") if result.get("ok")
+                              else result.get("error"))}
+            lines.append(f"· 动作「{name}」执行结果："
+                         + json.dumps(result, ensure_ascii=False))
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content":
+                         "\n".join(lines) + "\n请基于以上结果继续；如已可完成，"
+                         "请直接给出最终回答（不要重复调用已执行过的动作）。"})
+        try:
+            reply = yield from _drain(_stream_one())
+        except llm_mod.LLMError as e:
+            yield {"event": "error", "error": f"续答模型失败：{e}"}
+            reply = ""
+            break
+        if attempted == 0:
+            break
+
+    # 兜底：轮数耗尽 reply 仍含 tool_call —— 让 LLM 立即整理成正文
+    if reply and _parse_tool_calls(reply):
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content":
+                         "工具调用轮数已用尽。**不要再输出任何 <tool_call> 或工具草稿** —— "
+                         "请立即基于**上面已经取回的所有工具结果**，直接给出最终交付物正文。"
+                         "若某项信息确实没查到，就在正文里写明「该项无证据」。"
+                         "现在直接输出最终答复正文。"})
+        try:
+            reply = yield from _drain(_stream_one())
+        except llm_mod.LLMError as e:
+            yield {"event": "error", "error": f"兜底模型失败：{e}"}
+
+    # 持久化：user 问 + 助手最终答复（tool_call 草稿不存）
     _save(conn, identity_id, "user", message, session_id)
-    _save(conn, identity_id, "assistant", reply, session_id)
+    if reply:
+        _save(conn, identity_id, "assistant", reply, session_id)
 
     prompt_tokens = usage.get("prompt_tokens")
     estimate = not isinstance(prompt_tokens, int)

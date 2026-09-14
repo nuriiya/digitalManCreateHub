@@ -196,6 +196,8 @@ export default function ConversationPage({ refreshKey }: Props) {
       setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, ...patch } : x)))
     let streamStarted = false
     let streamFinished = false
+    // 工具执行进度（拼在 assistant 气泡文本后）
+    const toolLines: string[] = []
     try {
       // 阶段 A：路由（确定性 0 LLM）
       const r = await routeChat(text)
@@ -227,9 +229,27 @@ export default function ConversationPage({ refreshKey }: Props) {
           onToken: (tok) => {
             if (!streamStarted) streamStarted = true
             accumulated += tok
+            // 流式 token 只含正文（不含 tool_call 草稿）；工具进度
+            // 拼在正文之后供用户看到「执行了哪些动作」。
             updateAssistant({
               identity_name: route.identity_name,
-              content: accumulated,
+              content: accumulated + (toolLines.length
+                ? '\n\n---\n' + toolLines.join('\n')
+                : ''),
+            })
+          },
+          onTool: (ev) => {
+            // 实时显示「执行动作」进度；最终回灌结果在 reply 之后再补充。
+            if (ev.ok) {
+              toolLines.push(`⏳ 已执行 \`${ev.name}\``)
+            } else {
+              toolLines.push(`✗ 动作 \`${ev.name}\` 被拒：${ev.reason || '未知原因'}`)
+            }
+            updateAssistant({
+              identity_name: route.identity_name,
+              content: accumulated + (toolLines.length
+                ? '\n\n---\n' + toolLines.join('\n')
+                : ''),
             })
           },
           onDone: (data) => {
@@ -451,6 +471,15 @@ export default function ConversationPage({ refreshKey }: Props) {
                   <span className="chat-sess-title" title={s.title}>{s.title}</span>
                 )}
                 <span className="chat-sess-count">{s.message_count}</span>
+                {/* sending 状态下当前会话行显示加载动画；2026-09-14 加：用户
+                    期望左侧列表能感知"对话正在进行中"，与上方 spinning 状态同步 */}
+                {!sessSelectMode && sending && s.id === sessionId && (
+                  <span className="chat-sess-loading" title="生成中…" aria-label="loading">
+                    <span className="dot">·</span>
+                    <span className="dot">·</span>
+                    <span className="dot">·</span>
+                  </span>
+                )}
                 {!sessSelectMode && renamingId !== s.id && (
                   <span className="chat-sess-ops" onClick={(e) => e.stopPropagation()}>
                     <button className="op" title="重命名" onClick={() => startRename(s)}>✎</button>
