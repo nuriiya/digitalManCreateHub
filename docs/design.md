@@ -2308,7 +2308,7 @@ instantiate(conn, tpl)  落库：身份 + 锚点 + persona_ontology + persona_ac
 
 **状态**：**已实现（2026-09-12）**。需求编号 R-18；指标 test-metrics §T-L。
 
-## 18. pipeline 创建元流程（pipeline-factory）—— 设计（2026-09-14 · 待实现）
+## 18. pipeline 创建元流程（pipeline-factory）—— 主体已实现（2026-09-14）
 
 > 编号说明：§17 为 LLM 出网路径修复（2026-09-13 实测，`_http_client_kwargs` 未配代理
 > 返回 `{}`），记录于 test-metrics 与项目记忆、未在本文档立章；本节顺延为 §18。
@@ -2395,17 +2395,81 @@ instantiate(conn, tpl)  落库：身份 + 锚点 + persona_ontology + persona_ac
 
 ### 18.5 落地顺序（先补零件 → 再组装 → 再回迁验收）
 
-1. m2 资产盘点函数（`pipeline_factory.inventory`）
-2. m6 考卷编译器（ExamSpec：覆盖型 / 规则型 / 基准型）
-3. m7 考试循环（含归因自动化：导出 handoff + 根因分类，LLM 只提名）
-4. 组装 pipeline-factory 落库（draft，人工审批）
+1. m2 资产盘点函数（`pipeline_factory.inventory`）—— **✅ 已落地（18.6）**
+2. m6 考卷编译器（ExamSpec：覆盖型 / 规则型 / 基准型）—— **✅ 已落地（18.6）**
+3. m7 考试循环（含归因自动化：导出 handoff + 根因分类，LLM 只提名）——
+   **✅ 骨干已落地（18.6）；归因自动化的 LLM 提名段待接**
+4. 组装 pipeline-factory 落库（draft，人工审批）—— **✅ 已落库为 #47（9 节点 / 11 关系）**
 5. **DFMEA 回迁为第一个实例**（`grade_dfmea_wifi.py` 改写为 ExamSpec 实例）——
-   不回迁则抽象未被证明
-6. §18.1 本体种子安装到 #7
+   ⏳ 待做（不回迁则抽象未被证明）
+6. §18.1 本体种子安装到 #7 —— ⏳ 待做
 
-**状态**：设计完成（2026-09-14），待实现。需求编号 R-20；指标 test-metrics §T-N（待建）。
+### 18.6 落地实现（2026-09-14，commit 4a438e2）
+
+#### ① 新模块 `backend/app/pipeline_factory.py`
+
+| 节点 | 函数 / 派发 | 说明 |
+|---|---|---|
+| m2 资产盘点 | `inventory(conn)` | deterministic、只读。返回 identities / templates / actions / mcp / fixtures 五类资产清单 + 摘要（含 `fixtures_ok`） |
+| m3 补专家 | step_name 分支 | 返回可用模板 codes + 「未命中走建数字人子流程」指引 |
+| m4 补能力 | step_name 分支 | 返回 available_actions 清单，指引 add_ontology / 绑动作 |
+| m6 编译考卷 | `compile_exam(conn, fixture_spec=None)` | **38 判定点自动生成**：覆盖型 13（← `fmea_parts` 每子系统一题）+ 规则型 7（← `EXAM_INVARIANTS`）+ 基准型 18（← `fmea_cases` + history 引用总数）。每条 = `(sql, expect_op, expect)`，纯 deterministic |
+| m7 考试迭代 | `run_exam(conn, run_id, exam)` + `diagnose(conn, result)` | 跑题（只读 `dfmea_rows`，不调 LLM）；归因分 **structural / semantic** 两类（启发式：来源/AP 类失败 → semantic；其余 → structural），供 m4 回灌路由 |
+| m9 反向沉淀 | step_name 分支 | 指引 §16.5 `identity_to_template` |
+
+**引擎接线**：`pipeline._run_deterministic` 按 `step_name` 派发到上述函数
+（「资产盘点」「补专家」「补能力」「编译考卷」「考试迭代」「反向沉淀」六个分支，
+连同原有「建数字人」）。
+
+**装配**：`assemble_factory(conn)` 幂等落库 `pipeline-factory`
+（按 name 判重）→ **pipeline #47**：m1/m5/m8 为 nominate（绑定 Pipeline 训练师 #7），
+其余 deterministic；含 m7→m3/m4/m5 的 ask 权限边（自相似：元流程复用
+「复核门 + 修复回边」模式）。种子脚本 `scripts/seed_pipeline_factory.py`。
+
+**单测信号**：`inventory` → 14 identities / 4 templates / fixtures_ok=True；
+`compile_exam` → 38 rows 三型齐备；`run_exam` 在空 run 上 60.5% pass_rate（合理：
+空表上的覆盖/来源类判定点应失败）。
+
+#### ② pipeline 版本族（schema 变更）
+
+`pipelines` 表加 3 列 + 1 索引（写在 `_init_schema` 迁移块，幂等）：
+
+- `is_archived BOOLEAN NOT NULL DEFAULT false` —— 主列表默认过滤
+- `family_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL` —— 家族根
+- `parent_version_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL` —— 版本链
+- `CREATE INDEX idx_pipelines_family ON pipelines(family_id, is_archived)`
+
+迁移脚本 `scripts/migrate_pipeline_versions.py`（幂等）。**当前态**：
+#44 CANONICAL（98.0% 通过）；26 条 DFMEA 历次迭代 → family=44 归档；
+#1（自动写代码）→ family=1 归档；#47（factory）active。
+
+#### ③ 画布交互化（PipelinePage）
+
+`PipelineGraph` 重写为交互式：**节点拖动**（mouseup 立即 `updateNode` 落库
+`position_x/y`，刷新后保留）· **画布平移**（背景拖动，viewBox 跟随）·
+**缩放**（滚轮 0.4x~2.5x，状态栏显示百分比）· **撤销/重做**（工具条按钮 +
+`Ctrl+Z`/`Ctrl+Shift+Z`，双栈）· 背景网格辅助对齐。
+初始位置优先用 DB 持久化的 `position_x/y`，无则用自动布局。
+列表默认过滤 `is_archived`；「显示归档版本」勾选后可查全部（归档项半透明 +
+family 标签）。`api.ts` 导出 `updateNode`；`Pipeline` 类型加
+`is_archived?/family_id?/parent_version_id?`。
+
+#### ④ 遗留（下一步）
+
+- **DFMEA 回迁**（§18.5-5）：`grade_dfmea_wifi.py` 改写为 `compile_exam` 的
+  ExamSpec 实例 —— 38 判定点与 30 题×150 点的口径对齐尚需逐条核对
+- **归因自动化**（§18.5-3 后半）：`diagnose` 目前是启发式分类；LLM 提名段
+  （与 `trainer._analyze_failures` 同口径：只提名不裁决）待接
+- **§18.1 本体种子**安装到 #7（§18.5-6）
+- **m1/m5/m8 的 nominate 节点**：已可执行（走 `chat.answer` tool-use loop），
+  但尚未与前端的「创建 pipeline」对话框打通（现在前端仍走
+  `main._design_pipeline_via_llm` 旧路径）
+
+**状态**：**主体已实现（2026-09-14，commit 4a438e2）**：18.6 ①②③ 落地；
+§18.5-1/2/3(骨干)/4 完成。待办见 ④。需求编号 R-20；指标 test-metrics §T-N。
 
 ---
+*v1.8（2026-09-14）§18 主体落地：`pipeline_factory.py`（m2/m6/m7）+ 引擎 deterministic 派发 + factory 落库 #47 + pipeline 版本族（is_archived/family_id）+ 画布交互化（拖动/缩放/撤销重做/位置持久化）；§18.6 落地实现记录。*
 *v1.7（2026-09-14）新增 §18 pipeline 创建元流程（pipeline-factory）：从 §15.7 十六轮迭代提取流程本体，四关 + 三循环 + 9 节点元流程设计（待实现）。*
 *v1.6（2026-09-12）新增 §15.7 部件知识库与 WiFi 场景验证（考官制 30 题考卷）；§16.6~§16.8 模板反向沉淀 / 管理面板 / 恢复出厂入口。*
 *v1.5（2026-09-12）新增 §16 数字人模板（六元组蓝图 + 填空槽位）；§15 DFMEA 链路落地实现。*

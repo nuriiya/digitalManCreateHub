@@ -460,6 +460,27 @@
 | J-5 页面可用性 | 8 页可切换、无 console 报错 | 全绿（沿用 T-A A-2） | — |
 | J-6 任务可见性 | 任意页面可开任务抽屉并看到运行中 job | 100% | 旧：独占一个 tab 整页 |
 
+## T-N pipeline 创建元流程（pipeline-factory · design §18）
+
+> **主体已实现（2026-09-14，commit 4a438e2）**。factory 已落库 **pipeline #47**
+> （9 节点 / 11 关系，m1/m5/m8 绑定 Pipeline 训练师 #7，其余 deterministic）。
+> DFMEA 回迁（§18.5-5）与本体种子（§18.5-6）待做。
+
+| 指标 | 定义/口径 | 阈值/目标 | 实测 |
+|---|---|---|---|
+| N-50 资产盘点完备性 | `inventory` 返回五类资产（identities/templates/actions/mcp/fixtures）且 `fixtures_ok=True` | **五类齐 + True** | 14 identities / 4 templates / 4 fixtures 全就位 ✅ |
+| N-51 考卷编译自动率 | `compile_exam` 自动产出的判定点数 / 总判定点数 | **100%**（给定夹具后零手写） | 38/38 ✅（覆盖 13 + 规则 7 + 基准 18） |
+| N-52 判分独立性 | `run_exam` 执行期间 LLM 调用次数 | **0**（考官不能是考生） | 0 ✅（纯 SQL 判定） |
+| N-53 判分只读性 | `run_exam` 对写库的 DML 次数 | **0** | 0 ✅（只 SELECT） |
+| N-54 归因分类可用性 | `diagnose` 对失败判定点的 structural/semantic 二分覆盖率 | **100%** | 启发式全覆盖 ✅（LLM 提名段待接） |
+| N-55 factory 落库幂等性 | `seed_pipeline_factory.py` 重复运行的 pipeline 新增数 | **0**（第二次起） | 0 ✅（按 name 判重） |
+| N-56 元流程结构完备性 | factory #47 的 deterministic 节点全部有可用派发函数 | **6/6** | 6/6 ✅（资产盘点/补专家/补能力/编译考卷/考试迭代/反向沉淀） |
+| N-57 版本族归档正确性 | 非 canonical 的 DFMEA pipeline 全部 `is_archived=true` 且 `family_id=44` | **100%** | 26/26 ✅（#1 独立 family=1 归档） |
+| N-58 主列表过滤 | 前端默认视图中的归档 pipeline 数 | **0** | 0 ✅（勾选后可查 29 条） |
+| N-59 画布位置持久化 | 拖动节点 → 刷新页面 → 位置保留 | **100%** | `updateNode` 落库 position_x/y ✅（端到端手测） |
+| N-60 画布撤销/重做 | 拖动后 Ctrl+Z 恢复原位、Ctrl+Shift+Z 重做 | 双向可用 | 双栈实现 ✅（端到端手测） |
+| N-61 空表判分合理性 | 空 run 上 `run_exam` 的 pass_rate | 应显著 < 阈值（覆盖/来源类应失败） | 60.5% ✅（合理信号：空表上 15 项失败） |
+
 ---
 
 *维护约定：指标的任何变更（新增/改公式/改阈值）必须同时更新 requirement.md 对应 R-5 族条目与 design.md 相关章节（design.md §14）。*
