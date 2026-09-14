@@ -2519,6 +2519,61 @@ added=0 / skipped=471**（幂等验证通过）；API 冒烟（登录→export�
 
 **状态**：**已实现（2026-09-14）**。需求编号 R-21；指标 test-metrics §T-N 续。
 
+## 20. 数字人创建统一收口（IdentitySpec）—— 已实现（2026-09-14）
+
+### 20.1 耦合诊断（重构前）
+
+平台曾有 **6 条创建路径**（图谱种子 / 工作台向导 / 模板实例化 / pipeline 建数字人
+节点 / 上传文档并入 / porter 导入），其中三个耦合点：
+
+1. **两套平行建身份实现**：`identity.create_identity`（insert-only、keywords 硬编码
+   `"[]"`）与 `persona_templates._upsert_identity`（自带 INSERT/UPDATE、无
+   MAX_NAME_LEN 校验）——加字段要改两处，校验已分叉（模板写 keywords、图谱不写）。
+2. **API 命名空间错位**：创建数字人挂 `/api/ontology/identities`（本体域）。
+3. **产物完整度取决于入口**（用户"繁琐感"根源）：向导=纯空壳、图谱=种子本体、
+   模板=开箱即用——隐式知识不直观。
+
+### 20.2 收口实现
+
+**① `identity.upsert_identity`（全平台唯一 identities 行写入口）**：
+校验唯一份（name ≤ MAX_NAME_LEN、mission ≤ 500、category 闭集、prompt 截断）；
+`update_if_exists=True` 承载模板幂等更新语义，`False` 时同名返回既有 id
+（消除 create_identity 的静默重复插入）。
+`create_identity` 重构为「调 upsert + 种子→锚点+本体段」，签名不变（向后兼容）。
+
+**② `persona_templates._upsert_identity` 改薄壳**：只做「蓝图字段 → 统一入口」
+映射，幂等语义由 `update_if_exists=True` 承载。平行实现消除。
+
+**③ 规范 API `POST /api/identities`（IdentitySpec）**：
+```json
+{ "name", "mission", "description?", "prompt?", "category?", "reactive?",
+  "seed_candidate_ids": [候选 id],          // 图谱种子路径
+  "ontology_inline": [{kind,name,definition}], // 内联本体（走 trainer.add_ontology 双写本体库）
+  "actions": [{name, builtin_name, status}] }  // 动作绑定
+```
+产物完整度由 spec **显式声明**，不再取决于入口。旧路由
+`/api/ontology/identities` 保留为 alias（迁移期）。前端 `api.ts` 已切到新路由。
+
+### 20.3 验证
+
+- `upsert_identity` 单测 5/5：幂等同 id / update_if_exists 更新 / keywords 保留 /
+  空名拒绝 / 超 500 字 mission 拒绝
+- 收口后模板套件 `verify_persona_templates.py` RESULT: OK（模板路径无回归）
+- 其余三套回归（table_parse / fmea_actions / pipeline_fmea）全 OK
+- API 冒烟：`POST /api/identities` 带内联本体 → `{"ok":true,"inline_ontology":1}`，
+  **内联本体同步进本体库（candidates）1 条**（与 §19.1 双写一致）
+
+### 20.4 演进方向（方案三 · 远期）
+
+当 §18 factory 跑通后（m1~m4），前端创建入口可进一步收口到 factory：用户只描述
+需求，factory 编排「盘点 → 模板/派生/子流程 → 补能力」，IdentitySpec 成为 factory
+m1 的产出物。届时本节 ③ 的 API 成为 factory 的内部调用。
+
+**状态**：**已实现（2026-09-14）**。需求编号 R-22；指标 test-metrics §T-N 续。
+
+---
+*v1.10（2026-09-14）新增 §20 数字人创建统一收口：upsert_identity 唯一写入口 + 模板薄壳化 + POST /api/identities（IdentitySpec）；消除平行实现与入口差异。*
+
 ---
 *v1.9（2026-09-14）新增 §19：本体库同步链路修复（add_ontology 双写 + 回填 68→149）+ 资产打包迁移 porter（8 个 section 导出/导入，幂等，Settings 页入口）。*
 

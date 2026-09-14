@@ -1074,11 +1074,92 @@ class IdentityCreateBody(BaseModel):
     category: str = identity.DEFAULT_CATEGORY   # general | domain_expert
 
 
+class OntologySourceInline(BaseModel):
+    type: str = "inline"                    # inline：直接内联本体段
+    items: list[dict] = []                  # [{kind, name, definition}]
+
+
+class ActionBinding(BaseModel):
+    name: str = ""                          # 动作显示名
+    builtin_name: str = ""                  # 内置动作标识（如 fmea_part_search）
+    status: str = "approved"
+
+
+class IdentitySpecBody(BaseModel):
+    """**IdentitySpec 统一创建规格**（design §20 / R-22-2）。
+
+    所有创建路径的声明式描述：图谱种子（seed_candidate_ids）、工作台向导
+    （仅基础字段）、内联本体（ontology_inline）、动作绑定（actions）。
+    模板路径走 `/api/persona-templates/{id}/instantiate`（渲染后同样收口
+    到 `identity.upsert_identity`）。
+    """
+    name: str
+    mission: str = ""
+    description: str = ""
+    seed_candidate_ids: list[int] = []
+    prompt: str = ""
+    category: str = identity.DEFAULT_CATEGORY
+    reactive: bool = False
+    ontology_inline: list[dict] = []        # [{kind, name, definition}]
+    actions: list[ActionBinding] = []
+
+
+@app.post("/api/identities")
+def create_identity_spec(body: IdentitySpecBody):
+    """**规范入口**（design §20）：按 IdentitySpec 创建数字人。
+
+    与旧路由 `/api/ontology/identities` 的区别：支持 reactive、内联本体段、
+    动作绑定 —— 产物完整度由 spec 显式声明，不再取决于入口。
+    """
+    conn = db.get_conn()
+    iid = identity.create_identity(conn, body.name, body.mission,
+                                   body.description, body.seed_candidate_ids,
+                                   body.prompt, body.category)
+    if iid is None:
+        return JSONResponse({"error": "名字不能为空或过长"}, status_code=400)
+    # reactive 开关（upsert 默认 false；显式开启）
+    if body.reactive:
+        conn.execute("UPDATE identities SET reactive=true WHERE id=?", (iid,))
+        conn.commit()
+    # 内联本体段：直接写 persona_ontology（走 trainer.add_ontology 双写本体库）
+    n_inline = 0
+    if body.ontology_inline:
+        from . import trainer as _trainer
+        for it in body.ontology_inline:
+            nm = str(it.get("name") or "").strip()
+            df = str(it.get("definition") or "").strip()
+            if not nm or not df:
+                continue
+            _trainer.add_ontology(conn, iid, str(it.get("kind") or "概念"),
+                                  nm, df, note="IdentitySpec 内联本体")
+            n_inline += 1
+    # 动作绑定
+    n_actions = 0
+    if body.actions:
+        for a in body.actions:
+            nm = (a.name or a.builtin_name or "").strip()
+            if not nm:
+                continue
+            conn.execute(
+                "INSERT INTO persona_actions(identity_id, name, status,"
+                " builtin_name, input_schema, kind, created_at)"
+                " VALUES(?,?,?,?,?,'builtin',?)",
+                (iid, nm, a.status or "approved", a.builtin_name or nm,
+                 {}, db.now()))
+            n_actions += 1
+        conn.commit()
+    jobs.emit(conn, None, "identity.created",
+              {"id": iid, "name": body.name,
+               "seeds": len(body.seed_candidate_ids),
+               "inline": n_inline, "actions": n_actions})
+    return {"ok": True, "id": iid, "inline_ontology": n_inline,
+            "actions_bound": n_actions}
+
+
 @app.post("/api/ontology/identities")
 def create_identity(body: IdentityCreateBody):
-    """Create a digital person from the ontology graph: user-picked seed
-    candidates become both approved anchors and the persona's initial ontology
-    段 (their explicit pick = final adjudication)."""
+    """旧路由（**alias，design §20 迁移期保留**）：图谱种子创建。
+    新代码请用 `POST /api/identities`（IdentitySpec 规范入口）。"""
     iid = identity.create_identity(db.get_conn(), body.name, body.mission,
                                    body.description, body.seed_candidate_ids,
                                    body.prompt, body.category)

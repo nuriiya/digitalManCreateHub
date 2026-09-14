@@ -268,6 +268,58 @@ def delete_identity(conn, identity_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def upsert_identity(conn, name: str, mission: str,
+                    description: str = "",
+                    keywords: list[str] | None = None,
+                    prompt: str = "",
+                    category: str = DEFAULT_CATEGORY,
+                    status: str = "approved",
+                    reactive: bool = False,
+                    update_if_exists: bool = False) -> int | None:
+    """**统一建身份入口**（design §20 / R-22）：全平台唯一的 identities 行
+    写入函数。此前 `identity.create_identity`（insert-only、keywords 硬编码
+    空数组）与 `persona_templates._upsert_identity`（自带 INSERT/UPDATE、
+    无 MAX_NAME_LEN 校验）是**两套平行实现** —— 加字段要改两处、校验已分叉
+    （实测：模板路径写 keywords，图谱路径硬编码 "[]"）。
+
+    收口后所有创建路径（图谱种子 / 工作台向导 / 模板实例化 / porter 导入
+    的 identity 段）都走本函数：
+      - 校验唯一份：name 非空且 ≤ MAX_NAME_LEN、mission ≤ 500、
+        category ∈ IDENTITY_CATEGORIES、prompt ≤ MAX_PROMPT_LEN；
+      - `update_if_exists=True`（模板路径语义）：已存在则 UPDATE 全量字段；
+      - `update_if_exists=False`：已存在时**直接返回既有 id**（不重复建，
+        也不再允许同名多行 —— 消除 create_identity 的静默重复插入）。
+    """
+    name = str(name or "").strip()
+    mission = str(mission or "").strip()
+    if not name or len(name) > MAX_NAME_LEN:
+        return None
+    if len(mission) > 500:
+        return None
+    user_prompt = str(prompt or "").strip()[:MAX_PROMPT_LEN]
+    cat = category if category in IDENTITY_CATEGORIES else DEFAULT_CATEGORY
+    kws = json.dumps(keywords or [], ensure_ascii=False)
+    row = conn.execute("SELECT id FROM identities WHERE name=?",
+                       (name,)).fetchone()
+    if row:
+        if not update_if_exists:
+            return row["id"]
+        conn.execute(
+            "UPDATE identities SET mission=?, description=?, keywords=?,"
+            " prompt=?, category=?, status=?, reactive=? WHERE id=?",
+            (mission, str(description or "").strip()[:MAX_DEFINITION_LEN],
+             kws, user_prompt, cat, status, bool(reactive), row["id"]))
+        conn.commit()
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO identities(name, mission, description, keywords, prompt,"
+        " status, category, reactive, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (name, mission, str(description or "").strip()[:MAX_DEFINITION_LEN],
+         kws, user_prompt, status, cat, bool(reactive), db.now()))
+    conn.commit()
+    return cur.lastrowid
+
+
 def create_identity(conn, name: str, mission: str,
                     description: str = "",
                     seed_candidate_ids: list[int] | None = None,
@@ -288,21 +340,15 @@ def create_identity(conn, name: str, mission: str,
 
     `category` ∈ IDENTITY_CATEGORIES ('general' | 'domain_expert'); invalid
     values fall back to the default.
+
+    2026-09-14（design §20）：行创建收口到 `upsert_identity`（全平台唯一
+    identities 写入口）；本函数只保留「种子 → 锚点 + 本体段」的图谱路径语义。
     """
-    name = str(name or "").strip()
-    mission = str(mission or "").strip()
-    if not name or len(name) > MAX_NAME_LEN:
+    identity_id = upsert_identity(conn, name, mission, description=description,
+                                  prompt=prompt, category=category,
+                                  status="approved")
+    if identity_id is None:
         return None
-    if len(mission) > 500:
-        return None
-    user_prompt = str(prompt or "").strip()[:MAX_PROMPT_LEN]
-    cat = category if category in IDENTITY_CATEGORIES else DEFAULT_CATEGORY
-    cur = conn.execute(
-        "INSERT INTO identities(name, mission, description, keywords, prompt,"
-        " status, category, created_at) VALUES(?,?,?,?, ?, ?, ?, ?)",
-        (name, mission, str(description or "").strip()[:MAX_DEFINITION_LEN],
-         "[]", user_prompt, "approved", cat, db.now()))
-    identity_id = cur.lastrowid
     for cid in (seed_candidate_ids or []):
         cand = conn.execute(
             "SELECT kind, name, definition FROM candidates WHERE id=?",

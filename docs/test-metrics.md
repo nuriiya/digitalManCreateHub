@@ -486,6 +486,13 @@
 | N-65 导入幂等性 | 同 bundle 重导入的 added 总数 | **0** | 0（skipped=471）✅ |
 | N-66 导入不改既有 | 重导入后既有条目定义是否被覆盖 | **不覆盖** | 按 name/name_norm 判重跳过 ✅ |
 | N-67 porter API 可用 | 登录 → export → import 全链路 | 200 + ok=true | 冒烟通过 ✅ |
+| N-68 upsert 唯一性 | 同名重复调 `upsert_identity`（update_if_exists=False）产生的新行数 | **0**（返回既有 id） | 单测 5/5 PASS ✅ |
+| N-69 upsert 更新语义 | `update_if_exists=True` 时字段是否生效 | mission/keywords 均更新 | PASS ✅ |
+| N-70 upsert 校验完备 | 空名 / 超 500 字 mission / category 越界 | 全部拒绝/回退 | PASS ✅ |
+| N-71 模板路径收口无回归 | 收口后 `verify_persona_templates.py` | RESULT: OK | OK ✅ |
+| N-72 平行实现消除 | 除 `upsert_identity` 外直接 INSERT identities 的代码处数 | **0** | create_identity 与 _upsert_identity 均改走统一入口 ✅ |
+| N-73 新路由可用 | `POST /api/identities`（含内联本体 + 动作绑定） | ok=true | 冒烟：id=39 + inline_ontology=1 ✅ |
+| N-74 内联本体双写 | spec 内联本体是否同步进本体库（candidates） | 同步 | 冒烟：同步 1 条 ✅ |
 
 ---
 

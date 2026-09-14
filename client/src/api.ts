@@ -251,7 +251,7 @@ export const createIdentity = (
   name: string, mission: string, seedCandidateIds: number[],
   description = '', prompt = '', category = 'domain_expert',
 ) =>
-  api<{ ok: boolean; id: number }>('/api/ontology/identities', {
+  api<{ ok: boolean; id: number; inline_ontology?: number; actions_bound?: number }>('/api/identities', {
     method: 'POST',
     body: JSON.stringify({ name, mission, description, seed_candidate_ids: seedCandidateIds, prompt, category }),
   })

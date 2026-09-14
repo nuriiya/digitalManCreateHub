@@ -353,6 +353,11 @@
 | R-21.1 | **资产打包导出**：数字人 + 本体库 + 本体段/动作/锚点 + 本体关系 + pipeline + MCP 一键导出 JSON（**不含 RAG 数据**） | **已实现**（design §19.2） | `porter.export_bundle`：8 个 section；实测导出 14/146/37/14/149/77/29/5 |
 | R-21.2 | **资产打包导入**：导入 bundle 须幂等（按 name 判重、只补不改），ID 按 name 重映射（跨库安全） | **已实现**（design §19.2） | 同 bundle 重导入 added=0 / skipped=471（幂等验证通过）；persona_id 按 name 重映射 |
 | R-21.3 | 导出/导入须有**前端入口**（Settings 页）与导入报告 | **已实现**（design §19.2） | 导出下载 `digitalman-bundle-<ts>.json`；导入后展示逐 section added/skipped |
+| R-22 | 数字人创建统一收口：消除平行建身份实现，产物完整度由 spec 显式声明 | **已实现**（design §20） | 耦合确诊：`identity.create_identity` 与 `persona_templates._upsert_identity` 两套平行实现（校验分叉：模板写 keywords、图谱硬编码 "[]"；模板无 MAX_NAME_LEN 校验）；6 条创建路径产物完整度不一致 |
+| R-22.1 | `upsert_identity` 作为**全平台唯一** identities 行写入口（校验唯一份；update_if_exists 双语义） | **已实现**（design §20.2①） | 单测 5/5：幂等同 id / 更新生效 / keywords 保留 / 空名拒绝 / 超长拒绝 |
+| R-22.2 | 模板路径收口：`_upsert_identity` 改薄壳调统一入口 | **已实现**（design §20.2②） | `verify_persona_templates.py` RESULT: OK（收口后无回归） |
+| R-22.3 | 规范 API `POST /api/identities`（IdentitySpec：reactive/内联本体/动作绑定）；旧路由留 alias；前端切换 | **已实现**（design §20.2③） | 冒烟：创建带内联本体 → ok + inline_ontology=1，且同步进本体库 1 条；`api.ts` 已切新路由 |
+| R-22.4 | 演进方向：创建入口进一步收口到 §18 factory（m1~m4），IdentitySpec 成为 factory 产出物 | **远期**（design §20.4） | 待 §18 factory 端到端跑通（LLM 账户充值后） |
 
 ---
 

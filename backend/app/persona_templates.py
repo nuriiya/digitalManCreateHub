@@ -689,25 +689,23 @@ def render(tpl: dict, values: dict) -> dict:
 # ---------------- 落库（instantiate） ----------------
 
 def _upsert_identity(conn, r: dict, status: str) -> int:
-    row = conn.execute("SELECT id FROM identities WHERE name=?",
-                       (r["name"],)).fetchone()
-    if row:
-        conn.execute(
-            "UPDATE identities SET mission=?, description=?, keywords=?, prompt=?,"
-            " category=?, status=? WHERE id=?",
-            (r["mission"], r["description"],
-             json.dumps(r["keywords"], ensure_ascii=False), r["prompt"],
-             r["category"], status, row["id"]))
-        conn.commit()
-        return row["id"]
-    cur = conn.execute(
-        "INSERT INTO identities(name, mission, description, keywords, prompt,"
-        " status, category, created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (r["name"], r["mission"], r["description"],
-         json.dumps(r["keywords"], ensure_ascii=False), r["prompt"],
-         status, r["category"], _now()))
-    conn.commit()
-    return cur.lastrowid
+    """模板路径的身份行写入 —— **已收口到 `identity.upsert_identity`**
+    （design §20 / R-22）。
+
+    此前这里是独立 INSERT/UPDATE（无 MAX_NAME_LEN 校验、与
+    identity.create_identity 平行），加字段要改两处、校验分叉。现在只保留
+    「模板蓝图 → 统一入口」的字段映射；幂等更新语义（重复实例化覆盖字段）
+    由 `update_if_exists=True` 承载。
+    """
+    from . import identity as identity_mod
+    return identity_mod.upsert_identity(
+        conn, r["name"], r["mission"],
+        description=r.get("description", ""),
+        keywords=r.get("keywords") or [],
+        prompt=r.get("prompt", ""),
+        category=r.get("category") or "domain_expert",
+        status=status,
+        update_if_exists=True)
 
 
 def _upsert_anchor(conn, iid: int, name: str, atype: str) -> None:
