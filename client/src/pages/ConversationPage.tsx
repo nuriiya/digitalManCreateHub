@@ -4,6 +4,7 @@ import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
   routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken, createChatSession,
+  startPipelineSession, updatePipelineProgress,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -55,9 +56,9 @@ export default function ConversationPage({ refreshKey }: Props) {
     identityId: number; sessionId: number | null;
   }>(null)
   // pipeline 触发后的轻量阶段进度（design §23 / R-25，不渲染大卡片）：
-  // 轮询 run 状态 → 在 assistant 气泡里更新「任务阶段 1.2.3」
+  // 轮询 run 状态 → 在 assistant 消息（真实 id，持久化）里更新「任务阶段 1.2.3」
   const [pipelineProgress, setPipelineProgress] = useState<null | {
-    pipelineId: number; name: string; assistantId: number;
+    pipelineId: number; name: string; assistantId: number; sessionId: number;
   }>(null)
   const [progressDone, setProgressDone] = useState<null | { runId: number }>(null)
   const logRef = useRef<HTMLDivElement>(null)
@@ -117,10 +118,11 @@ export default function ConversationPage({ refreshKey }: Props) {
   }, [messages, sending])
 
   // pipeline 阶段进度轮询（design §23 / R-25）：4s 拉 run 状态 →
-  // 在 assistant 气泡里渲染「任务阶段 1.2.3」（✅/⏳/⏸），done 后停止
+  // 在 assistant 消息里渲染「任务阶段 1.2.3」（✅/⏳/⏸）并**回写数据库**，
+  // done 后停止（WorkBuddy 式：上下文持久化，刷新/切换不丢）
   useEffect(() => {
     if (!pipelineProgress) return
-    const { pipelineId, name, assistantId } = pipelineProgress
+    const { pipelineId, name, assistantId, sessionId: psSid } = pipelineProgress
     let cancelled = false
     const tick = async () => {
       try {
@@ -152,6 +154,7 @@ export default function ConversationPage({ refreshKey }: Props) {
             ? '\n\n✅ 全部阶段完成 —— DFMEA 表已写入，可下载 Excel 报告。'
             : '')
         setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, content } : x)))
+        updatePipelineProgress(psSid, assistantId, content).catch(() => { })
         if (last.status !== 'running') {
           setProgressDone({ runId: last.id })
           setPipelineProgress(null)   // 停止轮询
@@ -293,35 +296,49 @@ export default function ConversationPage({ refreshKey }: Props) {
       const pr = await routePipeline(text)
       const matchedPipeline = pr.pipeline
       if (matchedPipeline) {
-        // 立刻创建对话组（design §23.4：用户发送后左侧立刻出现新组，
-        // 不等运行完成）—— 用 pipeline 主数字人归属并切换到该组。
-        if (sessionId == null && matchedPipeline.primary_persona_id) {
-          try {
-            const cs = await createChatSession(matchedPipeline.primary_persona_id,
-              text.slice(0, 24))
-            if (cs.session?.id) {
-              setSessionId(cs.session.id)
-              refreshSessions()
-            }
-          } catch { /* 创建失败不阻塞触发 */ }
-        }
+        // WorkBuddy 式上下文保存（design §23.4）：后端立刻建组 + 持久化
+        // user 消息和 assistant 进度消息（真实 id），刷新/切换不丢
         try {
-          const run = await runPipeline(matchedPipeline.pipeline_id)
-          updateAssistant({
-            identity_name: `pipeline「${matchedPipeline.name}」`,
-            content: `🔗 **${matchedPipeline.name}** 已触发（job #${run.job_id}），加载阶段进度…`,
+          const ps = await startPipelineSession({
+            message: text,
+            pipeline_id: matchedPipeline.pipeline_id,
+            pipeline_name: matchedPipeline.name,
+            primary_persona_id: matchedPipeline.primary_persona_id,
+            session_id: sessionId,
           })
-          setPipelineProgress({
-            pipelineId: matchedPipeline.pipeline_id,
-            name: matchedPipeline.name,
-            assistantId,
-          })
-          toast(`已触发 pipeline「${matchedPipeline.name}」运行`, 'ok')
+          setSessionId(ps.session_id)
+          // 临时负 id 气泡替换为持久化消息（真实 id）
+          setMessages([
+            { ...userMsg, id: ps.user_msg_id },
+            { ...assistantMsg, id: ps.assistant_msg_id,
+              identity_name: `pipeline「${matchedPipeline.name}」`,
+              content: `🔗 **${matchedPipeline.name}** 已触发，加载阶段进度…` },
+          ])
           refreshSessions()
+          try {
+            const run = await runPipeline(matchedPipeline.pipeline_id)
+            setMessages((m) => m.map((x) => (x.id === ps.assistant_msg_id
+              ? { ...x, content: `🔗 **${matchedPipeline.name}** 已触发（job #${run.job_id}），加载阶段进度…` }
+              : x)))
+            setPipelineProgress({
+              pipelineId: matchedPipeline.pipeline_id,
+              name: matchedPipeline.name,
+              assistantId: ps.assistant_msg_id,
+              sessionId: ps.session_id,
+            })
+            toast(`已触发 pipeline「${matchedPipeline.name}」运行`, 'ok')
+            refreshSessions()
+          } catch (e: any) {
+            updateAssistant({
+              identity_name: `pipeline「${matchedPipeline.name}」`,
+              content: `pipeline 匹配到了但运行失败：${e?.message || e}`,
+            })
+            toast(e?.message || String(e), 'err')
+          }
         } catch (e: any) {
           updateAssistant({
-            identity_name: `pipeline「${matchedPipeline.name}」`,
-            content: `pipeline 匹配到了但运行失败：${e?.message || e}`,
+            identity_name: '错误',
+            content: `创建对话组失败：${e?.message || e}`,
           })
           toast(e?.message || String(e), 'err')
         }

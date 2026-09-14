@@ -498,6 +498,20 @@ export const routePipeline = (message: string) =>
   api<{ pipeline: PipelineRoute | null }>('/api/chat/route-pipeline', {
     method: 'POST', body: JSON.stringify({ message }),
   })
+
+// pipeline 触发的对话持久化（design §23.4，WorkBuddy 式）：立刻建组+存消息
+export const startPipelineSession = (body: {
+  message: string; pipeline_id: number; pipeline_name: string;
+  primary_persona_id?: number | null; session_id?: number | null;
+}) =>
+  api<{ session_id: number; user_msg_id: number; assistant_msg_id: number }>(
+    '/api/chat/pipeline-session', { method: 'POST', body: JSON.stringify(body) })
+
+// pipeline 进度回写（轮询时把「任务阶段 1.2.3」持久化进对话组）
+export const updatePipelineProgress = (session_id: number, message_id: number, content: string) =>
+  api<{ ok: boolean }>('/api/chat/pipeline-progress', {
+    method: 'POST', body: JSON.stringify({ session_id, message_id, content }),
+  })
 export const sendChat = (
   identityId: number, message: string,
   opts: { use_ontology?: boolean; use_rag?: boolean; provider?: string; ollama_model?: string | null; session_id?: number | null } = {},

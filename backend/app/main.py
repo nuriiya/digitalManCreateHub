@@ -1921,6 +1921,52 @@ def chat_route_pipeline(body: RouteBody):
     return {"pipeline": r}
 
 
+class PipelineSessionBody(BaseModel):
+    message: str
+    pipeline_id: int
+    pipeline_name: str = ""
+    primary_persona_id: int | None = None
+    session_id: int | None = None
+
+
+@app.post("/api/chat/pipeline-session")
+def chat_pipeline_session(body: PipelineSessionBody):
+    """pipeline 触发的对话持久化（design §23.4，WorkBuddy 式）：立刻建组
+    （若无）+ 存 user 消息 + 存 assistant 进度占位消息。返回真实 message id，
+    前端轮询 pipeline-progress 回写进度 —— 刷新/切换后对话组里始终有完整
+    上下文（此前临时气泡刷新即丢，对话区空荡只剩下载按钮）。"""
+    conn = db.get_conn()
+    iid = body.primary_persona_id
+    if iid is None:
+        row = conn.execute(
+            "SELECT id FROM identities WHERE status='approved' ORDER BY id LIMIT 1"
+        ).fetchone()
+        iid = row["id"] if row else None
+    if iid is None:
+        return JSONResponse({"error": "无可用数字人，无法创建对话组"}, status_code=404)
+    r = chat.start_pipeline_session(conn, iid, body.message,
+                                    body.pipeline_name or "pipeline",
+                                    body.session_id)
+    if r is None:
+        return JSONResponse({"error": "数字人不存在，无法创建对话组"}, status_code=404)
+    return r
+
+
+class PipelineProgressBody(BaseModel):
+    session_id: int
+    message_id: int
+    content: str
+
+
+@app.post("/api/chat/pipeline-progress")
+def chat_pipeline_progress(body: PipelineProgressBody):
+    """pipeline 进度回写：前端轮询 run 状态后把「任务阶段 1.2.3」写进对话组
+    里那条 assistant 消息（持久化，WorkBuddy 式上下文保存）。"""
+    ok = chat.update_message(db.get_conn(), body.session_id,
+                             body.message_id, body.content)
+    return {"ok": ok}
+
+
 @app.post("/api/chat")
 def persona_chat(body: ChatBody):
     """One turn of conversation with a digital person, answered by the chosen

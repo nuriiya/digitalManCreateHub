@@ -377,10 +377,41 @@ def _history_messages(conn, identity_id: int, limit: int,
 
 
 def _save(conn, identity_id: int, role: str, content: str,
-          session_id: int | None = None) -> None:
-    conn.execute(
+          session_id: int | None = None) -> int | None:
+    cur = conn.execute(
         "INSERT INTO chat_messages(identity_id, role, content, created_at, session_id)"
         " VALUES(?,?,?,?,?)", (identity_id, role, content, db.now(), session_id))
+    conn.commit()
+    return cur.lastrowid
+
+
+def start_pipeline_session(conn, identity_id: int, message: str,
+                            pipeline_name: str,
+                            session_id: int | None = None) -> dict | None:
+    """pipeline 触发的对话持久化（design §23.4，WorkBuddy 式）：
+    建组（若无）+ 存 user 消息 + 存 assistant 进度占位消息。
+    前端拿到真实 message id 后轮询 update_message 写进度 —— 刷新/切换
+    会话后对话组里始终有完整上下文（此前临时负 id 气泡刷新即丢）。
+    """
+    if session_id is None:
+        sess = create_session(conn, identity_id, (message or "")[:24])
+        if sess is None:
+            return None
+        session_id = sess["id"]
+    uid = _save(conn, identity_id, "user", message, session_id)
+    aid = _save(conn, identity_id, "assistant",
+                f"🔗 **{pipeline_name}** 已触发，加载阶段进度…", session_id)
+    return {"session_id": session_id, "user_msg_id": uid,
+            "assistant_msg_id": aid}
+
+
+def update_message(conn, session_id: int, message_id: int, content: str) -> bool:
+    """pipeline 进度回写：更新对话组里那条 assistant 进度消息的内容。"""
+    cur = conn.execute(
+        "UPDATE chat_messages SET content=? WHERE id=? AND session_id=?",
+        (content, message_id, session_id))
+    conn.commit()
+    return cur.rowcount > 0
     conn.commit()
 
 
