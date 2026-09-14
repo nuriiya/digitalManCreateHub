@@ -358,6 +358,12 @@
 | R-22.2 | 模板路径收口：`_upsert_identity` 改薄壳调统一入口 | **已实现**（design §20.2②） | `verify_persona_templates.py` RESULT: OK（收口后无回归） |
 | R-22.3 | 规范 API `POST /api/identities`（IdentitySpec：reactive/内联本体/动作绑定）；旧路由留 alias；前端切换 | **已实现**（design §20.2③） | 冒烟：创建带内联本体 → ok + inline_ontology=1，且同步进本体库 1 条；`api.ts` 已切新路由 |
 | R-22.4 | 演进方向：创建入口进一步收口到 §18 factory（m1~m4），IdentitySpec 成为 factory 产出物 | **远期**（design §20.4） | 待 §18 factory 端到端跑通（LLM 账户充值后） |
+| R-23 | FMEA 报告 Excel 导出：对话说「导出 xx 部件的 FMEA 报告」→ 生成 .xlsx 下载 | **已实现**（design §21） | 列集=用户口径（部件/潜在失效模式/潜在后果/严重度/潜在失效机理/设计预防/频度/设计探测/探测度/**风险顺序数 RPN=S×O×D**/建议测试）+ AP 与来源溯源列 |
+| R-23.1 | RPN 为**计算列**（S×O×D），高亮分级（≥200 红 / ≥100 琥珀） | **已实现**（design §21.1） | 实测 7×5×2=70 / 6×3×3=54 / 8×4×3=96 全对 |
+| R-23.2 | part 模糊过滤（参数化 LIKE，支持中文） | **已实现**（design §21.2） | 实测 part=天线 命中 1 行、API 200 |
+| R-23.3 | 三层入口：数字人动作（返回 markdown 下载链接）/ API / PipelineCard 按钮 | **已实现**（design §21.2） | 动作 `fmea_export_excel` 已绑定 DFMEA 工程师 #9 并入模板蓝图 |
+| R-23.4 | 聊天链接下载通道：`?token=` 查询参数认证（范围最小化白名单）+ RFC 5987 中文文件名 | **已实现**（design §21.2） | `_TOKEN_QUERY_API_PATHS={/api/fmea/export}`；中文 part 过滤 200（直接塞 header 会 500，已修） |
+| R-23.5 | 无可导出行时明确报错（404），不返回空文件 | **已实现**（design §21.2） | 空库实测 404 + 错误信息 |
 
 ---
 

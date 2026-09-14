@@ -52,6 +52,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 # Every /api/* route requires a valid bearer token except the login endpoint.
 # Static frontend files (non-/api) stay open so the login page can load.
 _PUBLIC_API_PATHS = {"/api/auth/login"}
+# 文件下载通道：允许 ?token= 查询参数认证（聊天 markdown 链接用，design §21）
+_TOKEN_QUERY_API_PATHS = {"/api/fmea/export"}
 
 
 @app.middleware("http")
@@ -60,6 +62,10 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/api/") and path not in _PUBLIC_API_PATHS:
         header = request.headers.get("authorization", "")
         token = header[7:] if header.startswith("Bearer ") else ""
+        # 文件下载通道（design §21）：聊天消息里的 markdown 链接无法带
+        # Authorization 头，这几个路径允许 ?token= 查询参数认证（范围最小化）。
+        if not token and path in _TOKEN_QUERY_API_PATHS:
+            token = request.query_params.get("token", "")
         user = auth.verify_token(token)
         if not user:
             return JSONResponse({"detail": "未认证或登录已过期"}, status_code=401)
@@ -936,6 +942,36 @@ def porter_import(body: dict):
         return {"ok": False, "error": "bundle 格式不对（缺 sections）"}
     result = porter.import_bundle(db.get_conn(), bundle)
     return {"ok": True, **result}
+
+
+# ---------------- FMEA Excel 导出（design §21 / R-23） ----------------
+
+@app.get("/api/fmea/export")
+def fmea_export_excel(run_id: int | None = None, part: str | None = None):
+    """DFMEA 报告 Excel 下载（.xlsx）。
+
+    列集：部件 / 潜在失效模式 / 潜在后果 / 严重度 / 潜在失效机理 / 设计预防 /
+    频度 / 设计探测 / 探测度 / **风险顺序数（RPN=S×O×D）** / 建议测试，
+    另附风险优先级(AP)与来源两列（溯源铁律）。
+    过滤：run_id 指定运行；part 按部件名模糊；都缺省 = 最新一次运行。
+    支持两种认证：标准 Bearer 头（前端 fetch）或 ?token=（聊天 markdown 链接）。
+    """
+    from . import fmea
+    data, fname, n = fmea.export_excel(db.get_conn(), run_id=run_id, part=part)
+    if n == 0 and not data:
+        return JSONResponse({"error": "没有可导出的 DFMEA 行（先运行 FMEA pipeline）"},
+                            status_code=404)
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    # Content-Disposition 不能直接放非 ASCII（part 过滤含中文时 500）：
+    # filename 给 ASCII 回退，filename* 按 RFC 5987 给完整 UTF-8 名
+    ascii_fb = fname.encode("ascii", "ignore").decode("ascii") or "fmea-report.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{ascii_fb}"; '
+                 f"filename*=UTF-8''{quote(fname)}"})
 
 
 @app.get("/api/ontology/tags")

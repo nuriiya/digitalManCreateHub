@@ -2571,6 +2571,42 @@ m1 的产出物。届时本节 ③ 的 API 成为 factory 的内部调用。
 
 **状态**：**已实现（2026-09-14）**。需求编号 R-22；指标 test-metrics §T-N 续。
 
+## 21. FMEA 报告 Excel 导出 —— 已实现（2026-09-14）
+
+用户在对话里说「导出 xxx 部件的 FMEA 报告」→ 生成 Excel 下载链接；
+pipeline 卡片上也可一键下载。
+
+### 21.1 导出列（用户口径 + 溯源补充）
+
+固定列序：**部件 / 潜在失效模式 / 潜在后果 / 严重度 / 潜在失效机理 /
+设计预防 / 频度 / 设计探测 / 探测度 / 风险顺序数（RPN = S×O×D，计算列）/
+建议测试**，另附**风险优先级(AP)** 与**来源**两列（溯源铁律：值在表里、
+依据必可查）。样式：表头深底白字加粗、冻结首行、细边框、数值列居中、
+RPN ≥ 200 红 / ≥ 100 琥珀。
+
+### 21.2 三层入口
+
+| 入口 | 路径 | 认证 |
+|---|---|---|
+| **对话**（主路径） | DFMEA 工程师新动作「导出 FMEA 报告」（`fmea_export_excel`，已绑定 #9）：LLM 收到导出类请求时调用 → 返回带 token 的下载 URL → 以 markdown 链接呈现 | `?token=`（专用 viewer token，`auth.issue_token` 签发） |
+| **API** | `GET /api/fmea/export?run_id=&part=`（part 模糊过滤，参数化 LIKE） | Bearer 头 **或** `?token=`（`_TOKEN_QUERY_API_PATHS` 白名单，范围最小化） |
+| **PipelineCard** | DFMEA 表标题旁「⭳ Excel 报告」按钮（fetch→blob→本地保存，取最近 run） | Bearer 头 |
+
+`Content-Disposition` 文件名走 RFC 5987（`filename*`）—— part 过滤含中文时
+直接塞 header 会 500（实测修复）。
+
+### 21.3 实测
+
+3 行测试数据（write_row 全口径：AP 以表为准 + 来源闭集）→ 导出 6040 字节；
+列集与用户口径逐列一致；RPN 计算正确（7×5×2=70 / 6×3×3=54 / 8×4×3=96）；
+part=天线 过滤命中 1 行；API 三通道（Bearer / query-token / 中文 part）全 200；
+动作执行体返回可点击 URL；无行时明确 404（不给空文件）。
+
+**状态**：**已实现（2026-09-14）**。需求编号 R-23；指标 test-metrics §T-N 续。
+
+---
+*v1.11（2026-09-14）新增 §21 FMEA Excel 导出：用户口径列集 + RPN 计算列 + 三层入口（动作/ API/卡片）+ ?token= 下载通道 + RFC 5987 中文文件名。*
+
 ---
 *v1.10（2026-09-14）新增 §20 数字人创建统一收口：upsert_identity 唯一写入口 + 模板薄壳化 + POST /api/identities（IdentitySpec）；消除平行实现与入口差异。*
 

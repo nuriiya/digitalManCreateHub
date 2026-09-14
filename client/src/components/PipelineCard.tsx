@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   getPipeline, validatePipeline, approvePipeline, runPipeline,
-  getPipelineRuns, getDfmeaRows, getDfmeaPending, getIdentities,
+  getPipelineRuns, getDfmeaRows, getDfmeaPending, getIdentities, getToken,
   type Pipeline, type PipelineRun, type DfmeaRow, type DfmeaPending,
 } from '../api'
 import { useToast } from '../Toast'
@@ -93,6 +93,29 @@ export default function PipelineCard({ pipelineId }: { pipelineId: number }) {
     await load()
   })
 
+  // Excel 报告下载（design §21 / R-23）：fetch 带 token → blob → 本地保存
+  const doExportExcel = () => guard(async () => {
+    const last = runs[0]
+    const q = last ? `?run_id=${last.id}` : ''
+    const resp = await fetch(`/api/fmea/export${q}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+    if (!resp.ok) {
+      toast(resp.status === 404 ? '暂无可导出的 DFMEA 行' : `导出失败（${resp.status}）`, 'err')
+      return
+    }
+    const blob = await resp.blob()
+    const cd = resp.headers.get('Content-Disposition') || ''
+    const m = /filename="?([^";]+)"?/.exec(cd)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = m?.[1] || `fmea-report.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast('Excel 报告已下载', 'ok')
+  })
+
   if (!p) return <div className="note" style={{ padding: 8 }}>加载 pipeline #{pipelineId}…</div>
 
   const approved = p.status === 'approved'
@@ -154,8 +177,12 @@ export default function PipelineCard({ pipelineId }: { pipelineId: number }) {
       {/* DFMEA 产出 */}
       {rows.length > 0 && (
         <>
-          <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
+          <div style={{ fontWeight: 600, margin: '8px 0 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
             DFMEA 表（{rows.length} 行）
+            <button className="btn ghost small" onClick={doExportExcel}
+              title="导出 Excel 报告（部件/潜在失效模式/潜在后果/严重度/潜在失效机理/设计预防/频度/设计探测/探测度/风险顺序数RPN/建议测试）">
+              ⭳ Excel 报告
+            </button>
           </div>
           <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: 11.5, minWidth: 900 }}>

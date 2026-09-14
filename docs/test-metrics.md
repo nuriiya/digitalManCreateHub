@@ -493,6 +493,13 @@
 | N-72 平行实现消除 | 除 `upsert_identity` 外直接 INSERT identities 的代码处数 | **0** | create_identity 与 _upsert_identity 均改走统一入口 ✅ |
 | N-73 新路由可用 | `POST /api/identities`（含内联本体 + 动作绑定） | ok=true | 冒烟：id=39 + inline_ontology=1 ✅ |
 | N-74 内联本体双写 | spec 内联本体是否同步进本体库（candidates） | 同步 | 冒烟：同步 1 条 ✅ |
+| N-75 Excel 列集 | 导出表头与用户口径逐列一致（11 列 + AP/来源） | 逐列一致 | 实测 headers 全对 ✅ |
+| N-76 RPN 计算正确性 | RPN = S×O×D | 逐行核对 | 70/54/96 全对 ✅ |
+| N-77 part 中文过滤 | part=天线 模糊过滤 | 命中且 API 200 | 命中 1 行 / 200 ✅ |
+| N-78 下载双通道 | Bearer 头与 ?token= 均 200；无认证 401 | 全符合 | 200/200/401 ✅ |
+| N-79 中文文件名 | Content-Disposition 含中文 part 不 500 | RFC 5987 filename* | 修复后 200（直塞 header 会 500）✅ |
+| N-80 空库行为 | 无 dfmea_rows 时导出 | 404 + 错误信息，无空文件 | 实测 404 ✅ |
+| N-81 动作返回链接 | `fmea_export_excel` 执行体 | ok + rows + 可点击 url | 带专属 token 的 URL ✅ |
 
 ---
 

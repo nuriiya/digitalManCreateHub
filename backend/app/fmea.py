@@ -1351,3 +1351,131 @@ def pending_ai_new(conn, run_id=None) -> list[dict]:
             out.append({"row_id": r["id"], "part": r["part"],
                         "failure_mode": r["failure_mode"], "fields": fields})
     return out
+
+
+# ---------------- Excel 导出（design §21 / R-23） ----------------
+
+#: 用户指定的报告列（顺序固定）+ 两列溯源补充。RPN = S×O×D（经典 FMEA 口径，
+#: 与 AP 并存：AP 决定行动优先级，RPN 提供连续量化对比）。
+_EXPORT_COLS: list[tuple[str, str, int]] = [
+    ("part",              "部件",        16),
+    ("failure_mode",      "潜在失效模式", 22),
+    ("failure_effect",    "潜在后果",     22),
+    ("severity",          "严重度",       8),
+    ("failure_cause",     "潜在失效机理", 24),
+    ("prevention_control", "设计预防",    22),
+    ("occurrence",        "频度",         8),
+    ("detection_control", "设计探测",     22),
+    ("detection",         "探测度",       8),
+    ("rpn",               "风险顺序数",   10),
+    ("action",            "建议测试",     24),
+    ("ap",                "风险优先级",   10),
+    ("sources",           "来源",         30),
+]
+
+
+def export_excel(conn, run_id=None, part=None) -> tuple[bytes, str, int]:
+    """把 DFMEA 行导出为 Excel（.xlsx）。
+
+    **列集固定为用户口径**：部件 / 潜在失效模式 / 潜在后果 / 严重度 /
+    潜在失效机理 / 设计预防 / 频度 / 设计探测 / 探测度 / **风险顺序数
+    （RPN = S×O×D，计算列）** / 建议测试，另附 AP 与来源两列（平台溯源铁律）。
+
+    过滤：`run_id` 指定某次运行；`part` 按部件名模糊过滤（`%` 参数化，
+    千万别拼 SQL）。二者都缺省 = 最新一次 run（有 dfmea_rows 的最大 run_id）。
+
+    样式：表头深底白字加粗 + 冻结首行 + 细边框；RPN ≥ 200 红、≥ 100 琥珀。
+    返回 `(xlsx_bytes, filename, n_rows)`。
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    rid = run_id
+    if rid is None:
+        r = conn.execute(
+            "SELECT MAX(run_id) m FROM dfmea_rows WHERE run_id IS NOT NULL"
+        ).fetchone()
+        rid = r["m"] if r else None
+    if rid is None:
+        return b"", "fmea-empty.xlsx", 0
+    if part:
+        pat = f"%{part.strip()}%"
+        rows = conn.execute(
+            "SELECT * FROM dfmea_rows WHERE run_id=? AND part LIKE ? ORDER BY id",
+            (rid, pat)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM dfmea_rows WHERE run_id=? ORDER BY id",
+            (rid,)).fetchall()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "DFMEA"
+    thin = Side(style="thin", color="D0D0D0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    head_fill = PatternFill("solid", fgColor="1F4E5F")
+    head_font = Font(bold=True, color="FFFFFF", size=11)
+    body_font = Font(size=10.5)
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    red_fill = PatternFill("solid", fgColor="F8CBAD")
+    amber_fill = PatternFill("solid", fgColor="FFE699")
+
+    # 表头
+    for j, (_, label, w) in enumerate(_EXPORT_COLS, start=1):
+        c = ws.cell(row=1, column=j, value=label)
+        c.fill = head_fill
+        c.font = head_font
+        c.alignment = center
+        c.border = border
+        ws.column_dimensions[get_column_letter(j)].width = w
+    ws.freeze_panes = "A2"
+
+    # 数据行
+    for i, r in enumerate(rows, start=2):
+        d = dict(r)
+        src = d.get("sources")
+        if isinstance(src, str):
+            try:
+                src = json.loads(src or "{}")
+            except Exception:  # noqa: BLE001
+                src = {}
+        if not isinstance(src, dict):
+            src = {}
+        src_txt = "；".join(f"{k}={v}" for k, v in src.items())
+        s, o, dd = d.get("severity"), d.get("occurrence"), d.get("detection")
+        try:
+            rpn = (int(s) * int(o) * int(dd)) if (s and o and dd) else ""
+        except (TypeError, ValueError):
+            rpn = ""
+        vals = {
+            "part": d.get("part") or "", "failure_mode": d.get("failure_mode") or "",
+            "failure_effect": d.get("failure_effect") or "",
+            "severity": s if s is not None else "",
+            "failure_cause": d.get("failure_cause") or "",
+            "prevention_control": d.get("prevention_control") or "",
+            "occurrence": o if o is not None else "",
+            "detection_control": d.get("detection_control") or "",
+            "detection": dd if dd is not None else "",
+            "rpn": rpn, "action": d.get("action") or "",
+            "ap": d.get("ap") or "", "sources": src_txt,
+        }
+        for j, (key, _, _) in enumerate(_EXPORT_COLS, start=1):
+            v = vals.get(key, "")
+            c = ws.cell(row=i, column=j, value=v)
+            c.font = body_font
+            c.border = border
+            c.alignment = center if key in ("severity", "occurrence",
+                                            "detection", "rpn", "ap") else left
+            if key == "rpn" and isinstance(rpn, int):
+                if rpn >= 200:
+                    c.fill = red_fill
+                elif rpn >= 100:
+                    c.fill = amber_fill
+
+    bio = BytesIO()
+    wb.save(bio)
+    fname = f"fmea-report-run{rid}" + (f"-{part.strip()}" if part else "") + ".xlsx"
+    return bio.getvalue(), fname, len(rows)

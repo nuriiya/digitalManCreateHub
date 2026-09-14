@@ -142,6 +142,22 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                         "复核门也调它来核「专家引用可追溯」，不要凭记忆判断"),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    # Excel 报告导出（design §21 / R-23）：对话里「导出 xx 部件的 FMEA 报告」的执行体
+    "fmea_export_excel": {
+        "name": "导出 FMEA 报告",
+        "description": ("把已落库的 DFMEA 表导出为 Excel（.xlsx）并返回下载链接。"
+                        "列含：部件/潜在失效模式/潜在后果/严重度/潜在失效机理/"
+                        "设计预防/频度/设计探测/探测度/风险顺序数(RPN)/建议测试。"
+                        "**用户想要 FMEA 报告 / Excel / 导出时调它**；"
+                        "part 可选（按部件名过滤，如：射频天线）"),
+        "input_schema": {"type": "object",
+                         "properties": {
+                             "part": {"type": "string",
+                                      "description": "按部件名过滤（可选）"},
+                             "run_id": {"type": "integer",
+                                        "description": "指定某次运行（可选，缺省=最新）"}},
+                         "required": []},
+    },
     "ask_expert": {
         "name": "询问专家数字人",
         "description": "向指定部件专家数字人提问并取回其专业回答（取值优先级第 3 级证据；专家不可再转问其他专家）",
@@ -232,6 +248,8 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         from . import fmea
         a = args or {}
         return fmea.expert_citations(conn, a.get("run_id"))
+    if builtin_name == "fmea_export_excel":
+        return _exec_fmea_export_excel(conn, args)
     if builtin_name == "ask_expert":
         return _exec_ask_expert(conn, identity_id, args)
     if builtin_name == "fmea_write_row":
@@ -508,6 +526,38 @@ def _exec_fmea_write_row(conn, args: dict) -> dict:
     if isinstance(rows, list) and rows:
         return fmea.write_rows(conn, rows)
     return fmea.write_row(conn, a)
+
+
+def _exec_fmea_export_excel(conn, args: dict) -> dict:
+    """导出 FMEA 报告 Excel（design §21 / R-23）。
+
+    生成 xlsx 并返回**带 token 的下载链接**（聊天 markdown 链接无法带
+    Authorization 头，走 ?token= 通道）。LLM 拿到 url 后以 markdown 呈现给用户。
+    先本地生成一遍以校验行数（无行时明确报错，不给出空文件链接）。
+    """
+    from . import fmea
+    from . import auth as auth_mod
+    a = args or {}
+    part = (a.get("part") or "").strip() or None
+    run_id = a.get("run_id")
+    data, fname, n = fmea.export_excel(conn, run_id=run_id, part=part)
+    if n == 0:
+        return {"ok": False,
+                "error": "没有可导出的 DFMEA 行 —— 先运行 FMEA pipeline 产出表格"}
+    # 签发一个专用下载 token（后台动作上下文里拿不到用户会话 token）
+    token = auth_mod.issue_token("fmea-export", "viewer")
+    q = []
+    if run_id is not None:
+        q.append(f"run_id={run_id}")
+    if part:
+        q.append(f"part={part}")
+    if token:
+        q.append(f"token={token}")
+    url = "/api/fmea/export" + ("?" + "&".join(q) if q else "")
+    return {"ok": True, "result": {
+        "url": url, "file": fname, "rows": n,
+        "note": "FMEA 报告已生成，把上面的 url 用 markdown 链接给用户下载"
+                "（形如 [下载 FMEA 报告](url)）"}}
 
 
 def execute_mcp(conn, mcp_server_id: int, mcp_tool_name: str, args: dict) -> dict:

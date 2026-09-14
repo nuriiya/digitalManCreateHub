@@ -255,6 +255,10 @@ BUILTIN_TEMPLATES: list[dict] = [
                 {"builtin_name": "fmea_expert_citations", "name": "核验专家引用可追溯",
                  "description": "**交付前必调**：确定性核验「问过的专家是否在表里被引用」，"
                                 "missing 非空必须补引用直到 ok=true"},
+                {"builtin_name": "fmea_export_excel", "name": "导出 FMEA 报告",
+                 "description": "把已落库的 DFMEA 表导出为 Excel 下载链接"
+                                "（部件/失效模式/后果/严重度/机理/预防/频度/探测/探测度/RPN/建议测试）；"
+                                "用户要 FMEA 报告/Excel/导出时调它，part 可选过滤"},
             ],
             "owns": ["取值优先级链", "来源标注规则", "不得越级代填", "AI 生成待确认", "AP 以表为准"],
         },
