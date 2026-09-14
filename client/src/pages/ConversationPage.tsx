@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
-  routePipeline, runPipeline,
+  routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -54,6 +54,12 @@ export default function ConversationPage({ refreshKey }: Props) {
     question: string; options: string[]; note?: string;
     identityId: number; sessionId: number | null;
   }>(null)
+  // pipeline 触发后的轻量阶段进度（design §23 / R-25，不渲染大卡片）：
+  // 轮询 run 状态 → 在 assistant 气泡里更新「任务阶段 1.2.3」
+  const [pipelineProgress, setPipelineProgress] = useState<null | {
+    pipelineId: number; name: string; assistantId: number;
+  }>(null)
+  const [progressDone, setProgressDone] = useState<null | { runId: number }>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
@@ -104,6 +110,53 @@ export default function ConversationPage({ refreshKey }: Props) {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, sending])
 
+  // pipeline 阶段进度轮询（design §23 / R-25）：4s 拉 run 状态 →
+  // 在 assistant 气泡里渲染「任务阶段 1.2.3」（✅/⏳/⏸），done 后停止
+  useEffect(() => {
+    if (!pipelineProgress) return
+    const { pipelineId, name, assistantId } = pipelineProgress
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const [pRes, runsRes] = await Promise.all([
+          getPipeline(pipelineId), getPipelineRuns(pipelineId),
+        ])
+        if (cancelled) return
+        const nodes = pRes.pipeline?.nodes ?? []
+        const last = (runsRes.runs ?? [])[0]
+        if (!last) return
+        const stIcon = (s: string) =>
+          s === 'done' ? '✅' : s === 'running' ? '⏳'
+            : (s === 'blocked' || s === 'failed') ? '❌' : '⏸'
+        const runState = last.status === 'done' ? '✅ 完成'
+          : last.status === 'running' ? '⏳ 运行中'
+            : last.status === 'blocked' ? '❌ 被复核门拦下' : `❌ ${last.status}`
+        const curIdx = nodes.findIndex((n: any) => n.id === last.current_node_id)
+        const lines = nodes.map((n: any, i: number) => {
+          const st = last.status === 'done' ? 'done'
+            : curIdx < 0 ? 'pending'
+              : i < curIdx ? 'done' : i === curIdx ? 'running' : 'pending'
+          const label = n.step_name || n.node_key
+          return `${i + 1}. ${stIcon(st)} ${label}`
+        })
+        const content =
+          `🔗 **${name}**（run #${last.id} · ${runState}）\n\n` +
+          lines.join('\n') +
+          (last.status === 'done'
+            ? '\n\n✅ 全部阶段完成 —— DFMEA 表已写入，可下载 Excel 报告。'
+            : '')
+        setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, content } : x)))
+        if (last.status !== 'running') {
+          setProgressDone({ runId: last.id })
+          setPipelineProgress(null)   // 停止轮询
+        }
+      } catch { /* 网络抖动下一轮再试 */ }
+    }
+    tick()
+    const t = setInterval(tick, 4000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [pipelineProgress])
+
   const grouped = useMemo(() => {
     const groups: { key: string; label: string; items: ChatMessage[] }[] = []
     for (const m of messages) {
@@ -116,6 +169,29 @@ export default function ConversationPage({ refreshKey }: Props) {
     }
     return groups
   }, [messages])
+
+  // 下载命中触发的 run 的 Excel 报告（fetch→blob，design §21/§23）
+  const downloadProgressExcel = async () => {
+    if (!progressDone) return
+    try {
+      const resp = await fetch(`/api/fmea/export?run_id=${progressDone.runId}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      })
+      if (!resp.ok) {
+        toast(resp.status === 404 ? '该 run 没有 DFMEA 行可导出' : `导出失败（${resp.status}）`, 'err')
+        return
+      }
+      const blob = await resp.blob()
+      const cd = resp.headers.get('Content-Disposition') || ''
+      const m = /filename\*=UTF-8''([^;]+)/.exec(cd)
+      const fname = m ? decodeURIComponent(m[1]) : `fmea-run${progressDone.runId}.xlsx`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = fname; a.click()
+      URL.revokeObjectURL(url)
+      toast('Excel 报告已下载', 'ok')
+    } catch (e: any) { toast(e?.message || String(e), 'err') }
+  }
 
   const doSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
@@ -205,23 +281,23 @@ export default function ConversationPage({ refreshKey }: Props) {
     // 工具执行进度（拼在 assistant 气泡文本后）
     const toolLines: string[] = []
 
-    // —— pipeline 命中分支：直接触发运行 ——
+    // —— pipeline 命中分支：直接触发运行，气泡内展示「任务阶段 1.2.3」进度，
+    //    不渲染大卡片（user 2026-09-14：保持界面干净）——
     try {
       const pr = await routePipeline(text)
       const matchedPipeline = pr.pipeline
       if (matchedPipeline) {
-        setSending(false)
-        updateAssistant({
-          identity_name: `pipeline「${matchedPipeline.name}」`,
-          content: `已匹配到 pipeline「${matchedPipeline.name}」，直接触发运行…`,
-        })
         try {
           const run = await runPipeline(matchedPipeline.pipeline_id)
           updateAssistant({
             identity_name: `pipeline「${matchedPipeline.name}」`,
-            content: `已触发 pipeline「${matchedPipeline.name}」运行（job #${run.job_id}）。运行进度与 DFMEA 产出见下方卡片，可就地查看并下载 Excel 报告。`,
+            content: `🔗 **${matchedPipeline.name}** 已触发（job #${run.job_id}），加载阶段进度…`,
           })
-          setPipelineIds((v) => v.includes(matchedPipeline.pipeline_id) ? v : [...v, matchedPipeline.pipeline_id])
+          setPipelineProgress({
+            pipelineId: matchedPipeline.pipeline_id,
+            name: matchedPipeline.name,
+            assistantId,
+          })
           toast(`已触发 pipeline「${matchedPipeline.name}」运行`, 'ok')
           refreshSessions()
         } catch (e: any) {
@@ -637,11 +713,20 @@ export default function ConversationPage({ refreshKey }: Props) {
             )}
           </div>
 
-          {/* 生成的 pipeline：就地展示摘要 + 校验/批准/运行 + DFMEA 产出
-              （design §15 —— 对话页即「生成 → 运行 → 看结果」的唯一入口） */}
+          {/* 生成的 pipeline 草稿（「创建 pipeline」模式）：保留就地审批/运行卡片 */}
           {pipelineIds.map((pid) => (
             <PipelineCard key={pid} pipelineId={pid} />
           ))}
+
+          {/* 命中触发的运行：完成后给一行轻量下载按钮（不渲染大卡片
+              —— user 2026-09-14：保持对话界面干净，进度已在气泡里） */}
+          {progressDone && (
+            <div style={{ margin: '4px 0 8px' }}>
+              <button className="btn green small" onClick={downloadProgressExcel}>
+                ⭳ 下载 FMEA Excel 报告
+              </button>
+            </div>
+          )}
 
           <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''} ${genPipelineMode ? 'pipe-on' : ''}`}>
             <textarea
