@@ -491,7 +491,8 @@ export const routeChat = (message: string, sessionId?: number | null) =>
 
 // pipeline 匹配（design §23 / R-25）：对话层命中后直接触发运行
 export interface PipelineRoute {
-  pipeline_id: number; name: string; score: number; matched: string[]
+  pipeline_id: number; name: string; score: number; matched: string[];
+  primary_persona_id?: number | null;
 }
 export const routePipeline = (message: string) =>
   api<{ pipeline: PipelineRoute | null }>('/api/chat/route-pipeline', {

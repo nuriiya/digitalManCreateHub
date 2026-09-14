@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
-  routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken,
+  routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken, createChatSession,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -98,6 +98,12 @@ export default function ConversationPage({ refreshKey }: Props) {
     if (sessIdentityId === 0) { setMessages([]); return }
     let cancelled = false
     setLoading(true)
+    // pipeline 进度气泡进行中（design §23.4）：切换/新建对话组触发的加载
+    // **不覆盖**正在渲染的临时进度气泡（负 id），等 run 结束才恢复常规加载
+    if (pipelineProgress) {
+      setLoading(false)
+      return () => { }
+    }
     getChatMessages(sessIdentityId, sessionId)
       .then((r) => { if (!cancelled) setMessages(r.messages ?? []) })
       .catch(() => { })
@@ -287,6 +293,18 @@ export default function ConversationPage({ refreshKey }: Props) {
       const pr = await routePipeline(text)
       const matchedPipeline = pr.pipeline
       if (matchedPipeline) {
+        // 立刻创建对话组（design §23.4：用户发送后左侧立刻出现新组，
+        // 不等运行完成）—— 用 pipeline 主数字人归属并切换到该组。
+        if (sessionId == null && matchedPipeline.primary_persona_id) {
+          try {
+            const cs = await createChatSession(matchedPipeline.primary_persona_id,
+              text.slice(0, 24))
+            if (cs.session?.id) {
+              setSessionId(cs.session.id)
+              refreshSessions()
+            }
+          } catch { /* 创建失败不阻塞触发 */ }
+        }
         try {
           const run = await runPipeline(matchedPipeline.pipeline_id)
           updateAssistant({
@@ -338,7 +356,12 @@ export default function ConversationPage({ refreshKey }: Props) {
         { session_id: sessionId },
         {
           onSession: (sid) => {
-            if (sid !== sessionId) setSessionId(sid)
+            if (sid !== sessionId) {
+              setSessionId(sid)
+              // design §23.4：新对话组**立刻**出现在左侧列表，
+              // 不等流式回复完成（此前要等 onDone 的 refreshSessions）
+              refreshSessions()
+            }
           },
           onToken: (tok) => {
             if (!streamStarted) streamStarted = true

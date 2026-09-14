@@ -139,8 +139,16 @@ def route_pipeline(conn, message: str) -> dict | None:
             score += 2
             matched.append("描述")
         if score > 0 and (best is None or score > best["score"]):
+            # primary_persona_id：第一个 nominate 节点绑定的数字人。
+            # 对话层命中后用它**立刻**创建对话组（design §23.4：用户发送后
+            # 左侧立刻出现新组，不等运行/回复完成）。
+            pp = conn.execute(
+                "SELECT persona_id FROM pipeline_nodes WHERE pipeline_id=?"
+                " AND kind=? AND persona_id IS NOT NULL ORDER BY id LIMIT 1",
+                (p["id"], KIND_NOMINATE)).fetchone()
             best = {"pipeline_id": p["id"], "name": p["name"],
-                    "score": score, "matched": list(dict.fromkeys(matched))}
+                    "score": score, "matched": list(dict.fromkeys(matched)),
+                    "primary_persona_id": (pp["persona_id"] if pp else None)}
     return best
 
 
