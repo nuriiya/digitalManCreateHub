@@ -2468,6 +2468,60 @@ family 标签）。`api.ts` 导出 `updateNode`；`Pipeline` 类型加
 **状态**：**主体已实现（2026-09-14，commit 4a438e2）**：18.6 ①②③ 落地；
 §18.5-1/2/3(骨干)/4 完成。待办见 ④。需求编号 R-20；指标 test-metrics §T-N。
 
+## 19. 本体库同步修复 + 资产打包迁移（porter）—— 已实现（2026-09-14）
+
+### 19.1 本体库同步链路修复（persona_ontology → candidates）
+
+**缺陷（2026-09-14 诊断）**：前端「知识与本体」页读 `candidates`（本体库），
+但 `trainer.add_ontology`（训练师教学路径）**只写 `persona_ontology`（数字人
+本体段）不写 candidates** —— 实测 146 条 persona_ontology 里 **84 条**滞留在
+数字人侧，本体库完全看不到（DFMEA 工程师 30 条、四专家 6+6+6+9 条、复核员
+5 条等）。只有模板路径 `persona_templates._upsert_candidate` 会同步。
+
+**修复（两层）**：
+1. `trainer.add_ontology` 改为**双写**：装配数字人本体段的同时，经
+   `_sync_candidate` upsert 进本体库 —— 按 `name_norm` 幂等；**已存在则不覆盖
+   定义**（与「只补不改」保守语义一致），只补 `persona:<数字人名>` 来源 tag；
+   首次入库 `status='approved'`（与模板路径/seed 脚本同口径）。同步失败不阻塞
+   主路径（附属动作）。
+2. `scripts/backfill_ontology_sync.py` 一次性回填存量缺口（幂等）。
+   **实测：candidates 68 → 149 条，回填后缺口 0**。
+
+### 19.2 资产打包导出 / 导入（`backend/app/porter.py`）
+
+**范围**（RAG 链路的 documents/chunks/mentions **不含**，留在源库）：
+
+| section | 表 | 关联键 |
+|---|---|---|
+| identities | `identities` | name |
+| persona_ontology | `persona_ontology` | 数字人 name |
+| persona_actions | `persona_actions` | 数字人 name |
+| anchors | `anchors` | 数字人 name |
+| candidates | `candidates`（本体库） | name_norm |
+| relations | `relations`（扁平：source 候选 name + target_name） | — |
+| pipelines | `pipelines` + 节点/关系 | name；persona 绑定按 name 重映射；含 is_archived |
+| mcp_servers | `mcp_servers` | name |
+
+**口径**：
+- **幂等**：导入按 name/name_norm 判重，已存在**只补不改**（用户资产不被
+  静默覆盖）；
+- **ID 全按 name 重映射**：导入侧新 ID 与导出侧无关（跨库迁移安全）；
+- `relations` 按实际 schema（`source_id`→candidates + `target_name` 文本）导出。
+
+**API**：`GET /api/porter/export`（返回完整 bundle）、`POST /api/porter/import`
+（body 为 bundle）。**前端**：Settings 页新增「资产导出 / 导入」卡片 —— 导出
+按钮下载 `digitalman-bundle-<时间戳>.json`；导入选择文件后展示逐 section 的
+added/skipped 报告。
+
+**实测**：导出 summary = identities 14 / ontology 146 / actions 37 / anchors 14 /
+candidates 149 / relations 77 / pipelines 29 / mcp 5；**同 bundle 重导入
+added=0 / skipped=471**（幂等验证通过）；API 冒烟（登录→export→import）全通。
+
+**状态**：**已实现（2026-09-14）**。需求编号 R-21；指标 test-metrics §T-N 续。
+
+---
+*v1.9（2026-09-14）新增 §19：本体库同步链路修复（add_ontology 双写 + 回填 68→149）+ 资产打包迁移 porter（8 个 section 导出/导入，幂等，Settings 页入口）。*
+
 ---
 *v1.8（2026-09-14）§18 主体落地：`pipeline_factory.py`（m2/m6/m7）+ 引擎 deterministic 派发 + factory 落库 #47 + pipeline 版本族（is_archived/family_id）+ 画布交互化（拖动/缩放/撤销重做/位置持久化）；§18.6 落地实现记录。*
 *v1.7（2026-09-14）新增 §18 pipeline 创建元流程（pipeline-factory）：从 §15.7 十六轮迭代提取流程本体，四关 + 三循环 + 9 节点元流程设计（待实现）。*

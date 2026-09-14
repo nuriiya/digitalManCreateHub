@@ -94,6 +94,13 @@ def add_ontology(conn, identity_id, kind, name, definition, note="",
     直接 return，导致「代码里的蓝图改了 → 重新 seed → 库里还是旧定义」——
     实测表现为：新增的两条规则进了库，但**被编辑过的那条规则定义纹丝不动**，
     规则修订静默丢失。故 seed/恢复出厂路径必须显式传 update=True。
+
+    **本体库同步（2026-09-14 修复）**：本函数此前只写 `persona_ontology`（数字人
+    本体段），不写 `candidates`（本体库）→ 前端「知识与本体」页看不到训练师教学
+    的条目（实测 146 条 persona_ontology 里 84 条未同步）。现在**双写**：装配
+    数字人本体段的同时，upsert 进本体库（按 name_norm 去重、status='approved'、
+    tags 带 `persona:<数字人名>` 来源标记），与模板路径 `_upsert_candidate`
+    的既有语义对齐。
     """
     exists = conn.execute(
         "SELECT id, definition FROM persona_ontology"
@@ -107,13 +114,55 @@ def add_ontology(conn, identity_id, kind, name, definition, note="",
                 "             ELSE note || '|updated' END"
                 " WHERE id=?", (definition, note or "", exists["id"]))
             conn.commit()
+        _sync_candidate(conn, identity_id, kind, name, definition)
         return exists["id"]
     cur = conn.execute(
         "INSERT INTO persona_ontology(identity_id, kind, name, definition, status,"
         " note, created_at) VALUES(?,?,?,?,'active',?,?)",
         (identity_id, kind, name, definition, note, db.now()))
     conn.commit()
+    _sync_candidate(conn, identity_id, kind, name, definition)
     return cur.lastrowid
+
+
+def _sync_candidate(conn, identity_id, kind, name, definition) -> None:
+    """把一条 persona_ontology 同步进本体库（candidates）。
+
+    按 name_norm 幂等 upsert；已存在则**不覆盖定义**（本体库条目可能已被用户
+    编辑过 —— 与 add_ontology 的「只补不改」保守语义一致），只补 tags 来源标记。
+    首次入库 status='approved'（与模板路径 / seed 脚本同口径：这些条目已过
+    三关或在模板蓝图里被平台背书）。
+    """
+    from .ontology import _norm_name
+    try:
+        iname = None
+        r = conn.execute("SELECT name FROM identities WHERE id=?",
+                         (identity_id,)).fetchone()
+        iname = r["name"] if r else None
+        norm = _norm_name(name or "")
+        if not norm:
+            return
+        tag = f"persona:{iname}" if iname else "persona:?"
+        existing = conn.execute(
+            "SELECT id, tags FROM candidates WHERE name_norm=? ORDER BY id LIMIT 1",
+            (norm,)).fetchone()
+        if existing:
+            tags = list(existing["tags"] or [])
+            if tag not in tags:
+                tags.append(tag)
+                conn.execute("UPDATE candidates SET tags=? WHERE id=?",
+                             (tags, existing["id"]))
+                conn.commit()
+            return
+        cur = conn.execute(
+            "INSERT INTO candidates(kind, name, name_norm, definition, status,"
+            " tags, created_at) VALUES(?,?,?,?,'approved',?,?)",
+            (kind, name, norm, definition, [tag], db.now()))
+        conn.commit()
+        return cur.lastrowid
+    except Exception:  # noqa: BLE001
+        # 同步失败不阻塞装配本体段的主路径（本体库同步是附属动作）
+        pass
 
 
 def list_ontology(conn, identity_id) -> list[dict]:

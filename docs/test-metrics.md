@@ -480,6 +480,12 @@
 | N-59 画布位置持久化 | 拖动节点 → 刷新页面 → 位置保留 | **100%** | `updateNode` 落库 position_x/y ✅（端到端手测） |
 | N-60 画布撤销/重做 | 拖动后 Ctrl+Z 恢复原位、Ctrl+Shift+Z 重做 | 双向可用 | 双栈实现 ✅（端到端手测） |
 | N-61 空表判分合理性 | 空 run 上 `run_exam` 的 pass_rate | 应显著 < 阈值（覆盖/来源类应失败） | 60.5% ✅（合理信号：空表上 15 项失败） |
+| N-62 本体库同步零缺口 | persona_ontology 中在 candidates（按 name_norm）查不到的条数 | **0** | 回填前 84 → 回填后 **0** ✅（candidates 68→149） |
+| N-63 add_ontology 双写 | 装配本体段后 candidates 是否同步 | **100%** | `_sync_candidate` 幂等 upsert + tags 来源标记 ✅ |
+| N-64 导出完备性 | porter 导出 8 个 section 且数量与库一致 | 8/8 一致 | 14/146/37/14/149/77/29/5 ✅ |
+| N-65 导入幂等性 | 同 bundle 重导入的 added 总数 | **0** | 0（skipped=471）✅ |
+| N-66 导入不改既有 | 重导入后既有条目定义是否被覆盖 | **不覆盖** | 按 name/name_norm 判重跳过 ✅ |
+| N-67 porter API 可用 | 登录 → export → import 全链路 | 200 + ok=true | 冒烟通过 ✅ |
 
 ---
 

@@ -206,6 +206,18 @@ export const mergeCandidate = (id: number, into: number) =>
 export const deleteCandidates = (ids: number[]) =>
   api('/api/ontology/candidates/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) })
 
+// ---------------- porter：数字人资产导出 / 导入（design §19） ----------------
+export interface PorterBundle {
+  version: number; exported_at: number
+  sections: Record<string, any[]>
+  summary?: Record<string, number>
+}
+export const exportBundle = () =>
+  api<{ ok: boolean; bundle: PorterBundle }>('/api/porter/export')
+export const importBundle = (bundle: PorterBundle) =>
+  api<{ ok: boolean; stats: Record<string, { added: number; skipped: number }> }>(
+    '/api/porter/import', { method: 'POST', body: JSON.stringify({ bundle }) })
+
 // ---------------- identity pre-screening (anchors) ----------------
 
 export interface IdentityAnchor {

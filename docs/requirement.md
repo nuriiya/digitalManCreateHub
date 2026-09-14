@@ -349,6 +349,10 @@
 | R-20.9 | 元流程自身须过**创建四关**（准入/结构/能力/验收）；当前会 fail 能力关（m2/m6/m7 待建）→ **先补零件再组装** | **已满足**（design §18.6） | m2/m6/m7 承载能力已落地（commit 4a438e2）；factory #47 的 deterministic 节点全部有可用函数 |
 | R-20.10 | **pipeline 版本族**：通过考试的为 canonical，历次迭代归入 family 历史版本（不删、可查、默认隐藏） | **已实现**（design §18.6②） | `pipelines` 加 `is_archived/family_id/parent_version_id` 三列 + 索引；迁移脚本幂等；当前 #44 CANONICAL、26 条归档 family=44、#1 归档 family=1 |
 | R-20.11 | **画布交互**：pipeline 流程图须支持节点拖动（位置持久化）、画布平移缩放、撤销/重做 | **已实现**（design §18.6③） | `PipelineGraph` 交互化：拖动落库 position_x/y、viewBox 平移、滚轮 0.4x~2.5x、Ctrl+Z 双栈；列表默认过滤归档 + 勾选可查 |
+| R-21 | 本体库同步链路：数字人本体段（persona_ontology）须同步进本体库（candidates），前端「知识与本体」页可见 | **已实现**（design §19.1） | 缺陷实测：146 条 persona_ontology 里 84 条未同步（trainer.add_ontology 只写单侧）。修复：add_ontology 双写 + `_sync_candidate`（name_norm 幂等、只补不改、tags 带 persona:来源）；回填脚本补存量：candidates 68 → 149，缺口 0 |
+| R-21.1 | **资产打包导出**：数字人 + 本体库 + 本体段/动作/锚点 + 本体关系 + pipeline + MCP 一键导出 JSON（**不含 RAG 数据**） | **已实现**（design §19.2） | `porter.export_bundle`：8 个 section；实测导出 14/146/37/14/149/77/29/5 |
+| R-21.2 | **资产打包导入**：导入 bundle 须幂等（按 name 判重、只补不改），ID 按 name 重映射（跨库安全） | **已实现**（design §19.2） | 同 bundle 重导入 added=0 / skipped=471（幂等验证通过）；persona_id 按 name 重映射 |
+| R-21.3 | 导出/导入须有**前端入口**（Settings 页）与导入报告 | **已实现**（design §19.2） | 导出下载 `digitalman-bundle-<ts>.json`；导入后展示逐 section added/skipped |
 
 ---
 

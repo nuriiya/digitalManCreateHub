@@ -913,6 +913,31 @@ def ontology_graph():
     return ontology.graph(db.get_conn())
 
 
+# ---------------- porter：数字人资产导出 / 导入（design §19） ----------------
+
+@app.get("/api/porter/export")
+def porter_export(include_archived: bool = True):
+    """打包导出：数字人 + 本体库 + 本体段/动作/锚点 + 本体关系 + pipeline + MCP。
+
+    不含 RAG 数据（documents/chunks/mentions 留在源库）。
+    前端拿 JSON 自行存文件（文件名带时间戳）。"""
+    from . import porter
+    bundle = porter.export_bundle(db.get_conn(),
+                                  include_archived=include_archived)
+    return {"ok": True, "bundle": bundle}
+
+
+@app.post("/api/porter/import")
+def porter_import(body: dict):
+    """导入 porter.export 产出的 bundle。幂等：按 name 判重、只补不改。"""
+    from . import porter
+    bundle = body.get("bundle") or body
+    if not isinstance(bundle, dict) or "sections" not in bundle:
+        return {"ok": False, "error": "bundle 格式不对（缺 sections）"}
+    result = porter.import_bundle(db.get_conn(), bundle)
+    return {"ok": True, **result}
+
+
 @app.get("/api/ontology/tags")
 def ontology_tags():
     conn = db.get_conn()

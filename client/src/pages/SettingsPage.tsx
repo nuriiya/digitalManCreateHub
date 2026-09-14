@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   getSettings, saveSettings, testLlm, testLlm2, testEmbedding, getStats, getCandidate,
   changePassword, listOllamaModels, pullOllamaModel, getOllamaPullStatus,
-  setLocalLlm, setLlmMode,
+  setLocalLlm, setLlmMode, exportBundle, importBundle,
   OllamaModelsResp, OllamaPullStatus,
 } from '../api'
 import { useToast } from '../Toast'
@@ -26,7 +26,38 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
   const [pullStatus, setPullStatus] = useState<OllamaPullStatus | null>(null)
   const [pullBusy, setPullBusy] = useState(false)
   const [ollamaCustom, setOllamaCustom] = useState('')  // when dropdown has no match
+  const [porterBusy, setPorterBusy] = useState(false)
+  const [porterReport, setPorterReport] = useState('')
   const { toast } = useToast()
+
+  // ---- 资产导出 / 导入（design §19 porter） ----
+  const doExport = async () => {
+    setPorterBusy(true); setPorterReport('')
+    try {
+      const r = await exportBundle()
+      const blob = new Blob([JSON.stringify(r.bundle, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      a.href = url; a.download = `digitalman-bundle-${ts}.json`; a.click()
+      URL.revokeObjectURL(url)
+      const s = r.bundle?.summary || {}
+      setPorterReport('导出完成：' + Object.entries(s).map(([k, v]) => `${k}=${v}`).join(' · '))
+      toast('资产包已导出', 'ok')
+    } catch (e: any) { toast(e.message, 'err') } finally { setPorterBusy(false) }
+  }
+  const doImport = async (file: File) => {
+    setPorterBusy(true); setPorterReport('')
+    try {
+      const text = await file.text()
+      const bundle = JSON.parse(text)
+      const r = await importBundle(bundle)
+      const lines = Object.entries(r.stats || {}).map(([k, v]: any) => `${k}: +${v.added}（跳过 ${v.skipped}）`)
+      setPorterReport('导入完成（幂等，同名只补不改）：\n' + lines.join('\n'))
+      toast('资产包已导入', 'ok')
+      onChanged?.()
+    } catch (e: any) { toast(e.message, 'err') } finally { setPorterBusy(false) }
+  }
 
   useEffect(() => {
     getSettings().then((r) => {
@@ -323,6 +354,24 @@ export default function SettingsPage({ onChanged }: { onChanged?: () => void }) 
           <div className="btnrow">
             <button className="btn" onClick={doChangePw} disabled={pwBusy}>修改密码</button>
           </div>
+        </div>
+
+        <div className="card">
+          <h3>资产导出 / 导入</h3>
+          <div className="desc">打包数字人 + 本体库 + 本体段/动作/锚点 + 本体关系 + pipeline + MCP（不含 RAG 文档库）。导入幂等：同名只补不改。</div>
+          <div className="btnrow">
+            <button className="btn green" onClick={doExport} disabled={porterBusy}>{porterBusy ? '导出中…' : '⭳ 导出资产包'}</button>
+            <label className="btn" style={{ cursor: 'pointer' }}>
+              ⭱ 导入资产包
+              <input type="file" accept=".json,application/json" style={{ display: 'none' }}
+                     onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.currentTarget.value = '' }} />
+            </label>
+          </div>
+          {porterReport && (
+            <div className="note" style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
+              {porterReport}
+            </div>
+          )}
         </div>
       </div>
     </div>
