@@ -449,26 +449,40 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
                         continue
                     raise
                 finally:
-                    # 无论成败都关掉本次尝试的 client（见 _close_client_kwargs）
-                    # — 直连路径 kwargs 为空，这里是 no-op
-                    _close_client_kwargs(kwargs_client)
+                    # ⚠️ **成功的尝试绝不能在这里关 client**（2026-09-14 实测 bug）：
+                    # `stream=True` 时 `create()` 返回的是**惰性流**，响应体要到下方
+                    # `for chunk in resp:` 才真正读取。在 create() 的 finally 里就
+                    # close 掉 client，等于把还没读的套接字关掉 —— 流一读就抛
+                    # `httpx.ReadError: [Errno 9] Bad file descriptor`，再被
+                    # _call_llm_with_usage 按类名归类成「300s 空闲超时」，于是
+                    # **0.3 秒返回的失败报文却写着 300 秒超时**，极难定位。
+                    # loopback（Ollama）分支恰恰会返回自定义 client，所以本地
+                    # /v1 对话 100% 死在这里；远程直连 kwargs 为空，是 no-op 才没
+                    # 暴露。失败的尝试仍立即关闭（防连接泄漏），成功的留给下方
+                    # 流读完后的 finally 关。
+                    if resp is None:
+                        _close_client_kwargs(kwargs_client)
             if last_err is not None and resp is None:
                 raise last_err
             parts: list[str] = []
-            for chunk in resp:
-                usage = getattr(chunk, "usage", None)
-                if usage is not None:  # usage chunk (include_usage) -> exact tokens
-                    box["usage"] = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
-                        "completion_tokens": getattr(usage, "completion_tokens", None),
-                        "total_tokens": getattr(usage, "total_tokens", None),
-                    }
-                    continue
-                if not chunk.choices:  # usage-only sentinel chunk
-                    continue
-                delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    parts.append(delta.content)
+            try:
+                for chunk in resp:
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:  # usage chunk (include_usage) -> exact tokens
+                        box["usage"] = {
+                            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                            "completion_tokens": getattr(usage, "completion_tokens", None),
+                            "total_tokens": getattr(usage, "total_tokens", None),
+                        }
+                        continue
+                    if not chunk.choices:  # usage-only sentinel chunk
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        parts.append(delta.content)
+            finally:
+                # 流消费结束（正常读完或中途异常）后才关掉本轮成功的 client。
+                _close_client_kwargs(kwargs_client)
             box["reply"] = "".join(parts)
         except Exception as e:  # surfaced below
             box["error"] = e

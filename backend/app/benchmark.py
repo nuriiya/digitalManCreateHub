@@ -32,7 +32,7 @@ Metrics: 准确率 = correct 占比 · 幻觉率 = wrong 占比 · 拒答率 = r
 import json
 import time
 
-from . import db, llm, jobs, chat, ingest
+from . import db, llm, jobs, chat, ingest, settings_store
 
 ARMS = ("none", "ontology", "rag", "rag_ontology")
 ARM_LABELS = {"none": "G0 裸模型", "ontology": "G1 仅本体",
@@ -345,6 +345,25 @@ def analyze_failures(conn, identity_id: int, benchmark_id: int,
 
 # ---------------- the benchmark job ----------------
 
+def _default_ollama_model() -> str:
+    """本地基线模型：跟随设置里配的 local_llm.model（有 32B 就用 32B），
+    没有再回落到 RAG_OLLAMA_MODEL / chat.DEFAULT_OLLAMA_MODEL。
+
+    2026-09-14：原为硬编码 "qwen2.5:7b-32k"；本机只装 32B（不拉 7B），
+    硬编码会让 benchmark 打到不存在的模型。改走「设置优先」后由部署层
+    （docker-compose.wsl.yml 的 RAG_OLLAMA_MODEL + settings.local_llm）
+    决定实际模型，代码不再固话具体尺寸。
+    """
+    try:
+        local = (settings_store.load_settings().get("local_llm") or {})
+        m = str(local.get("model") or "").strip()
+        if m:
+            return m
+    except Exception:
+        pass
+    return chat.DEFAULT_OLLAMA_MODEL
+
+
 def run_benchmark(conn, job_id: int, identity_id: int,
                   ollama_model: str | None, limit: int) -> None:
     ident = chat._identity(conn, identity_id)
@@ -353,7 +372,7 @@ def run_benchmark(conn, job_id: int, identity_id: int,
         return
     limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     quizzes = _select_quizzes(conn, identity_id, limit)
-    model = ollama_model or "qwen2.5:7b-32k"
+    model = ollama_model or _default_ollama_model()
     cur = conn.execute(
         "INSERT INTO persona_benchmarks"
         " (identity_id, job_id, model, judge, total, status, created_at)"

@@ -1,0 +1,17 @@
+{
+  "identity_id": 1,
+  "identity_name": "临床试验受试者筛选审核官",
+  "model": "qwen2.5:32b-32k",
+  "ontology_count": 17,
+  "ontology_kinds": {
+    "规则": 6,
+    "概念": 4,
+    "流程": 2,
+    "角色": 2,
+    "指标": 2,
+    "组织架构": 1
+  },
+  "tag": "repeat2",
+  "temperature_note": "chat._dispatch → chat_ollama temperature=0.5",
+  "started_at": "2026-09-15 00:22:22"
+}
