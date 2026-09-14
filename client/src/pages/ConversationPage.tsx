@@ -99,9 +99,12 @@ export default function ConversationPage({ refreshKey }: Props) {
     if (sessIdentityId === 0) { setMessages([]); return }
     let cancelled = false
     setLoading(true)
-    // pipeline 进度气泡进行中（design §23.4）：切换/新建对话组触发的加载
-    // **不覆盖**正在渲染的临时进度气泡（负 id），等 run 结束才恢复常规加载
-    if (pipelineProgress) {
+    // 发送期间 / pipeline 进度气泡进行中：**禁止**用后端加载结果覆盖当前
+    // 气泡（design §23.4 竞态修复）——setSessionId 会在 runPipeline 返回前
+    // 触发本 effect，此时后端可能还是空消息，直接加载会把刚显示的对话
+    // 气泡清成空白（user 截图复现：组 #378 空荡）。onDone 的全量替换不走
+    // 本 effect，不受影响。
+    if (sending || pipelineProgress) {
       setLoading(false)
       return () => { }
     }
