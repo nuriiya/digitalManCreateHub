@@ -4,11 +4,12 @@ import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
   routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken, createChatSession,
-  startPipelineSession, updatePipelineProgress,
+  startPipelineSession, updatePipelineProgress, getJobEvents,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
 import PipelineCard from '../components/PipelineCard'
+import PipelineProgressCard from '../components/PipelineProgressCard'
 
 interface Props {
   refreshKey: number
@@ -55,10 +56,11 @@ export default function ConversationPage({ refreshKey }: Props) {
     question: string; options: string[]; note?: string;
     identityId: number; sessionId: number | null;
   }>(null)
-  // pipeline 触发后的轻量阶段进度（design §23 / R-25，不渲染大卡片）：
-  // 轮询 run 状态 → 在 assistant 消息（真实 id，持久化）里更新「任务阶段 1.2.3」
+  // pipeline 触发后的轻量阶段进度（design §23.7 手风琴）：轮询 run+事件流 →
+  // 结构化标记写入 assistant 消息（持久化），渲染为可展开的 PipelineProgressCard
   const [pipelineProgress, setPipelineProgress] = useState<null | {
     pipelineId: number; name: string; assistantId: number; sessionId: number;
+    jobId?: number;
   }>(null)
   const [progressDone, setProgressDone] = useState<null | { runId: number }>(null)
   const logRef = useRef<HTMLDivElement>(null)
@@ -120,42 +122,44 @@ export default function ConversationPage({ refreshKey }: Props) {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, sending])
 
-  // pipeline 阶段进度轮询（design §23 / R-25）：4s 拉 run 状态 →
-  // 在 assistant 消息里渲染「任务阶段 1.2.3」（✅/⏳/⏸）并**回写数据库**，
-  // done 后停止（WorkBuddy 式：上下文持久化，刷新/切换不丢）
+  // pipeline 阶段进度轮询（design §23.7）：4s 拉 run 状态 + 事件流 →
+  // 以 @@PIPELINE_PROGRESS@@{json} 结构化标记写入 assistant 消息（持久化），
+  // 渲染层识别后交给 PipelineProgressCard 手风琴（可展开看各阶段 LLM 内容）
   useEffect(() => {
     if (!pipelineProgress) return
-    const { pipelineId, name, assistantId, sessionId: psSid } = pipelineProgress
+    const { pipelineId, name, assistantId, sessionId: psSid, jobId } = pipelineProgress
     let cancelled = false
     const tick = async () => {
       try {
-        const [pRes, runsRes] = await Promise.all([
+        const [pRes, runsRes, evRes] = await Promise.all([
           getPipeline(pipelineId), getPipelineRuns(pipelineId),
+          jobId ? getJobEvents(jobId) : Promise.resolve({ events: [] }),
         ])
         if (cancelled) return
         const nodes = pRes.pipeline?.nodes ?? []
         const last = (runsRes.runs ?? [])[0]
         if (!last) return
-        const stIcon = (s: string) =>
-          s === 'done' ? '✅' : s === 'running' ? '⏳'
-            : (s === 'blocked' || s === 'failed') ? '❌' : '⏸'
-        const runState = last.status === 'done' ? '✅ 完成'
-          : last.status === 'running' ? '⏳ 运行中'
-            : last.status === 'blocked' ? '❌ 被复核门拦下' : `❌ ${last.status}`
+        const evs = (evRes.events ?? []) as any[]
+        // pipeline.node(running) 事件的 seq = 各阶段起点 → llm 事件归属区间
+        const nodeStarts = evs
+          .filter((e) => e.type === 'pipeline.node' && e.payload?.status === 'running')
+          .sort((a, b) => a.seq - b.seq)
         const curIdx = nodes.findIndex((n: any) => n.id === last.current_node_id)
-        const lines = nodes.map((n: any, i: number) => {
-          const st = last.status === 'done' ? 'done'
-            : curIdx < 0 ? 'pending'
-              : i < curIdx ? 'done' : i === curIdx ? 'running' : 'pending'
-          const label = n.step_name || n.node_key
-          return `${i + 1}. ${stIcon(st)} ${label}`
+        const stages = nodes.map((n: any, i: number) => {
+          const state = last.status === 'done' ? 'done' as const
+            : curIdx < 0 ? 'pending' as const
+              : i < curIdx ? 'done' as const
+                : i === curIdx ? 'running' as const : 'pending' as const
+          const seqStart = nodeStarts[i]?.seq ?? Number.MAX_SAFE_INTEGER
+          const seqEnd = nodeStarts[i + 1]?.seq ?? Number.MAX_SAFE_INTEGER
+          return { key: n.node_key, label: n.step_name || n.node_key,
+                   state, seqStart, seqEnd }
         })
-        const content =
-          `🔗 **${name}**（run #${last.id} · ${runState}）\n\n` +
-          lines.join('\n') +
-          (last.status === 'done'
-            ? '\n\n✅ 全部阶段完成 —— DFMEA 表已写入，可下载 Excel 报告。'
-            : '')
+        const content = '@@PIPELINE_PROGRESS@@' + JSON.stringify({
+          v: 1, pipelineId, name,
+          runId: last.id, jobId: last.job_id ?? jobId,
+          runStatus: last.status, stages,
+        })
         setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, content } : x)))
         updatePipelineProgress(psSid, assistantId, content).catch(() => { })
         if (last.status !== 'running') {
@@ -328,6 +332,7 @@ export default function ConversationPage({ refreshKey }: Props) {
               name: matchedPipeline.name,
               assistantId: ps.assistant_msg_id,
               sessionId: ps.session_id,
+              jobId: run.job_id,
             })
             toast(`已触发 pipeline「${matchedPipeline.name}」运行`, 'ok')
             refreshSessions()
@@ -724,7 +729,13 @@ export default function ConversationPage({ refreshKey }: Props) {
                       <span className="cv-identity">由「{m.identity_name}」回答</span>
                     )}
                     <span className="chat-msg-time">{timeLabel(m.created_at)}</span>
-                    <span className="chat-msg-body md-body"><ReactMarkdown>{m.content}</ReactMarkdown></span>
+                    {m.role === 'assistant' && m.content.startsWith('@@PIPELINE_PROGRESS@@') ? (
+                      <span className="chat-msg-body">
+                        <PipelineProgressCard raw={m.content} />
+                      </span>
+                    ) : (
+                      <span className="chat-msg-body md-body"><ReactMarkdown>{m.content}</ReactMarkdown></span>
+                    )}
                   </div>
                 ))}
               </div>

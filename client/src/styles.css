@@ -790,6 +790,50 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
   text-decoration: underline;
 }
 .chat-ask-skip:hover { color: var(--text); }
+/* pipeline 进度手风琴（design §23.7）：阶段可展开看各阶段 LLM 交互 */
+.ppc {
+  width: 100%; padding: 10px 12px;
+  background: rgba(93,202,165,0.06);
+  border: 1px solid rgba(93,202,165,0.35); border-radius: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ppc-head { font-size: 13px; color: var(--text); }
+.ppc-run { color: var(--muted); font-size: 12px; }
+.ppc-stages { display: flex; flex-direction: column; gap: 2px; }
+.ppc-stage { border-radius: 6px; overflow: hidden; }
+.ppc-stage.open { background: rgba(255,255,255,0.04); }
+.ppc-stage-row {
+  display: flex; align-items: flex-start; gap: 6px; width: 100%;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text); font-size: 12.5px; text-align: left;
+  padding: 5px 6px; border-radius: 6px; line-height: 1.5;
+}
+.ppc-stage-row:hover { background: rgba(93,202,165,0.10); }
+.ppc-idx { color: var(--muted); flex: 0 0 auto; min-width: 26px; }
+.ppc-ico { flex: 0 0 auto; }
+.ppc-label { flex: 1 1 auto; }
+.ppc-chev { flex: 0 0 auto; color: var(--accent); }
+.ppc-detail {
+  margin: 2px 6px 6px 38px; padding: 8px;
+  background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+  border-radius: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.ppc-detail-title { font-size: 11.5px; color: var(--accent); }
+.ppc-loading, .ppc-empty { font-size: 12px; color: var(--muted); }
+.ppc-ev { border-left: 2px solid var(--border); padding-left: 8px; }
+.ppc-ev.call { border-left-color: rgba(147,112,219,0.6); }
+.ppc-ev.reply { border-left-color: rgba(93,202,165,0.6); }
+.ppc-ev-head { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+.ppc-ev-head b { color: var(--text); }
+.ppc-ev-len { margin-left: 4px; }
+.ppc-ev-body {
+  margin: 0; font-size: 11.5px; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 180px; overflow-y: auto;
+  font-family: ui-monospace, Consolas, monospace;
+  background: rgba(255,255,255,0.03); border-radius: 6px; padding: 6px;
+}
+.ppc-done { font-size: 12.5px; color: var(--accent); }
 .chat-msg {
   max-width: 82%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55;
   display: flex; flex-direction: column; gap: 3px;

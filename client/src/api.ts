@@ -135,7 +135,13 @@ export const getJobs = () => api('/api/jobs')
 export const pauseJob = (id: number) => api(`/api/jobs/${id}/pause`, { method: 'POST' })
 export const resumeJob = (id: number) => api(`/api/jobs/${id}/resume`, { method: 'POST' })
 export const deleteJob = (id: number) => api(`/api/jobs/${id}`, { method: 'DELETE' })
-export const getJobEvents = (id: number) => api(`/api/events?job_id=${id}`)
+// job 事件流（llm.call / llm.reply / pipeline.node）—— 阶段手风琴展开时
+// 按 seq 区间归属到节点，展示该阶段的 LLM 具体交互内容
+export interface JobEvent {
+  seq: number; job_id: number; type: string; payload: any; ts: number
+}
+export const getJobEvents = (id: number) =>
+  api<{ events: JobEvent[] }>(`/api/events?job_id=${id}`)
 export const getStats = () => api('/api/rag/stats')
 export const getDocuments = () => api('/api/rag/documents')
 export interface ChunkFilters {
