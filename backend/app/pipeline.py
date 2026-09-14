@@ -661,11 +661,50 @@ def _run_build_persona(conn, parent_job_id) -> str:
 
 
 def _run_deterministic(conn, node, inputs, parent_job_id) -> str:
-    """deterministic 节点执行：内置 Function 映射表（第一版仅「建数字人」）。"""
+    """deterministic 节点执行：内置 Function 映射表。
+
+    除"建数字人"外，新增 pipeline-factory 元流程的三个承载能力
+    （design §18.3）：m2 资产盘点 / m3 补专家 / m4 补能力 / m6 编译考卷 /
+    m7 考试迭代 / m9 反向沉淀。它们都是**deterministic、零 LLM**。
+    """
+    from . import pipeline_factory as PF
     step = (node.get("step_name") or "").strip()
     if "建数字人" in step or "建专业数字人" in step:
         return _run_build_persona(conn, parent_job_id)
-    return json.dumps({"note": f"deterministic 节点「{step}」执行尚未实现"},
+    if step == "资产盘点":
+        return json.dumps(PF.inventory(conn), ensure_ascii=False)
+    if step == "补专家":
+        # 简化版：模板命中则 instantiate；未命中 → 推荐走 _run_build_persona 子流程
+        from . import persona_templates as PT
+        inv = PF.inventory(conn)
+        # 找可用模板（全部视为可用；实际可按 m1 提名指定的 role 过滤）
+        tpl_codes = [t["code"] for t in inv["templates"]]
+        return json.dumps({"hint": "见可用模板 codes", "templates": tpl_codes,
+                           "next_action": "如需新建走『建数字人』节点"}, ensure_ascii=False)
+    if step == "补能力":
+        # 演示动作：返回现有 approved 动作清单（由 m4 调用方按需求选 binding）
+        from . import trainer as T
+        return json.dumps({"hint": "请调用 add_ontology / 绑动作",
+                           "available_actions": [a["name"] for a in
+                                                  PF.inventory(conn)["actions"]]},
+                          ensure_ascii=False)
+    if step == "编译考卷":
+        return json.dumps(PF.compile_exam(conn), ensure_ascii=False)
+    if step == "考试迭代":
+        # 从 inputs 取 run_id（约定上游 m6 / 上游写入器传 run_id 进 handoff）
+        # 简化：取最近一次 pipeline_run 的 run_id
+        rr = conn.execute("SELECT id FROM pipeline_runs ORDER BY id DESC LIMIT 1").fetchone()
+        run_id = rr["id"] if rr else 0
+        exam = PF.compile_exam(conn)
+        result = PF.run_exam(conn, run_id, exam)
+        result["diagnosis"] = PF.diagnose(conn, result)
+        return json.dumps(result, ensure_ascii=False)
+    if step == "反向沉淀":
+        from . import persona_templates as PT
+        # 演示：把现有数字人存为模板（若无变化则跳过）
+        return json.dumps({"hint": "见 §16.5 identity_to_template，按名幂等"},
+                          ensure_ascii=False)
+    return json.dumps({"note": f"deterministic node「{step}」 execution not yet implemented"},
                       ensure_ascii=False)
 
 

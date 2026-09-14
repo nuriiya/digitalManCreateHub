@@ -996,6 +996,18 @@ def _init_schema(conn: _Conn) -> None:
         cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_confidence TEXT")
         cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_mandatory SMALLINT")
         cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS type_source TEXT")
+        # pipelines versioning (2026-09-14): 把"通过的 pipeline"留下作为 canonical，
+        # 其余 iterations 归入同一 family 的历史版本（可查、可对比，但不挤主列表）。
+        # is_archived: 主列表默认过滤为 false；family_id: 所属家族的根 pipeline；
+        # parent_version_id: 上一版本（保留链）。cascade 已由现有 schema 处理子表。
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS"
+                    " is_archived BOOLEAN NOT NULL DEFAULT false")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS"
+                    " family_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS"
+                    " parent_version_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_family"
+                    " ON pipelines(family_id, is_archived)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_type ON chunks(type)")
     conn.commit()
 

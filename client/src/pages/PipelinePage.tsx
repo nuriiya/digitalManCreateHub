@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   getPipelines, createPipeline, getPipeline, deletePipeline,
-  addPipelineNode, removePipelineNode, addPipelineRelation, removePipelineRelation,
+  addPipelineNode, updateNode, removePipelineNode, addPipelineRelation, removePipelineRelation,
   validatePipeline, approvePipeline, getPipelineChanges,
   approvePipelineChange, rejectPipelineChange, chatPipeline, runPipeline,
   getIdentities,
@@ -149,6 +149,7 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   const [createTags, setCreateTags] = useState('')
   const [createDesc, setCreateDesc] = useState('')
   const [createBusy, setCreateBusy] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [nodeDraft, setNodeDraft] = useState({ node_key: '', persona_id: '', kind: 'nominate', step_name: '' })
   const [relDraft, setRelDraft] = useState({ from_node_id: '', to_node_id: '', relation_type: 'handoff', handoff_type: '', handoff_schema: '' })
   const [chatMsg, setChatMsg] = useState('')
@@ -264,6 +265,10 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
         <div className="btnrow">
           <button className="btn green small" onClick={() => setCreating(true)}>+ 创建 pipeline</button>
           <button className="btn ghost small" onClick={reload}>刷新</button>
+          <label style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            显示归档版本（family 历史）
+          </label>
         </div>
         {creating && (
           <div className="dlg-overlay" onClick={() => setCreating(false)}>
@@ -287,18 +292,19 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
             </div>
           </div>
         )}
-        {pipelines.length === 0 && <div className="note" style={{ padding: '8px 0' }}>暂无 pipeline</div>}
-        {pipelines.map((p) => (
-          <div key={p.id} className={`id-card st-${p.status}`} style={{ cursor: 'pointer', border: sel === p.id ? '1px solid var(--accent)' : undefined }} onClick={() => setSel(p.id)}>
+        {pipelines.filter((p) => showArchived ? true : !p.is_archived).length === 0 && <div className="note" style={{ padding: '8px 0' }}>{showArchived ? '暂无 pipeline' : '暂无未归档的 pipeline（勾选右上"显示归档版本"可看历史）'}</div>}
+        {pipelines.filter((p) => showArchived ? true : !p.is_archived).map((p) => (
+          <div key={p.id} className={`id-card st-${p.status}`} style={{ cursor: 'pointer', border: sel === p.id ? '1px solid var(--accent)' : undefined, opacity: p.is_archived ? 0.62 : 1 }} onClick={() => setSel(p.id)}>
             <div className="id-head">
               <b>{p.name}</b>
               <span className={`status-pill ${p.status}`}>{p.status}</span>
+              {p.is_archived && <span className="kw-chip" style={{ fontSize: 10 }}>归档 v{p.family_id === p.id ? '独立' : `#${p.family_id}`}</span>}
               <span className="ops" style={{ marginLeft: 'auto' }}>
                 <button className="btn red small" onClick={(e) => { e.stopPropagation(); doDelete(p.id) }}>删</button>
               </span>
             </div>
             {p.tags.length > 0 && <div className="id-kws">{p.tags.map((t) => <span key={t} className="kw-chip">{t}</span>)}</div>}
-            <div className="note">{p.nodes.length} 节点 · {p.relations.length} 关系</div>
+            <div className="note">{p.nodes.length} 节点 · {p.relations.length} 关系{p.is_archived ? ` · family=#${p.family_id ?? '-'}` : ''}</div>
           </div>
         ))}
       </div>
@@ -326,7 +332,7 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
                 <h3>图片化结构流程图</h3>
                 {cur.nodes.length === 0
                   ? <div className="note">暂无节点，去「编辑」添加数字人节点。</div>
-                  : <PipelineGraph cur={cur} layout={layout} personaName={personaName} />}
+                  : <PipelineGraph cur={cur} baseLayout={layout} personaName={personaName} />}
                 <div className="btnrow" style={{ marginTop: 8 }}>
                   <button className="btn ghost small" onClick={doValidate}>校验</button>
                   {cur.status !== 'approved' && <button className="btn green small" onClick={doApprove}>批准（打标签入本体库）</button>}
@@ -438,10 +444,50 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   )
 }
 
-// 自绘 SVG 流程图（DAG）
-function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Record<number, { x: number; y: number; w: number }>; personaName: (id: number | null) => string }) {
+// 自绘 SVG 流程图（DAG）— 可拖动 / 缩放 / 撤销重做 / 位置持久化
+function PipelineGraph({ cur, baseLayout, personaName }: {
+  cur: Pipeline
+  baseLayout: Record<number, { x: number; y: number; w: number }>
+  personaName: (id: number | null) => string
+}) {
+  // 位置覆盖：用户拖动后的位置。key=node_id, value={x,y}
+  const [positions, setPositions] = useState<Record<number, { x: number; y: number }>>(() => {
+    const init: Record<number, { x: number; y: number }> = {}
+    cur.nodes.forEach((n) => {
+      // 优先用 DB 持久化的位置，否则用 baseLayout 的初始布局
+      if (n.position_x != null && n.position_y != null) {
+        init[n.id] = { x: n.position_x, y: n.position_y }
+      } else {
+        const b = baseLayout[n.id]
+        if (b) init[n.id] = { x: b.x, y: b.y }
+      }
+    })
+    return init
+  })
+  // 撤销/重做栈：每次拖动 commit 前压栈
+  const [undoStack, setUndoStack] = useState<Record<number, { x: number; y: number }>[]>([])
+  const [redoStack, setRedoStack] = useState<Record<number, { x: number; y: number }>[]>([])
+  // 画布视口：平移 + 缩放
+  const [view, setView] = useState({ x: 0, y: 0, w: 1, zoom: 1 })
+  const dragRef = useRef<{ kind: 'node' | 'pan'; id?: number; startX: number; startY: number; orig?: { x: number; y: number }; origView?: { x: number; y: number } } | null>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
+
+  // 计算绝对布局：baseLayout 覆盖默认宽高，positions 覆盖 x/y
+  const layout: Record<number, { x: number; y: number; w: number }> = {}
+  cur.nodes.forEach((n) => {
+    const b = baseLayout[n.id]
+    if (!b) return
+    const p = positions[n.id] || { x: b.x, y: b.y }
+    layout[n.id] = { x: p.x, y: p.y, w: b.w }
+  })
   const W = Math.max(700, ...cur.nodes.map((n) => (layout[n.id]?.x ?? 0) + (layout[n.id]?.w ?? 100)).concat([0])) + 60
   const H = Math.max(320, ...cur.nodes.map((n) => (layout[n.id]?.y ?? 0) + NODE_H + 90).concat([0])) + 40
+  // viewBox 是从原点 (0,0) 起的窗口；用户拖动平移通过 viewBox 的 x/y 调整；缩放通过 w/h 调整。
+  const vbX = -view.x
+  const vbY = -view.y
+  const vbW = W / view.zoom
+  const vbH = H / view.zoom
+
   // 文字超宽时截断（追加 …）
   const clip = (s: string, fs: number, maxW: number) => {
     if (textWidth(s, fs) <= maxW) return s
@@ -452,78 +498,162 @@ function PipelineGraph({ cur, layout, personaName }: { cur: Pipeline; layout: Re
     }
     return out + '…'
   }
+
+  const undo = () => {
+    if (!undoStack.length) return
+    const last = undoStack[undoStack.length - 1]
+    setUndoStack(undoStack.slice(0, -1))
+    setRedoStack([...redoStack, positions])
+    setPositions(last)
+  }
+  const redo = () => {
+    if (!redoStack.length) return
+    const next = redoStack[redoStack.length - 1]
+    setRedoStack(redoStack.slice(0, -1))
+    setUndoStack([...undoStack, positions])
+    setPositions(next)
+  }
+
+  const onMouseDownNode = (e: React.MouseEvent, nid: number) => {
+    e.stopPropagation()
+    e.preventDefault()
+    dragRef.current = {
+      kind: 'node', id: nid,
+      startX: e.clientX, startY: e.clientY,
+      orig: { x: positions[nid]?.x ?? baseLayout[nid]?.x ?? 0,
+             y: positions[nid]?.y ?? baseLayout[nid]?.y ?? 0 },
+    }
+  }
+  const onMouseDownBg = (e: React.MouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, origView: { x: view.x, y: view.y } }
+  }
+  const onMouseMove = (e: React.MouseEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    const dxScreen = e.clientX - d.startX
+    const dyScreen = e.clientY - d.startY
+    if (d.kind === 'node' && d.id != null && d.orig) {
+      // 把屏幕位移换算成画布坐标
+      const k = 1 / view.zoom
+      const nx = Math.max(0, d.orig.x + dxScreen * k)
+      const ny = Math.max(0, d.orig.y + dyScreen * k)
+      setPositions({ ...positions, [d.id]: { x: nx, y: ny } })
+    } else if (d.kind === 'pan' && d.origView) {
+      const k = 1 / view.zoom
+      setView({ ...view, x: d.origView.x - dxScreen * k, y: d.origView.y - dyScreen * k })
+    }
+  }
+  const onMouseUp = () => {
+    const d = dragRef.current
+    if (d?.kind === 'node' && d.id != null) {
+      // commit：压入 undoStack、清 redoStack、持久化到后端
+      setUndoStack([...undoStack, positions])
+      setRedoStack([])
+      const n = cur.nodes.find((nn) => nn.id === d.id)
+      if (n) {
+        const p = positions[d.id]
+        if (p) updateNode(n.pipeline_id, d.id, { position: { x: Math.round(p.x), y: Math.round(p.y) } }).catch(() => { })
+      }
+    }
+    dragRef.current = null
+  }
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault()
+    const z = Math.max(0.4, Math.min(2.5, view.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)))
+    setView({ ...view, zoom: z })
+  }
+
+  // 键盘快捷键：Ctrl+Z / Ctrl+Shift+Z（在 SVG 内捕获；外层应不抢焦点）
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo() }
+    else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); redo() }
+  }
+
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img">
-        <defs>
-          <marker id="parrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </marker>
-        </defs>
-        {cur.relations.map((r) => {
-          const a = layout[r.from_node_id]; const b = layout[r.to_node_id]
-          if (!a || !b) return null
-          const ax = a.x + a.w; const bx = b.x
-          const mx = (ax + bx) / 2
-          // 审核门(review)=亮红粗线+菱形门；询问(ask)=亮蓝虚线走低轨道（错开主干）；
-          // 其余浅灰。箭头接在目标节点上沿（+IFACE_BAND 以下是接口区，不接）。
-          const isGate = r.relation_type === 'review'
-          const isAsk = r.relation_type === 'ask'
-          const stroke = isGate ? '#FF6B6B' : isAsk ? '#7BAFFF' : '#B0B0BA'
-          const sw = isGate ? 2.6 : 1.8
-          const dash = isAsk ? '5,5' : undefined
-          const askOpacity = isAsk ? 0.78 : 1
-          const sameLine = Math.abs(a.y - b.y) < 4
-          // 主干 y：同层横向连接走节点中部；跨层（同列纵向）用中点偏上走线
-          const yA = isAsk ? a.y + NODE_H - 8 : a.y + NODE_H / 2 - 4
-          const yB = isAsk ? b.y + NODE_H - 8 : b.y + NODE_H / 2 - 4
-          // ask 反向边：从下游底部绕回上游底部（低轨道），不穿过节点中部
-          const viaY = isAsk ? Math.max(a.y, b.y) + NODE_H + 14 : (a.y + b.y) / 2
-          const dPath = isAsk
-            ? `M ${ax} ${yA} C ${mx} ${viaY}, ${mx} ${viaY}, ${bx} ${yB}`
-            : (sameLine
-              ? `M ${ax} ${yA} L ${bx - 6} ${yB}`
-              : `M ${ax} ${yA} C ${mx} ${yA}, ${mx} ${yB}, ${bx} ${yB}`)
-          // 传递内容：优先展示交接物 kind（handoff_type），无则关系类型
-          const label = r.handoff_type ? normKind(r.handoff_type) : (REL_TYPE_LABEL[r.relation_type] || r.relation_type)
-          const labelY = isGate ? viaY - 36 : (isAsk ? viaY - 8 : viaY - 12)
-          const lw = textWidth(label, 11.5)
-          return (
-            <g key={r.id} opacity={askOpacity}>
-              <path d={dPath} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
-              {isGate && (
-                <rect x={mx - 9} y={viaY - 9} width="18" height="18" transform={`rotate(45 ${mx} ${viaY})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.6" opacity="0.98" />
-              )}
-              <rect x={mx - lw / 2 - 7} y={labelY - 11} width={lw + 14} height="22" rx="4" fill="rgba(8,10,16,0.96)" stroke={stroke} strokeWidth="0.8" />
-              <text x={mx} y={labelY + 4} textAnchor="middle" fontSize="11.5" fontWeight="500" fill={stroke}>{label}</text>
-            </g>
-          )
-        })}
-        {cur.nodes.map((n) => {
-          const p = layout[n.id]; if (!p) return null
-          // 深色主题配色：节点深色背景 + 亮色文字 + 彩色边框（在黑色背景下醒目）
-          const fill = n.kind === 'deterministic' ? '#1e3a4a' : '#2a2540'
-          const stroke = n.kind === 'deterministic' ? '#5DCAA8' : '#9C7CFF'
-          const title = '#F0F0F5'
-          const label = n.step_name || personaName(n.persona_id)
-          const cx = p.x + p.w / 2
-          const { inKinds, outKinds } = nodeIfaceKinds(cur, n)
-          const iface = (s: string, maxW: number) => clip(s, 10.5, maxW)
-          return (
-            <g key={n.id}>
-              <rect x={p.x} y={p.y} width={p.w} height={NODE_H} rx="12" fill={fill} stroke={stroke} strokeWidth="1.6" />
-              <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="13" fontWeight="700" fill={title}>{clip(n.node_key, 12, p.w - 18)}</text>
-              <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11.5" fill="#D8D8E4">{clip(label, 11, p.w - 18)}</text>
-              <text x={cx} y={p.y + 56} textAnchor="middle" fontSize="10.5" fontWeight="500" fill={stroke}>{KIND_LABEL[n.kind]}</text>
-              <line x1={p.x + 8} y1={p.y + 64} x2={p.x + p.w - 8} y2={p.y + 64} stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
-              <text x={p.x + 10} y={p.y + 79} fontSize="10.5" fontWeight="700" fill="#8FB3D6">收</text>
-              <text x={p.x + 24} y={p.y + 79} fontSize="11" fill="#E5ECF2">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 36)}</text>
-              <text x={p.x + 10} y={p.y + 95} fontSize="10.5" fontWeight="700" fill="#D6B988">出</text>
-              <text x={p.x + 24} y={p.y + 95} fontSize="11" fill="#E5ECF2">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 36)}</text>
-            </g>
-          )
-        })}
-      </svg>
+    <div tabIndex={0} onKeyDown={onKeyDown} style={{ outline: 'none' }}>
+      {/* 工具条：撤销 / 重做 / 重置 / 缩放 */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 12 }}>
+        <button className="btn ghost small" disabled={undoStack.length === 0} onClick={undo}>↶ 撤销 ({undoStack.length})</button>
+        <button className="btn ghost small" disabled={redoStack.length === 0} onClick={redo}>↷ 重做 ({redoStack.length})</button>
+        <button className="btn ghost small" onClick={() => setView({ x: 0, y: 0, w: 1, zoom: 1 })}>居中</button>
+        <span style={{ color: 'var(--muted)' }}>滚轮缩放 · 拖空白处平移 · 拖节点移动 · Ctrl+Z 撤销</span>
+        <span style={{ marginLeft: 'auto' }}>缩放 {(view.zoom * 100).toFixed(0)}%</span>
+      </div>
+      <div style={{ overflow: 'hidden', border: '0.5px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)' }}>
+        <svg ref={svgRef} viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`} width="100%" style={{ cursor: dragRef.current?.kind === 'pan' ? 'grabbing' : 'grab' }}
+             role="img" onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onWheel={onWheel} onMouseDown={onMouseDownBg}>
+          <defs>
+            <marker id="parrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </marker>
+          </defs>
+          {/* 背景网格：帮助看出缩放与对齐 */}
+          <defs>
+            <pattern id="pgrid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
+            </pattern>
+          </defs>
+          <rect x={vbX} y={vbY} width={vbW} height={vbH} fill="url(#pgrid)" pointerEvents="none" />
+          {cur.relations.map((r) => {
+            const a = layout[r.from_node_id]; const b = layout[r.to_node_id]
+            if (!a || !b) return null
+            const ax = a.x + a.w; const bx = b.x
+            const mx = (ax + bx) / 2
+            const isGate = r.relation_type === 'review'
+            const isAsk = r.relation_type === 'ask'
+            const stroke = isGate ? '#FF6B6B' : isAsk ? '#7BAFFF' : '#B0B0BA'
+            const sw = isGate ? 2.6 : 1.8
+            const dash = isAsk ? '5,5' : undefined
+            const askOpacity = isAsk ? 0.78 : 1
+            const sameLine = Math.abs(a.y - b.y) < 4
+            const yA = isAsk ? a.y + NODE_H - 8 : a.y + NODE_H / 2 - 4
+            const yB = isAsk ? b.y + NODE_H - 8 : b.y + NODE_H / 2 - 4
+            const viaY = isAsk ? Math.max(a.y, b.y) + NODE_H + 14 : (a.y + b.y) / 2
+            const dPath = isAsk
+              ? `M ${ax} ${yA} C ${mx} ${viaY}, ${mx} ${viaY}, ${bx} ${yB}`
+              : (sameLine
+                ? `M ${ax} ${yA} L ${bx - 6} ${yB}`
+                : `M ${ax} ${yA} C ${mx} ${yA}, ${mx} ${yB}, ${bx} ${yB}`)
+            const label = r.handoff_type ? normKind(r.handoff_type) : (REL_TYPE_LABEL[r.relation_type] || r.relation_type)
+            const labelY = isGate ? viaY - 36 : (isAsk ? viaY - 8 : viaY - 12)
+            const lw = textWidth(label, 11.5)
+            return (
+              <g key={r.id} opacity={askOpacity}>
+                <path d={dPath} fill="none" stroke={stroke} strokeWidth={sw} strokeDasharray={dash} markerEnd="url(#parrow)" />
+                {isGate && (
+                  <rect x={mx - 9} y={viaY - 9} width="18" height="18" transform={`rotate(45 ${mx} ${viaY})`} fill="#FF6B6B" stroke="#FFF" strokeWidth="0.6" opacity="0.98" />
+                )}
+                <rect x={mx - lw / 2 - 7} y={labelY - 11} width={lw + 14} height="22" rx="4" fill="rgba(8,10,16,0.96)" stroke={stroke} strokeWidth="0.8" />
+                <text x={mx} y={labelY + 4} textAnchor="middle" fontSize="11.5" fontWeight="500" fill={stroke}>{label}</text>
+              </g>
+            )
+          })}
+          {cur.nodes.map((n) => {
+            const p = layout[n.id]; if (!p) return null
+            const fill = n.kind === 'deterministic' ? '#1e3a4a' : '#2a2540'
+            const stroke = n.kind === 'deterministic' ? '#5DCAA8' : '#9C7CFF'
+            const title = '#F0F0F5'
+            const label = n.step_name || personaName(n.persona_id)
+            const cx = p.x + p.w / 2
+            const { inKinds, outKinds } = nodeIfaceKinds(cur, n)
+            const iface = (s: string, maxW: number) => clip(s, 10.5, maxW)
+            return (
+              <g key={n.id} style={{ cursor: 'move' }} onMouseDown={(e) => onMouseDownNode(e, n.id)}>
+                <rect x={p.x} y={p.y} width={p.w} height={NODE_H} rx="12" fill={fill} stroke={stroke} strokeWidth="1.6" />
+                <text x={cx} y={p.y + 24} textAnchor="middle" fontSize="13" fontWeight="700" fill={title}>{clip(n.node_key, 12, p.w - 18)}</text>
+                <text x={cx} y={p.y + 42} textAnchor="middle" fontSize="11.5" fill="#D8D8E4">{clip(label, 11, p.w - 18)}</text>
+                <text x={cx} y={p.y + 56} textAnchor="middle" fontSize="10.5" fontWeight="500" fill={stroke}>{KIND_LABEL[n.kind]}</text>
+                <line x1={p.x + 8} y1={p.y + 64} x2={p.x + p.w - 8} y2={p.y + 64} stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
+                <text x={p.x + 10} y={p.y + 79} fontSize="10.5" fontWeight="700" fill="#8FB3D6">收</text>
+                <text x={p.x + 24} y={p.y + 79} fontSize="11" fill="#E5ECF2">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 36)}</text>
+                <text x={p.x + 10} y={p.y + 95} fontSize="10.5" fontWeight="700" fill="#D6B988">出</text>
+                <text x={p.x + 24} y={p.y + 95} fontSize="11" fill="#E5ECF2">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 36)}</text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
     </div>
   )
 }

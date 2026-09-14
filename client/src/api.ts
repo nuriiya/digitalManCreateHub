@@ -337,6 +337,8 @@ export interface PersonaUploadResult {
   errors: { name: string; error: string }[]
   /** 本次落库的 document id（用于范围化本体提取） */
   doc_ids: number[]
+  /** 后端附注（装配待确认清单等） */
+  note?: string
   chunks: number
 }
 
@@ -705,6 +707,7 @@ export interface Pipeline {
   id: number; name: string; description: string | null
   version: number; status: string; tags: string[]
   entry_node_id: number | null; exit_node_id: number | null
+  is_archived?: boolean; family_id?: number | null; parent_version_id?: number | null
   nodes: PipelineNode[]; relations: PipelineRelation[]
 }
 export interface PipelineChange {
@@ -724,7 +727,7 @@ export const deletePipeline = (id: number) =>
 
 export const addPipelineNode = (pipelineId: number, node: object) =>
   api<{ ok: boolean; id: number }>(`/api/pipelines/${pipelineId}/nodes`, { method: 'POST', body: JSON.stringify(node) })
-export const updatePipelineNode = (pipelineId: number, nodeId: number, patch: object) =>
+export const updateNode = (pipelineId: number, nodeId: number, patch: object) =>
   api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/nodes/${nodeId}`, { method: 'PUT', body: JSON.stringify(patch) })
 export const removePipelineNode = (pipelineId: number, nodeId: number) =>
   api<{ ok: boolean }>(`/api/pipelines/${pipelineId}/nodes/${nodeId}`, { method: 'DELETE' })
