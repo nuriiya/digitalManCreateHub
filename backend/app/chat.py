@@ -161,36 +161,86 @@ def route_identity(conn, message: str) -> dict | None:
     answer this message (0 LLM — the routing is a pure string-match score, in
     line with the iron law that the LLM never adjudicates).
 
-    Score = how many of the persona's ontology-段 entities + anchors literally
-    appear in (or contain) the message. Highest score wins; None when there is
-    no approved persona or nothing matched (caller then asks the user to pick).
+    Score tiers (router 增强 2026-09-14, 修"dfmea 路由不到 DFMEA 工程师")：
+      - persona name token (split on whitespace) match = +4 each
+      - persona mission / description substring match = +2 each
+      - persona_ontology.name (≥3 chars) substring match = +3 each
+      - approved anchor.name substring match = +2 each
+      - action-intent bonus: 用户消息含「报告/导出/下载/生成/跑/查」之一 + 该
+        persona 绑定了 fmea_export_excel 之类动作 → +1
+    Pipeline routing is **not** this router's job（pipelines are downstream of
+    personas；the persona is the one that decides whether to run a pipeline
+    or call an action）。
     """
     idents = [dict(r) for r in conn.execute(
-        "SELECT id, name FROM identities WHERE status='approved' ORDER BY id"
+        "SELECT id, name, mission, description FROM identities"
+        " WHERE status='approved' ORDER BY id"
     ).fetchall()]
     if not idents:
         return None
     msg = (message or "").strip().lower()
     if not msg:
         return None
+    ACTION_HINTS = ("报告", "导出", "下载", "生成", "做", "做一份",
+                    "跑", "运行", "查", "搜")
+    has_action_hint = any(h in msg for h in ACTION_HINTS)
+
+    def _name_tokens(n: str) -> list[str]:
+        out: list[str] = []
+        for sep in (" ", "\t", "/", "｜", "|", "·", "・"):
+            n = n.replace(sep, " ")
+        for t in n.lower().split():
+            t = t.strip(".,;()[]{}「」（）")
+            if len(t) >= 2:
+                out.append(t)
+        return out
+
     best: dict | None = None
     for i in idents:
         score = 0
         matched: list[str] = []
+
+        # 1) persona 名称 token
+        for tok in _name_tokens(i.get("name") or ""):
+            if tok and (tok in msg or (len(tok) >= 3 and msg in tok)):
+                score += 4
+                matched.append(f"名:{tok}")
+        # 2) mission / description
+        for fld, label in (("mission", "使命"), ("description", "定位")):
+            txt = (i.get(fld) or "").lower()
+            if txt and len(txt) >= 2 and (txt in msg or msg in txt):
+                score += 2
+                matched.append(label)
+        # 3) persona_ontology.name
         for o in _persona_ontology(conn, i["id"]):
             nm = (o.get("name") or "").strip().lower()
             if nm and (nm in msg or (len(nm) >= 3 and msg in nm)):
                 score += 3
                 matched.append(o["name"])
+        # 4) anchor.name
         for a in _approved_anchors(conn, i["id"]):
             nm = (a.get("name") or "").strip().lower()
             if nm and nm in msg:
                 score += 2
-                matched.append(a["name"])
+                matched.append(f"锚:{nm}")
+        # 5) 动作意图加权（绑定报告/导出动作的 persona 优先）
+        if has_action_hint and _has_export_action(conn, i["id"]):
+            score += 1
+
         if score > 0 and (best is None or score > best["score"]):
             best = {"identity_id": i["id"], "identity_name": i["name"],
                     "score": score, "matched": list(dict.fromkeys(matched))}
     return best
+
+
+def _has_export_action(conn, identity_id: int) -> bool:
+    """persona 是否绑定了「报告 / 导出」类动作（fmea_export_excel 等）。"""
+    r = conn.execute(
+        "SELECT 1 FROM persona_actions WHERE identity_id=? AND status='approved'"
+        " AND (builtin_name IN ('fmea_export_excel')"
+        "      OR name LIKE ? OR name LIKE ?) LIMIT 1",
+        (identity_id, '%报告%', '%导出%')).fetchone()
+    return r is not None
 
 
 def _fmt_anchor(a: dict) -> str:
