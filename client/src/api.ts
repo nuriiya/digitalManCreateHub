@@ -484,9 +484,9 @@ export interface ChatModels {
   ollama: { configured: boolean; models: string[]; base_url: string; error?: string }
 }
 export const getChatModels = () => api<ChatModels>('/api/chat/models')
-export const routeChat = (message: string) =>
+export const routeChat = (message: string, sessionId?: number | null) =>
   api<{ route: ChatRoute | null }>('/api/chat/route', {
-    method: 'POST', body: JSON.stringify({ message }),
+    method: 'POST', body: JSON.stringify({ message, session_id: sessionId ?? null }),
   })
 export const sendChat = (
   identityId: number, message: string,

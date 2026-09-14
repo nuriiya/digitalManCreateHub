@@ -204,8 +204,9 @@ export default function ConversationPage({ refreshKey }: Props) {
     // 工具执行进度（拼在 assistant 气泡文本后）
     const toolLines: string[] = []
     try {
-      // 阶段 A：路由（确定性 0 LLM）
-      const r = await routeChat(text)
+      // 阶段 A：路由（确定性 0 LLM）。同一 session 的后续消息（如「开始」）
+      // 沿用 session 绑定的数字人，不重新匹配（design §22.3）。
+      const r = await routeChat(text, sessionId)
       const route: ChatRoute | null = r.route
       if (!route) {
         updateAssistant({

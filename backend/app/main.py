@@ -1844,6 +1844,7 @@ class ChatBody(BaseModel):
 
 class RouteBody(BaseModel):
     message: str
+    session_id: int | None = None
 
 
 class CompareArm(BaseModel):
@@ -1885,8 +1886,28 @@ def chat_models():
 @app.post("/api/chat/route")
 def chat_route(body: RouteBody):
     """Auto-route a message to the best-matching approved digital persona
-    (deterministic score, 0 LLM). Returns None when nothing matched."""
-    r = chat.route_identity(db.get_conn(), body.message)
+    (deterministic score, 0 LLM). Returns None when nothing matched.
+
+    **会话继承（design §22.3 / 2026-09-14）**：同一 session 内的后续消息
+    （如用户回复「开始」「继续」这类**本身无路由信号**的词）不再重新
+    匹配 —— 直接沿用该 session 已绑定的数字人。否则用户点选选项或回答
+    「开始」时，短词匹配不到任何本体 → 路由失败、对话断链。
+    """
+    conn = db.get_conn()
+    if body.session_id is not None:
+        sess = conn.execute(
+            "SELECT identity_id FROM chat_sessions WHERE id=?",
+            (body.session_id,)).fetchone()
+        if sess and sess["identity_id"]:
+            i = conn.execute(
+                "SELECT id, name FROM identities WHERE id=?",
+                (sess["identity_id"],)).fetchone()
+            if i:
+                return {"route": {
+                    "identity_id": i["id"], "identity_name": i["name"],
+                    "score": -1, "matched": ["会话继承"],
+                }}
+    r = chat.route_identity(conn, body.message)
     return {"route": r}
 
 

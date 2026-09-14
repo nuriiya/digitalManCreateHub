@@ -505,6 +505,9 @@
 | N-84 询问纪律注入 | 绑 ask_user 的 persona 动作清单含纪律条款 | 含 | PASS ✅ |
 | N-85 ask_user 绑定 | 需求分析师 #1 + DFMEA 工程师 #9 幂等绑定 | 2/2 | bound ✅ |
 | N-86 模板无回归 | 蓝图新增 ask_user 后 verify_persona_templates | RESULT: OK | OK ✅ |
+| N-87 执行触发注入 | 有动作的 persona 动作清单含「执行触发」纪律 | 含 | PASS ✅ |
+| N-88 会话继承路由 | session 内后续消息沿用绑定数字人 | 继承（score=-1） | session→#9 ✅ |
+| N-89 短词不误路由 | 无 session 时"开始"应返回 None | None | PASS ✅ |
 
 ---
 

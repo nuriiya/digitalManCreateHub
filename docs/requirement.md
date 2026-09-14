@@ -371,6 +371,8 @@
 | R-24.4 | 前端选项气泡：点选即发下一条消息；「跳过」按钮 | **已实现**（design §22.1④） | .chat-ask-bubble + answerAsk |
 | R-24.5 | 询问纪律注入：绑 ask_user 的 persona 在动作清单里看到纪律条款 | **已实现**（design §22.1⑤） | _actions_block 条件追加 |
 | R-24.6 | 绑定到会提问的数字人（需求分析师 #1 / DFMEA 工程师 #9）并入模板蓝图 | **已实现**（design §22.2） | 幂等绑定 + verify_persona_templates OK |
+| R-24.7 | **自发执行**：命中执行意图后立即调用动作，不先描述计划再问"是否开始" | **已实现**（design §22.3） | `_actions_block` 注入「执行触发」纪律 |
+| R-24.8 | **会话继承路由**：同一 session 后续消息沿用已绑定数字人，短词"开始"不再路由失败 | **已实现**（design §22.3） | `/api/chat/route` 加 session_id；实测 session 继承→#9，无 session「开始」→None |
 
 ---
 
