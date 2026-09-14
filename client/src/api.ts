@@ -323,6 +323,62 @@ export const getPersonaOntology = (identityId?: number) =>
   api<PersonaOntItem[]>(
     `/api/ontology/persona-ontology${identityId != null ? `?identity_id=${identityId}` : ''}`)
 
+// ---------------- 数字人卡片：上传文档 → 录入 RAG → 导出本体 → 融入该数字人 ----------------
+// （design §13.7）一次请求串起三步，只提取**本次上传**产生的 chunk，因此不会
+// 重跑全库（实测全库 ≈90s/chunk）。产出**待确认**的装配清单，由用户在
+// 「知识与本体」卡片里一键终审 —— 用户仍是唯一终审点。
+
+export interface PersonaUploadResult {
+  job_id: number
+  identity_id: number
+  added: string[]
+  skipped: string[]
+  conflicts: UploadConflict[]
+  errors: { name: string; error: string }[]
+  /** 本次落库的 document id（用于范围化本体提取） */
+  doc_ids: number[]
+  chunks: number
+}
+
+/** ① 只做「上传 → 录入 RAG」，返回新增 doc_ids（供后续范围化提取）。 */
+export const uploadForPersona = (
+  identityId: number,
+  files: File[],
+  overwriteNames: string[] = [],
+): Promise<PersonaUploadResult> => {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f, f.name)
+  fd.append('overwrite_names', overwriteNames.join(','))
+  return api<PersonaUploadResult>(
+    `/api/ontology/identities/${identityId}/upload`,
+    { method: 'POST', body: fd })
+}
+
+/** ② 只提取这些 doc 的本体（范围化，不重跑全库）。 */
+export const extractForPersona = (identityId: number, docIds: number[]) =>
+  api<{ job_id: number; chunks: number; docs: number }>(
+    `/api/ontology/identities/${identityId}/extract`,
+    { method: 'POST', body: JSON.stringify({ doc_ids: docIds }) })
+
+/** ③ 装配（L0 锚点召回 + L1 规则排除 + L2 判别模型提名）→ 待确认清单。 */
+export const assembleForPersona = (identityId: number) =>
+  api<{ job_id: number }>(`/api/ontology/identities/${identityId}/assemble`,
+    { method: 'POST' })
+
+/** 一条命令跑完整条链（上传 → 录入 → 范围化提取 → 装配），返回父 job id。 */
+export const ingestIntoPersona = (
+  identityId: number,
+  files: File[],
+  overwriteNames: string[] = [],
+): Promise<PersonaUploadResult> => {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f, f.name)
+  fd.append('overwrite_names', overwriteNames.join(','))
+  return api<PersonaUploadResult>(
+    `/api/ontology/identities/${identityId}/ingest-and-assemble`,
+    { method: 'POST', body: fd })
+}
+
 export interface PersonaMcp {
   id: number; name: string; description: string; mcp_tool_name: string
   mcp_server_id?: number

@@ -312,6 +312,32 @@ button.btn.small.red { color: var(--red); background: var(--panel2); border: 1px
   margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 10px;
   display: flex; flex-direction: column; gap: 8px;
 }
+/* 上传知识（design §13.7）：卡片上的「上传文档并融入本体」按钮 + 进度/日志 */
+.ing-sub {
+  display: flex; flex-direction: column; gap: 7px; padding: 9px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2);
+}
+.ing-title { font-size: 13px; font-weight: 600; flex: 0 0 auto; }
+/* label 冒充 button：file input 必须能被 label 点开，所以按钮是 label 不是 button */
+button.btn.small.green.disabled, label.btn.small.green.disabled { cursor: not-allowed; }
+label.btn { display: inline-flex; align-items: center; justify-content: center; }
+.ing-status {
+  display: flex; align-items: center; gap: 7px; font-size: 12px;
+  padding: 5px 8px; border-radius: 6px; background: rgba(0, 0, 0, .18);
+}
+.ing-status .ing-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--muted);
+}
+.ing-status.running .ing-dot { background: var(--accent); animation: pulse 1.2s infinite; }
+.ing-status.done .ing-dot { background: var(--green); }
+.ing-status.failed .ing-dot, .ing-status.conflict .ing-dot { background: var(--red); }
+.ing-status.paused .ing-dot { background: var(--orange); }
+.ing-status .ing-label { font-weight: 600; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.ing-log { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.note.ok { color: var(--green); }
 .id-toggle {
   display: inline-flex; align-items: center; gap: 8px;
   background: transparent; color: var(--text); border: none; padding: 2px 0;

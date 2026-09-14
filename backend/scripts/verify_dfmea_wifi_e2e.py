@@ -33,12 +33,18 @@ STAGE = (os.environ.get("STAGE") or "all").strip().lower()
 PID_KEY = "verify_dfmea_wifi_pid"
 
 #: 模拟用户在**对话页**输入的一句话需求（考官题面；不含任何结构性提示）
+#:
+#: ⚠️ 题面**不得列举子系统名称**（2026-09-13 修正）。旧题面写了「天线、射频前端、
+#: 供电、时钟、固件、屏蔽、互连」7 个词，结果模型照抄这 7 个、只覆盖 7/13 个子
+#: 系统，A 类覆盖题白丢 25 分 —— 那是考官泄题，不是能力考核。考官只应说明
+#: **约束与要求**（WiFi 无直接历史记录、必须类比、AP 必须查表、逐格标来源），
+#: 至于「有哪些子系统、每个子系统去哪找证据」必须由模型自己搜出来。
 REQUEST = (
     "请为手机 WiFi 模块做一份 DFMEA。第一步先自主搜索 WiFi 模块的部件清单，"
     "再逐个部件分析可能的失效模式。注意 WiFi 模块在历史 FMEA 库里没有直接记录，"
-    "请参照历史库中同类射频部件（天线、射频前端、供电、时钟、固件、屏蔽、互连）"
-    "的现有案例做类比推导。每条失效模式要给出严重度 S、频度 O、探测度 D，"
-    "行动优先级 AP 必须查表得出，并逐格标注数据来源。"
+    "请参照历史库中同类射频部件的现有案例做类比推导。每条失效模式要给出"
+    "严重度 S、频度 O、探测度 D，行动优先级 AP 必须查表得出，并逐格标注数据来源。"
+    "覆盖范围内的部件都要给出分析，不要遗漏。"
 )
 
 fails: list[str] = []
@@ -124,8 +130,50 @@ def stage_gen(conn) -> int:
 
 # ---------------- 阶段 2：审批 + 运行 ----------------
 
+def preflight(conn) -> bool:
+    """考卷前置条件自检：**知识库必须先就位**，否则整场考试无效。
+
+    为什么需要它（2026-09-13 run#29 实测）：`fmea_parts`（部件知识库）当时为空，
+    DFMEA 工程师调「搜索部件清单」拿到 `parts: []`，误判为「产品名不对」并反复
+    重试同一个动作，直到 8 轮工具轮数耗尽 —— 最终交付物是一个 215 字的裸
+    `<tool_calls>` 块，没有表、没有数值，30 题只拿 30/150（20.0%）。
+    更糟的是**故障是静默的**：报告里只看到「复核门 FAIL / 行数=0」，读起来像
+    模型能力不足，真实原因（夹具没就位）被完全掩盖，白白浪费一整轮迭代。
+
+    所以：跑之前先把夹具点数验明，缺什么就直说，宁可不跑也不要出一个
+    「看起来像能力问题」的假低分。
+    """
+    print("[F] 前置条件自检（夹具）")
+    # ① 部件知识库：DFMEA 的分析起点
+    n_parts = conn.execute(
+        "SELECT COUNT(*) c FROM fmea_parts").fetchone()["c"]
+    check("F1 部件知识库已就位（fmea_parts 非空）", n_parts > 0,
+          f"fmea_parts={n_parts}" + ("" if n_parts else
+          "  ← 请先运行 `python scripts/seed_fmea_parts.py`"))
+    # ② 历史 FMEA 库：类比推导的取值来源
+    n_cases = conn.execute(
+        "SELECT COUNT(*) c FROM fmea_cases").fetchone()["c"]
+    check("F2 历史 FMEA 库已就位（fmea_cases 非空）", n_cases > 0,
+          f"fmea_cases={n_cases}" + ("" if n_cases else
+          "  ← 请先运行 `python seed_fmea_data.py`"))
+    # ③ AP 矩阵：AP 以表为准，缺表则 AP 题全废
+    n_ap = conn.execute(
+        "SELECT COUNT(*) c FROM fmea_ap_matrix").fetchone()["c"]
+    check("F3 AP 矩阵已就位（1000 格）", n_ap >= 1000,
+          f"fmea_ap_matrix={n_ap}")
+    # ④ S/O/D 准则表
+    n_crit = conn.execute(
+        "SELECT COUNT(*) c FROM fmea_sod_criteria").fetchone()["c"]
+    check("F4 S/O/D 准则表已就位", n_crit > 0, f"fmea_sod_criteria={n_crit}")
+    return not fails
+
+
 def stage_run(conn, pid) -> None:
     print("[R] 审批 + 运行 pipeline")
+    if not preflight(conn):
+        check("R1 运行成功", False,
+              "前置夹具缺失 —— 本场考试结果无效，不运行（避免产出误导性低分）")
+        return
     errs = pipeline.validate_pipeline(conn, pid)
     if errs:
         check("R1 运行成功", False, f"校验未过：{errs}")

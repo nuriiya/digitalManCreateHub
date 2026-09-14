@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   getIdentities, nominateIdentities, setIdentityStatus, deleteIdentity,
   updateIdentity, setAnchorStatus, updateAnchor, addAnchor, createIdentity,
@@ -56,6 +56,7 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     tplAdminMode, setTplAdminMode, tplEditId, setTplEditId,
     tplEditDraft, setTplEditDraft, tplNewOpen, setTplNewOpen,
     tplNewDraft, setTplNewDraft, reloadTemplates,
+    ingOpen, ingBusy, ingState, ingStep, doIngestForPersona, toggleIng,
     approved, alternates, approvedAnchors, reload, reloadAsm, reloadBench,
     setBusy, setEditing,
   } = useWorkbench(refreshKey)
@@ -477,6 +478,74 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     )
   }
 
+  // ---- 上传知识（design §13.7）----
+  //
+  // 卡片上一个「上传文档」按钮 = 一条链：上传 → 录入 RAG → **范围化**本体提取
+  // （只跑本次新 chunk）→ 装配 → 待确认清单。刻意**不**自动采纳进本体段：
+  // 用户是唯一终审点，卡片上不出现绕过终审的按钮。
+  const uploadBlock = (it: Identity) => {
+    const st = ingStep[it.id]
+    const last = ingState[it.id]
+    const busy = ingBusy === it.id
+    const inputId = `ing-file-${it.id}`
+    return (
+      <div className="ing-sub">
+        <div className="asm-sub-head">
+          <span className="ing-title">上传知识</span>
+          <label
+            htmlFor={inputId}
+            className={`btn small green ${busy ? 'disabled' : ''}`}
+            title="上传文档 → 自动录入 RAG → 仅提取本次新文档的本体 → 装配成「待确认」清单，由你一键终审"
+            style={busy ? { opacity: .5, pointerEvents: 'none' } : undefined}
+          >
+            {busy ? '处理中…' : '上传文档并融入本体'}
+          </label>
+          <input
+            id={inputId}
+            type="file"
+            multiple
+            accept=".txt,.md,.pdf,.docx,.html,.htm,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const fs = Array.from(e.target.files ?? [])
+              e.target.value = ''            // 允许同一文件再次选择
+              if (fs.length) doIngestForPersona(it.id, fs)
+            }}
+          />
+          <span className="note">
+            录入 RAG → 只提取新文档 → 装配为待确认（不自动改本体）
+          </span>
+        </div>
+        {st && (
+          <div className={`ing-status ${st.status}`}>
+            <span className="ing-dot" />
+            <span className="ing-label">{st.label}</span>
+            {st.status === 'running' && <span className="note">任务运行中，可离开本页</span>}
+          </div>
+        )}
+        {last && (
+          <div className="ing-log">
+            {last.added.length > 0 && (
+              <div className="note ok">新增 {last.added.length} 份 · {last.chunks} 段：{last.added.join('、')}</div>
+            )}
+            {last.skipped.length > 0 && <div className="note">内容一致跳过：{last.skipped.join('、')}</div>}
+            {last.conflicts.length > 0 && (
+              <div className="note err">
+                同名但内容不同（未录入，需覆盖确认）：{last.conflicts.map((c) => c.name).join('、')}
+              </div>
+            )}
+            {last.errors.length > 0 && (
+              <div className="note err">
+                失败：{last.errors.map((c) => `${c.name}（${c.error}）`).join('、')}
+              </div>
+            )}
+            {last.note && <div className="note">{last.note}</div>}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const assemblyBlock = (it: Identity) => {
     const s = asm[it.id]
     const open = asmOpen[it.id]
@@ -803,9 +872,10 @@ export default function IdentityWorkbench({ refreshKey, chunks, onOpenGraph }: P
     </div>
   )
 
-  // Tab ② 知识与本体：本体库（装配产出）+ 装配时间线
+  // Tab ② 知识与本体：上传知识（链式融入）+ 本体库（装配产出）+ 装配时间线
   const tabKnowledge = (it: Identity) => (
     <div className="wb-pane">
+      {uploadBlock(it)}
       {ontologyBlock(it)}
       {assemblyBlock(it)}
     </div>

@@ -91,7 +91,18 @@ check("重复实例化不重复本体", n_ont_1 == n_ont_2, f"{n_ont_1} -> {n_on
 n_act = conn.execute(
     "SELECT COUNT(*) c FROM persona_actions WHERE identity_id=? AND status='approved'",
     (iid,)).fetchone()["c"]
-check("动作已绑定且 approved", n_act == 2, f"n={n_act}")
+# 断言**语义**（模板声明的动作一个不少地绑上、且全部 approved），不锁死数量 ——
+# 数量随蓝图演进（2026-09-14 给 part_expert 补了 `fmea_history_query`，2 → 3），
+# 写死数字会让每次"补零件"都误报成回归。
+_want_names = {a["builtin_name"] for a in (pe.get("blueprint") or {}).get("actions", [])}
+_got_names = {r["builtin_name"] for r in conn.execute(
+    "SELECT builtin_name FROM persona_actions WHERE identity_id=? AND status='approved'",
+    (iid,)).fetchall()}
+check("模板声明的动作全部绑定且 approved",
+      bool(_want_names) and _want_names <= _got_names and n_act == len(_got_names),
+      f"want={sorted(_want_names)} got={sorted(_got_names)} n={n_act}")
+check("动作数量与蓝图一致（不锁死具体数字）",
+      n_act == len(_want_names), f"n={n_act} blueprint={len(_want_names)}")
 
 print("[6] 自定义模板 CRUD")
 try:

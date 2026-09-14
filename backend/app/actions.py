@@ -97,17 +97,50 @@ BUILTIN_ACTIONS: dict[str, dict] = {
     "fmea_ap_table": {
         "name": "查 AP / S-O-D 准则表",
         "description": ("查 AP 行动优先级或 S/O/D 评分准则（取值优先级第 2 级证据）。"
-                        "支持三种用法：① 不传参数 → 一次返回 S/O/D **全部准则**（拿打分口径）；"
+                        "支持四种用法：① 不传参数 → 一次返回 S/O/D **全部准则**（拿打分口径）；"
                         "② 传 severity+occurrence+detection → 查该组合的 AP；"
-                        "③ 传 items 数组 → **批量**查多条 AP"),
+                        "③ 传 items 数组 → **批量**查多条 AP；"
+                        "④ 传 matrix_severity → 取回 AP 矩阵**原文切片**（复核门用它独立"
+                        "复现查表；只传值不给原文时复核员无法核验 AP）"),
         "input_schema": {"type": "object",
                          "properties": {"severity": {"type": "integer"},
                                         "occurrence": {"type": "integer"},
                                         "detection": {"type": "integer"},
                                         "dimension": {"type": "string"},
                                         "score": {"type": "integer"},
-                                        "items": {"type": "array"}},
+                                        "items": {"type": "array"},
+                                        "matrix_severity": {"type": "integer"},
+                                        "matrix_occurrence": {"type": "integer"},
+                                        "matrix_limit": {"type": "integer"}},
                          "required": []},
+    },
+    "fmea_ap_verify": {
+        "name": "核验整表 AP 一致性",
+        "description": ("**复核门专用**：一次核验多行的 AP 是否与 AP 矩阵一致。"
+                        "传 rows=[{failure_mode?, severity, occurrence, detection, ap}, …]，"
+                        "逐行返回 claimed（被核值）/ table（表值）/ match（true|false|null）。"
+                        "一张表十几行时**必须用本动作一次核完** —— 逐行调「查 AP」"
+                        "会超出工具轮数上限，导致核验做不完只能判 FAIL"),
+        "input_schema": {"type": "object",
+                         "properties": {"rows": {"type": "array"}},
+                         "required": ["rows"]},
+    },
+    "fmea_pending_confirm": {
+        "name": "取待人工确认清单",
+        "description": ("**确定性**抽取本 run 中所有标了 ai_inferred / ai_new 的格，"
+                        "返回 {count, items:[{row_id, part, failure_mode, field, source}]}。"
+                        "DFMEA 工程师交付前必须调它并把清单附在交接物里；"
+                        "复核门核「ai_new 是否已列清单」也调它（不要凭记忆判断）"),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    "fmea_expert_citations": {
+        "name": "核验专家引用可追溯",
+        "description": ("**确定性**核验「问过的专家是否在表里被引用」。返回 "
+                        "{consulted:[本次问过的专家名], cited:[表里出现的 expert:<名>], "
+                        "missing:[问过但表里没引用的专家], ok:bool}。"
+                        "DFMEA 工程师交付前必调（missing 非空说明专家结论没被追溯）；"
+                        "复核门也调它来核「专家引用可追溯」，不要凭记忆判断"),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     "ask_expert": {
         "name": "询问专家数字人",
@@ -188,6 +221,17 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_fmea_history_query(conn, args)
     if builtin_name == "fmea_ap_table":
         return _exec_fmea_ap_table(conn, args)
+    if builtin_name == "fmea_ap_verify":
+        from . import fmea
+        return fmea.ap_verify_rows(conn, (args or {}).get("rows") or [])
+    if builtin_name == "fmea_pending_confirm":
+        from . import fmea
+        a = args or {}
+        return fmea.pending_confirmation(conn, a.get("run_id"))
+    if builtin_name == "fmea_expert_citations":
+        from . import fmea
+        a = args or {}
+        return fmea.expert_citations(conn, a.get("run_id"))
     if builtin_name == "ask_expert":
         return _exec_ask_expert(conn, identity_id, args)
     if builtin_name == "fmea_write_row":
@@ -369,6 +413,12 @@ def _exec_fmea_history_query(conn, args: dict) -> dict:
 def _exec_fmea_ap_table(conn, args: dict) -> dict:
     from . import fmea
     a = args or {}
+    # ④ AP 矩阵原文切片（复核门用它独立复现查表）—— 优先级最高：
+    #    只给「查一个值」的能力时，判别者无法核验，只能报「表取回失败」。
+    if a.get("matrix_severity") not in (None, ""):
+        return fmea.ap_matrix_slice(conn, a.get("matrix_severity"),
+                                    a.get("matrix_occurrence"),
+                                    a.get("matrix_limit") or 400)
     # 批量查 AP（items=[{severity,occurrence,detection}, …]）—— 一次查多条
     items = a.get("items")
     if isinstance(items, list) and items:
@@ -441,9 +491,13 @@ def _exec_ask_expert(conn, identity_id: int, args: dict) -> dict:
         fmea.pop_ask()
     if not r.get("ok"):
         return {"ok": False, "error": r.get("error")}
+    # 登记「问过谁」——交付前必须把 expert:<名> 写进对应格的 sources，
+    # 否则专家的把关在交付物里不可追溯（2026-09-13 考官卷题 17 实测）。
+    fmea.register_consulted_expert(nm)
     return {"ok": True, "result": {
         "expert": nm, "expert_id": eid, "answer": r.get("reply") or "",
-        "source": f"expert:{nm}"}}
+        "source": f"expert:{nm}",
+        "citation_hint": f"该格来源请标注为 expert:{nm}（可带引用号）"}}
 
 
 def _exec_fmea_write_row(conn, args: dict) -> dict:

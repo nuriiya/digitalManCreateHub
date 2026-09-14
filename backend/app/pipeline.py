@@ -12,6 +12,7 @@
   - 批准 pipeline 时 tags 生效为通路库检索标签（标签优先 0 LLM）
 """
 import json
+import re
 
 from . import context_mgr as cm, db, jobs
 
@@ -515,21 +516,76 @@ def _node_out_kind(node, relations) -> str:
     return cm.kind_for_step(node.get("step_name") or node.get("node_key") or "")
 
 
+#: 工具调用草稿被当成最终答复交出去时的特征标记。
+#: 实测 2026-09-13：汇总节点输出**整段只有**一段 `<tool_calls>` 草稿，
+#: 下游复核门拿到「无 DFMEA 表主体行」直接判 FAIL。
+_TOOLCALL_LEAK_MARKS = ("<tool_calls>", "<tool_call>", "</tool_call>",
+                        "<arg_value>", "</arg_value>")
+
+
+def _deliverable_problem(output: str) -> str:
+    """检查节点产出是否为**可交付物**；非交付物返回原因，正常返回 ""。
+
+    为什么要有这一关（2026-09-13 实测的真实缺陷）：模型在工具调用轮数耗尽、
+    或上下文压力大时，会**把「我正准备调用工具」的草稿文本当成最终答复**返回。
+    汇总节点是全链上下文压力最大的一环（要吃下 4 份专家清单 ~5900 字符），
+    实测交出的整段产出就是：
+
+        <tool_calls>
+        <tool_call>{"name": "查询历史 FMEA", "args": {...}}</tool_call>
+        </tool_calls>
+
+    而 pipeline 层**只要节点返回了文本就往下游传** —— 于是复核门收到一段
+    「没有表、没有数值」的垃圾，只能判 FAIL，白白中止整条链路。
+
+    这一关**不改写产出、不代替模型干活**（那会违反「不能介入生成」的铁律），
+    只是**如实判定「这不算交付物」**并回灌给该节点重试一次；仍失败则明确
+    标记该节点失败，让复核门/用户看到真实原因，而不是把垃圾当交付物流转。
+    """
+    txt = (output or "").strip()
+    if not txt:
+        return "空产出"
+    # 泄漏特征：整段被工具调用草稿占满。判定用**占比**而不是绝对残留字数 ——
+    # 草稿里的 JSON 参数本身就有几十字（实测自测抓到：残留 ~50 字，用「<40 字」
+    # 阈值会漏判）。改判：含标记 **且** 去掉标记+去掉花括号内参数后，
+    # 剩下的**自然语言**几乎为空 → 几乎全是机器草稿。
+    if any(m in txt for m in _TOOLCALL_LEAK_MARKS):
+        residue = txt
+        for m in _TOOLCALL_LEAK_MARKS:
+            residue = residue.replace(m, "")
+        # 剥掉 {...} 内的参数体（草稿的 JSON）
+        no_json = re.sub(r"\{[^{}]*\}", "", residue)
+        # 自然语言残留：去空白后剩下的非结构字符
+        prose = re.sub(r"[\s\"'`{}\[\]():,;<>/|=]", "", no_json)
+        # 标记个数远多于自然语言字数 → 整段就是草稿
+        if len(prose) < 30:
+            return f"产出是工具调用草稿而非交付物（自然语言残留 {len(prose)} 字）"
+    return ""
+
+
 def refine_node_output(conn, node, output: str, relations,
                        provider: str = "llm2") -> dict:
     """节点产出的交接物治理：标 kind + 超预算由该数字人自缩减。
 
-    返回 {"kind","content","refined","raw_chars"}；LLM 精炼失败有确定性截断兜底。
+    返回 {"kind","content","refined","raw_chars","problem"}；LLM 精炼失败有
+    确定性截断兜底。`problem` 非空表示产出**不是可交付物**（见
+    `_deliverable_problem`），由调用方决定重试或标记失败。
     """
     kind = _node_out_kind(node, relations)
+    problem = _deliverable_problem(output)
+    if problem:
+        return {"kind": kind, "content": output or "", "refined": False,
+                "raw_chars": len(output or ""), "chars": len(output or ""),
+                "error": None, "problem": problem}
     persona_id = node.get("persona_id")
     if persona_id:
         res = cm.refine_handoff(conn, persona_id, _persona_name(conn, persona_id),
                                 kind, output, provider=provider)
+        res["problem"] = ""
         return res
     return {"kind": kind, "content": output, "refined": False,
             "raw_chars": len(output or ""), "chars": len(output or ""),
-            "error": None}
+            "error": None, "problem": ""}
 
 
 def _forward_relations(relations) -> list[dict]:
@@ -646,6 +702,49 @@ def _ask_sources(conn, node, relations, nodes) -> list[dict]:
     return out
 
 
+def _materialize_ask_edges(nodes, relations) -> list[dict]:
+    """**确定性补齐 ask 权限边**（design §15.7 迭代续 4 ⑰ / R-19.41）。
+
+    问题（2026-09-14 run#33 实测）：生成的拓扑里 4 位专家都挂在 `supply` 出边上
+    （专家 → 汇总，数据顺势流动），**一条 `ask` 边都没有**。执行期
+    `_ask_sources` 读的就是 `relation_type == 'ask'` 的边，于是汇总节点
+    `set_allowed_experts(None)` → 提示词里没有【可询问的专家】段落 →
+    `ask_expert` 动作无对象可问 → `sources` 里 `expert:` 引用 **0 处**（题17 FAIL）。
+    更糟的是 4 个专家节点**上游交接物为空**（step3/4/5 全部回「上游交接物为空」），
+    即 `supply` 边只挂了专家→汇总的方向，专家自己拿不到部件清单。
+
+    **这是拓扑元素缺失，不是内容裁决** —— 与「LLM 只提名、确定性代码裁决」不冲突：
+    引擎只保证「有专家参与 ⇒ 专家可被询问」这条**结构不变量**成立，
+    至于**问什么、问几个、得到什么结论**仍全部由 LLM 在执行期决定。
+
+    实现：对每个「非专家节点」，凡存在**专家节点**参与，就补一条 `ask` 边指向它。
+    专家判定 = 该节点 persona 绑定的身份名出现在同 pipeline 内其它节点上且
+    `step_name` 含「专家」。为免依赖 persona 名单，这里用**结构判据**：
+    节点 kind == 'nominate' 且 step_name 以「专家分析」/含「专家」结尾者视为专家。
+    已存在的 ask 边不重复补。
+    """
+    by_id = {n["id"]: n for n in nodes}
+    have_ask = set()
+    for r in relations:
+        if r.get("relation_type") == RELATION_ASK:
+            have_ask.add((r.get("from_node_id"), r.get("to_node_id")))
+            have_ask.add((r.get("to_node_id"), r.get("from_node_id")))
+    experts = [n for n in nodes
+               if "专家" in (n.get("step_name") or "")]
+    if not experts:
+        return []
+    out = []
+    for n in nodes:
+        if n in experts:
+            continue
+        for e in experts:
+            if (n["id"], e["id"]) in have_ask:
+                continue
+            out.append({"from_node_id": n["id"], "to_node_id": e["id"],
+                        "relation_type": RELATION_ASK})
+    return out
+
+
 def _is_review_gate(node, relations) -> bool:
     """该节点是否为复核门（有 review 入边）。"""
     return any(r.get("relation_type") == RELATION_REVIEW
@@ -732,17 +831,87 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
     from . import fmea
     fmea.set_run_id(run_id)
     jobs.update_progress(conn, job_id, 0, len(order))
-    for i, node in enumerate(order):
+
+    # ---- 确定性补齐 ask 权限边（design §15.7 迭代续 4 ⑰ / R-19.41）----
+    # 生成的拓扑经常只有 supply 边（专家 → 汇总），一条 ask 都没有 →
+    # 汇总节点 set_allowed_experts(None) → 提示词里没有【可询问的专家】→
+    # ask_expert 无对象可问 → sources 里 expert: 引用为 0（题17 FAIL）。
+    # 引擎在此保证结构不变量「有专家参与 ⇒ 专家可被询问」；
+    # 问什么/问几个/结论为何仍全由 LLM 在执行期决定。
+    _extra_asks = _materialize_ask_edges(p["nodes"], p["relations"])
+    if _extra_asks:
+        _known = {(r.get("from_node_id"), r.get("to_node_id"),
+                   r.get("relation_type")) for r in p["relations"]}
+        for a in _extra_asks:
+            if (a["from_node_id"], a["to_node_id"], a["relation_type"]) not in _known:
+                p["relations"].append(a)
+                _known.add((a["from_node_id"], a["to_node_id"],
+                            a["relation_type"]))
+        jobs.emit(conn, job_id, "pipeline.ask_materialized",
+                  {"added": len(_extra_asks),
+                   "edges": [[a["from_node_id"], a["to_node_id"]]
+                             for a in _extra_asks]})
+
+    # ---- 复核门「驳回 → 修复 → 重审」有界循环（design §15.3 E2）----
+    #
+    # 为什么必须有（2026-09-14 job#31 实测）：生成的 pipeline 把写入器排在
+    # 复核门**之后**（…→ aggregate-sod-ap → pending-manual-confirmation
+    # → dfmea-review → finalize-submit）。复核门一旦 FAIL，引擎直接中止下游，
+    # 于是**写入器根本没机会执行修复** —— 复核员明确要求「把 R7/R8/R13/R14
+    # 采信专家结论的格改标 expert:电源与时钟专家」，而能改表的那一步被门挡在
+    # 后面，永远到不了。平台自己的门控约定写的就是「驳回则修改后重新提交」，
+    # 缺的是引擎侧的这条回边。
+    #
+    # 语义边界（**不介入生成**）：引擎只做两件确定性的事 ——
+    #   ① 把复核员的 FAIL 原文**原样回灌**给产出表的上游 nominate 节点；
+    #   ② 让该节点重跑，然后**重新过门**。
+    # 复核员的判定权、工程师的改数权都不变；引擎不替任何一方做判断。
+    # 上限 2 轮（与 G-07 循环 ≤2 轮同口径）：修不动就如实 FAIL，
+    # 不无限重试把算力烧光。
+    MAX_REPAIR_ROUNDS = 2
+
+    def _run_node(node, i, extra_inputs=None):
+        """执行单个节点并落库，返回 (rr, 中止原因 or None)。"""
         jobs.emit(conn, job_id, "pipeline.node",
                   {"node_key": node["node_key"], "step": node.get("step_name"),
                    "kind": node["kind"], "status": "running", "index": i})
         inputs = collect_inputs(conn, run_id, node, p["nodes"], p["relations"])
+        if extra_inputs:
+            inputs = list(inputs) + list(extra_inputs)
         if node["kind"] == KIND_DETERMINISTIC:
             output = _run_deterministic(conn, node, inputs, job_id)
         else:
             output = _run_nominate(conn, node, inputs, p["relations"], p["nodes"])
-        # 上下文管理：标 kind + 超预算由该数字人自缩减后落库（含精炼元数据）
         rr = refine_node_output(conn, node, output, p["relations"])
+        if rr.get("problem") and node["kind"] != KIND_DETERMINISTIC:
+            jobs.emit(conn, job_id, "pipeline.node",
+                      {"node_key": node["node_key"], "status": "retry",
+                       "index": i, "reason": rr["problem"]})
+            hint = cm.pack_handoff(
+                cm.KIND_GENERIC,
+                "上一轮产出不是可交付物（" + rr["problem"] + "）。"
+                "请**直接给出最终交付物正文** —— 不要再输出工具调用的草稿、"
+                "不要再写 <tool_call> 标记；需要查资料就先查完，"
+                "然后把结论整理成完整正文一次性输出。")
+            output = _run_nominate(conn, node, list(inputs) + [hint],
+                                   p["relations"], p["nodes"])
+            rr = refine_node_output(conn, node, output, p["relations"])
+        if rr.get("problem") and node["kind"] != KIND_DETERMINISTIC:
+            store_handoff(conn, run_id, node["id"], rr["kind"], rr["content"],
+                          refined=False,
+                          raw_chars=rr.get("raw_chars", len(output or "")))
+            jobs.emit(conn, job_id, "pipeline.node",
+                      {"node_key": node["node_key"], "status": "failed",
+                       "index": i, "kind": rr["kind"],
+                       "chars": len(rr["content"] or ""),
+                       "problem": rr["problem"]})
+            conn.execute("UPDATE pipeline_runs SET status='failed' WHERE id=?",
+                         (run_id,))
+            conn.commit()
+            return rr, (f"节点「{node['node_key']}」重试后仍无有效交付物"
+                        f"（{rr['problem']}），已中止下游。"
+                        f"该节点需重新执行 —— 上游证据已备齐时，"
+                        f"问题通常是**单轮上下文过长导致模型只输出工具草稿**")
         store_handoff(conn, run_id, node["id"], rr["kind"], rr["content"],
                       refined=rr.get("refined", False),
                       raw_chars=rr.get("raw_chars", len(output or "")))
@@ -750,24 +919,91 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
                   {"node_key": node["node_key"], "status": "done", "index": i,
                    "kind": rr["kind"], "chars": len(rr["content"] or ""),
                    "refined": rr.get("refined", False),
-                   "raw_chars": rr.get("raw_chars", 0)})
+                   "raw_chars": rr.get("raw_chars", 0),
+                   "problem": rr.get("problem") or ""})
+        # ---- 交付物 → 落库（**必须在复核门之前**）----
+        if node["kind"] != KIND_DETERMINISTIC and rr.get("content"):
+            src_text = output if rr.get("refined") else rr.get("content")
+            ing = fmea.ingest_table_rows(conn, src_text, run_id)
+            if ing["result"]["parsed"]:
+                jobs.emit(conn, job_id, "pipeline.persist",
+                          {"node_key": node["node_key"], "index": i,
+                           **{k: ing["result"][k] for k in
+                              ("parsed", "written", "updated", "skipped")}})
+        return rr, None
+
+    def _last_writer_before(idx):
+        """复核门之前的**最近一个 nominate 节点** —— 即「产出表的那个人」。
+
+        回灌修复意见必须给它，而不是给整条链：只有它手里有写行的能力
+        （fmea_write_row），下游的交接汇总节点没有。
+        """
+        for j in range(idx - 1, -1, -1):
+            n = order[j]
+            if n["kind"] != KIND_DETERMINISTIC:
+                return n, j
+        return None, None
+
+    for i, node in enumerate(order):
+        rr, abort = _run_node(node, i)
+        if abort:
+            jobs.finish_job(conn, job_id, ok=False, error=abort)
+            return
 
         # ---- review 门控（design §15.3 E2）----
-        # 复核门未通过 -> 中止下游并标记 blocked；UNKNOWN 放行但记事件（不静默）。
         if _is_review_gate(node, p["relations"]):
             verdict = _review_verdict(rr["content"])
+            draft = bool(rr.get("problem")) and _deliverable_problem(rr["content"])
             jobs.emit(conn, job_id, "pipeline.review",
                       {"node_key": node["node_key"], "verdict": verdict,
-                       "index": i})
-            if verdict == "FAIL":
+                       "index": i, "draft": bool(draft)})
+            # 修复循环：FAIL 且是「有实据的驳回」（非草稿）时，把复核意见
+            # 回灌给产出表的上游节点，重跑 + 重审，最多 MAX_REPAIR_ROUNDS 轮。
+            rounds = 0
+            while verdict == "FAIL" and not draft and rounds < MAX_REPAIR_ROUNDS:
+                writer, widx = _last_writer_before(i)
+                if writer is None:
+                    break
+                rounds += 1
+                jobs.emit(conn, job_id, "pipeline.review",
+                          {"node_key": node["node_key"], "verdict": "REPAIR",
+                           "index": i, "round": rounds,
+                           "target": writer["node_key"]})
+                fix_hint = cm.pack_handoff(
+                    cm.KIND_GENERIC,
+                    "复核门「" + node["node_key"] + "」给出 [REVIEW:FAIL]，"
+                    "驳回意见原文如下 —— 请**据其逐条修改**你的表并重新交付：\n\n"
+                    + (rr["content"] or "")[:4000]
+                    + "\n\n修改后仍需逐格标注来源、AP 以表为准；"
+                    "若某条意见确实无法满足，请在正文里写明原因。")
+                wrr, wabort = _run_node(writer, widx, extra_inputs=[fix_hint])
+                if wabort:
+                    jobs.finish_job(conn, job_id, ok=False, error=wabort)
+                    return
+                # 重审：复核节点重跑
+                rr, abort = _run_node(node, i)
+                if abort:
+                    jobs.finish_job(conn, job_id, ok=False, error=abort)
+                    return
+                verdict = _review_verdict(rr["content"])
+                draft = (bool(rr.get("problem"))
+                         and _deliverable_problem(rr["content"]))
+                jobs.emit(conn, job_id, "pipeline.review",
+                          {"node_key": node["node_key"], "verdict": verdict,
+                           "index": i, "round": rounds,
+                           "draft": bool(draft)})
+            if verdict == "FAIL" or draft:
                 conn.execute("UPDATE pipeline_runs SET status='blocked' WHERE id=?",
                              (run_id,))
                 conn.commit()
                 fresh = fmea.pending_ai_new(conn, run_id)
+                why = ("复核门未给出结论（产出仍是工具调用草稿，复核实际未执行）"
+                       if draft else
+                       f"复核门「{node['node_key']}」未通过（[REVIEW:FAIL]，"
+                       f"已修复 {rounds} 轮仍未通过）")
                 jobs.finish_job(
                     conn, job_id, ok=False,
-                    error=(f"复核门「{node['node_key']}」未通过（[REVIEW:FAIL]），"
-                           f"已中止下游；待人工确认 {len(fresh)} 项"))
+                    error=(f"{why}，已中止下游；待人工确认 {len(fresh)} 项"))
                 return
 
         jobs.update_progress(conn, job_id, i + 1, len(order))

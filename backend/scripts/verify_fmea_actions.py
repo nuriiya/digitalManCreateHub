@@ -219,6 +219,26 @@ check("family 可与 keyword 组合",
 check("三参数全空时给出可读错误",
       fmea.history_query(conn).get("ok") is False)
 
+print("[18] AP 矩阵原文可取回（复核门独立复现查表的前提）")
+# 为什么必须测：2026-09-13 实测 —— 复核门要核 "AP 是否与表一致"，但接口只有
+# 「按 (S,O,D) 查一个值」的形态，**没有取回表原文的能力**，复核员在物理上无法
+# 自行复现查表，只能报「AP 表取回失败→无法核验」并给 FAIL，而实际值全对。
+# 这是「接口没给够」，不是判别能力问题 —— 判别者要的是**证据本身**。
+slice_r = actions.execute_builtin(conn, 0, "fmea_ap_table",
+                                  {"matrix_severity": 7})
+check("matrix_severity=7 取回切片 ok", slice_r.get("ok"), str(slice_r)[:80])
+srows = (slice_r.get("result") or {}).get("rows") or []
+check("切片含该 S 档全部 O×D = 100 格", len(srows) == 100, f"{len(srows)}")
+bykey = {(r["severity"], r["occurrence"], r["detection"]): r["ap"] for r in srows}
+# 用切片独立复现 ap_lookup 的结果（这就是复核门的动作）
+for (s, o, d, want) in ((7, 5, 5, "H"), (7, 5, 4, "M")):
+    direct = fmea.ap_lookup(conn, s, o, d)["result"]["ap"]
+    check(f"切片与 ap_lookup 一致 ({s},{o},{d})", bykey.get((s, o, d)) == direct,
+          f"切片={bykey.get((s,o,d))} 直查={direct}")
+check("切片行都带准确的 S/O/D 三元组（可按三元组比对）",
+      all(isinstance(r.get("severity"), int) and isinstance(r.get("ap"), str)
+          for r in srows[:5]))
+
 # ---- 清理 ----
 n = conn.execute("DELETE FROM dfmea_rows WHERE run_id=?", (SENTINEL_RUN,))
 conn.commit()

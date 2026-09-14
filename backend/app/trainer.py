@@ -80,12 +80,33 @@ def baseline(conn, identity_id, task_ids, provider="llm", samples=1) -> dict:
             "results": results, "samples": samples}
 
 
-def add_ontology(conn, identity_id, kind, name, definition, note="") -> int:
-    """给数字人装配本体段（幂等：同 kind+name 已存在则复用）。"""
+def add_ontology(conn, identity_id, kind, name, definition, note="",
+                 update=False) -> int:
+    """给数字人装配本体段（幂等：同 kind+name 已存在则复用）。
+
+    `update=True` 时，已存在且**定义有变化**的条目会被就地改写（并把 note 追加
+    `|updated` 作为修订痕迹）。默认 False 保持「只补不改」的保守语义 —— 数字人
+    自己的本体是用户资产，日常装配不应被静默覆盖。
+
+    为什么需要这个开关（2026-09-13 实测的真实缺陷）：模板实例化（
+    `persona_templates.instantiate`）走的就是本函数，而模板**内置蓝图会被平台
+    升级**（例如给 DFMEA 工程师补规则）。但 `add_ontology` 对已存在的 name
+    直接 return，导致「代码里的蓝图改了 → 重新 seed → 库里还是旧定义」——
+    实测表现为：新增的两条规则进了库，但**被编辑过的那条规则定义纹丝不动**，
+    规则修订静默丢失。故 seed/恢复出厂路径必须显式传 update=True。
+    """
     exists = conn.execute(
-        "SELECT id FROM persona_ontology WHERE identity_id=? AND kind=? AND name=?",
+        "SELECT id, definition FROM persona_ontology"
+        " WHERE identity_id=? AND kind=? AND name=?",
         (identity_id, kind, name)).fetchone()
     if exists:
+        if update and (exists["definition"] or "") != (definition or ""):
+            conn.execute(
+                "UPDATE persona_ontology SET definition=?,"
+                " note = CASE WHEN note IS NULL OR note='' THEN ?"
+                "             ELSE note || '|updated' END"
+                " WHERE id=?", (definition, note or "", exists["id"]))
+            conn.commit()
         return exists["id"]
     cur = conn.execute(
         "INSERT INTO persona_ontology(identity_id, kind, name, definition, status,"

@@ -19,25 +19,76 @@ import time
 from . import netutil, settings_store
 
 
-def _http_client_kwargs(base_url: str) -> dict:
+def _llm_proxy() -> str:
+    """出网代理地址（空 = 直连）。`LLM_PROXY=off/none/-` 可显式关闭。"""
+    v = os.environ.get("LLM_PROXY", "").strip()
+    if v.lower() in ("off", "none", "direct", "-"):
+        return ""
+    return v
+
+
+def _http_client_kwargs(base_url: str, read_timeout: float | None = None) -> dict:
     """Build the httpx client kwargs for the OpenAI SDK.
 
     - Loopback (Ollama) -> trust_env=False (bypass the Windows system proxy,
       which would 502 loopback requests — killed benchmark job #30).
-    - Remote + LLM_PROXY set -> route through LLM_PROXY explicitly (CN network
-      blocks direct access to api.deepseek.com / open.bigmodel.cn; inside the
-      docker container the host's mihomo proxy is reachable at
-      host.docker.internal:6789 and passed via the LLM_PROXY env var).
-    - Remote + no LLM_PROXY -> trust_env=True (honour the host's env proxy).
+    - Remote -> **优先让 SDK 自建 client**，只在配置了 `LLM_PROXY` 时才显式指定。
+
+    ⚠️ **不要动不动自己造 httpx.Client**（2026-09-13 三组对照实测，全部
+    「每档 4~10 次连续流式调用」）：
+
+        no-client (SDK 自建, 直连)         6/6  OK   6.5s   ✓ 最优
+        env-proxy, SDK 自建               5/6  OK  34.9s   （慢 5 倍）
+        自定义 client: default(5s)        1/4  ✗
+        自定义 client: read=None          3/4
+        自定义 client: read=90s           3/4
+        自定义 client: read=1800s         1/4  ✗
+        shared client（复用连接池）        4/8  ✗
+
+    结论（与直觉相反，务必别「优化」回去）：
+      1. **传 http_client 本身就是风险源** —— 只要外部塞了 client，SDK 就改用
+         client 自己的超时（httpx 默认 read=5s → 流式首 token 稍慢就整条死在
+         「空闲超时」之前），而且手搭的 client 在宿主 mihomo 代理上极易撞
+         `SSL: UNEXPECTED_EOF_WHILE_READING`。
+      2. **直连（不给 client、不设代理）是这里最快最稳的路径**：6/6 OK 且
+         比走代理快 5 倍。`.env` 里「deepseek 必须走代理」是**旧网络环境**的
+         结论，2026-09-13 实测已不成立。
+      3. 代理改用**环境变量**（HTTPS_PROXY/HTTP_PROXY）表达，让 SDK 自建
+         client 时自行读取 —— 比我们手搭 client 稳，且不牺牲 SDK 的超时语义。
+
+    因此本函数的语义收敛为：**只在确实需要绕开系统代理/走指定代理时才产出
+    client；其余情况返回空 dict，交给 SDK 默认行为。**
     """
+    import httpx
     if netutil.is_local_url(base_url):
-        import httpx
-        return {"http_client": httpx.Client(trust_env=False)}
-    proxy = os.environ.get("LLM_PROXY", "").strip()
-    if proxy:
-        import httpx
-        return {"http_client": httpx.Client(proxy=proxy, trust_env=False)}
-    return {}
+        # loopback 必须绕开系统代理（否则 502）
+        return {"http_client": httpx.Client(trust_env=False, timeout=
+                httpx.Timeout(read=read_timeout, connect=15.0, write=60.0,
+                              pool=15.0))}
+    proxy = _llm_proxy()
+    if not proxy:
+        return {}  # ← 推荐路径：SDK 自建 client（直连或读 env 代理）
+    return {"http_client": httpx.Client(
+        proxy=proxy, trust_env=False,
+        timeout=httpx.Timeout(read=read_timeout, connect=15.0, write=60.0,
+                              pool=15.0))}
+
+
+def _close_client_kwargs(kwargs_client: dict) -> None:
+    """关闭 `_http_client_kwargs` 造出来的 client（幂等、吞异常）。
+
+    为什么必须显式 close：OpenAI SDK **不会**关闭外部传入的 http_client，
+    且我们的调用被包在 daemon 线程里（`_call_llm_with_usage` 的 hard_timeout
+    会遗弃超时线程），靠 GC 回收 socket 不可靠 —— 长链路 job 累积下来会耗尽
+    代理侧连接容量。放在 finally 里关，时序确定。
+    """
+    cli = (kwargs_client or {}).get("http_client")
+    if cli is None:
+        return
+    try:
+        cli.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # hook for UT: tests inject a fake callable (messages -> str)
@@ -348,12 +399,6 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
     def run() -> None:
         try:
             from openai import OpenAI
-            # loopback (Ollama) must NOT go through any proxy; remote LLM
-            # endpoints route through LLM_PROXY when set (see helper docstring).
-            kwargs_client = _http_client_kwargs(s["base_url"])
-            client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
-                            timeout=idle_seconds, max_retries=0,
-                            **kwargs_client)
             kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
                           stream=True, stream_options={"include_usage": True})
             # Ollama-specific knobs. NOTE: Ollama's OpenAI-compat endpoint
@@ -374,10 +419,25 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
             # TLS EOF under transient CN egress) is recoverable — retry with
             # a short backoff instead of failing the whole job. Rate limits
             # are NOT retried here (handled upstream with proper backoff).
+            #
+            # ⚠️ **每次重试重建 client**（2026-09-13 实测）：旧写法把 client 建在
+            # 循环**外**，重试复用同一条池化连接 —— 而代理侧刚把这条连接的 TLS
+            # 拆掉，重试撞的是**同一个坏 socket**，三次尝试全废。重建 client 强制
+            # 新 TCP/TLS 连接，重试才真的有效（直连场景下 client 为空 kwargs，
+            # 重建是 no-op，代价为零）。
+            # loopback (Ollama) must NOT go through any proxy; remote endpoints
+            # 只在配置了 LLM_PROXY 时才显式走代理（见 helper docstring）。
             last_err: Exception | None = None
             resp = None
             for attempt in range(1, 4):
+                # read_timeout=idle_seconds：仅在我们自己造 client 时生效；
+                # 直连路径返回空 kwargs，由 SDK 自己的 timeout= 管（见 docstring）
+                kwargs_client = _http_client_kwargs(s["base_url"],
+                                                   read_timeout=idle_seconds)
                 try:
+                    client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
+                                    timeout=idle_seconds, max_retries=0,
+                                    **kwargs_client)
                     resp = client.chat.completions.create(**kwargs)
                     break
                 except Exception as e:  # noqa: BLE001
@@ -388,6 +448,10 @@ def _call_llm_with_usage(s: dict, messages: list[dict], temperature: float,
                         time.sleep(1.0 * attempt)  # 1s / 2s backoff
                         continue
                     raise
+                finally:
+                    # 无论成败都关掉本次尝试的 client（见 _close_client_kwargs）
+                    # — 直连路径 kwargs 为空，这里是 no-op
+                    _close_client_kwargs(kwargs_client)
             if last_err is not None and resp is None:
                 raise last_err
             parts: list[str] = []
@@ -450,10 +514,13 @@ def _iter_openai(s: dict, messages: list[dict], temperature: float,
     enforced by the caller if needed (see `_call_llm_with_usage` for the
     non-streaming counterpart).
     """
-    kwargs_client = _http_client_kwargs(s["base_url"])
     from openai import OpenAI
+    _idle = float(s.get("timeout", 90))
+    # read_timeout=_idle：外部传入 http_client 后 SDK 的 timeout= 失效，必须
+    # 在这里显式给，否则退回 httpx 默认 5s 读超时（见 _http_client_kwargs）。
+    kwargs_client = _http_client_kwargs(s["base_url"], read_timeout=_idle)
     client = OpenAI(base_url=s["base_url"], api_key=s["api_key"],
-                    timeout=float(s.get("timeout", 90)), max_retries=0,
+                    timeout=_idle, max_retries=0,
                     **kwargs_client)
     kwargs = dict(model=s["model"], messages=messages, temperature=temperature,
                   stream=True, stream_options={"include_usage": True})
@@ -463,22 +530,27 @@ def _iter_openai(s: dict, messages: list[dict], temperature: float,
         extra["keep_alive"] = keep_alive
     if extra:
         kwargs["extra_body"] = extra
-    resp = client.chat.completions.create(**kwargs)
-    for chunk in resp:
-        usage = getattr(chunk, "usage", None)
-        if usage is not None:  # usage-only sentinel chunk (include_usage=True)
-            if usage_out is not None:
-                usage_out.update({
-                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
-                    "completion_tokens": getattr(usage, "completion_tokens", None),
-                    "total_tokens": getattr(usage, "total_tokens", None),
-                })
-            continue
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        if delta and delta.content:
-            yield delta.content
+    # try/finally：生成器被耗尽 / 调用方 close() / 抛异常，三种退出路径都会关
+    # client（否则流式会话每次都留一个未关闭的连接池）。
+    try:
+        resp = client.chat.completions.create(**kwargs)
+        for chunk in resp:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:  # usage-only sentinel chunk (include_usage=True)
+                if usage_out is not None:
+                    usage_out.update({
+                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(usage, "completion_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                    })
+                continue
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+    finally:
+        _close_client_kwargs(kwargs_client)
 
 
 def iter_chat(messages: list[dict], temperature: float = 0.5,

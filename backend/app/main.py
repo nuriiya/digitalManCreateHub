@@ -506,6 +506,24 @@ async def rag_upload_files(
         client posts the same files AGAIN with the names the user agreed
         to overwrite; this call ingests them in REPLACE-IN-PLACE mode
         (keeps documents.id stable).
+
+    实现体在 `_do_upload`（数字人卡片上传复用同一套规则，保证口径只有一份）。
+    """
+    return await _do_upload(db.get_conn(), files, overwrite_names,
+                            detail=None)
+
+
+async def _do_upload(conn, files: list[UploadFile], overwrite_names: str,
+                     detail: str | None = None):
+    """上传 → 逐个录入 RAG（按名判重 + content_hash + uuid 落盘）。
+
+    返回 dict：`{job_id, added, skipped, conflicts, errors, doc_ids, chunks}`。
+    `doc_ids` 是**本次新增（含覆盖）**的 document id，供范围化本体提取使用；
+    skipped / conflict 的文件不计入（它们没有产生新 chunk）。
+
+    失败时返回 JSONResponse（400/409），调用方需自行判别 —— 这是刻意的：
+    调用方一处是纯 RAG 上传（原样回传），一处是数字人卡片链（要先回报
+    「文档没进来」再决定要不要起后台 job）。
     """
     s = settings_store.load_settings()
     work_dir = s["work_dir"]
@@ -517,7 +535,6 @@ async def rag_upload_files(
     overwrite_set = {n.strip() for n in overwrite_names.split(",") if n.strip()}
 
     # Three-way mutex: don't pour new chunks into a DB another job is writing.
-    conn = db.get_conn()
     active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
     if active:
         return JSONResponse(
@@ -529,6 +546,11 @@ async def rag_upload_files(
     skipped: list[str] = []
     conflicts: list[dict] = []  # [{name, reason}] - awaiting user decision
     errors: list[dict] = []
+    new_doc_ids: list[int] = []
+    new_chunks = 0
+    before_ids = {r["id"] for r in conn.execute(
+        "SELECT id FROM documents").fetchall()}
+
 
     job_id = jobs.create_job(conn, "ingest", total=len(files),
                              detail=f"upload-files · {len(files)} files")
@@ -583,10 +605,19 @@ async def rag_upload_files(
                 target.unlink(missing_ok=True)
             elif status == "replaced":
                 added.append(raw_name)
+                # 覆盖是**原地替换**（documents.id 不变），所以它同样属于
+                # 「本次需要提取的范围」。_ingest_one_file 回传的 _doc_id
+                # 在两种情况下都是有效的 documents.id。
+                if _doc_id:
+                    new_doc_ids.append(int(_doc_id))
+                    new_chunks += int(_n or 0)
                 jobs.emit(conn, job_id, "ingest.file_overwritten",
-                          {"file": raw_name})
+                          {"file": raw_name, "doc_id": _doc_id, "chunks": _n})
             else:  # "added"
                 added.append(raw_name)
+                if _doc_id:
+                    new_doc_ids.append(int(_doc_id))
+                    new_chunks += int(_n or 0)
             # cleanup the temp copy on disk now that ingest has the chunks
             target.unlink(missing_ok=True)
 
@@ -594,14 +625,31 @@ async def rag_upload_files(
         jobs.emit(conn, job_id, "ingest.upload_done",
                   {"added": added, "skipped": skipped,
                    "conflicts": conflicts, "errors": errors,
-                   "overwrite_applied": bool(overwrite_set)})
+                   "overwrite_applied": bool(overwrite_set),
+                   "doc_ids": new_doc_ids, "chunks": new_chunks})
         jobs.finish_job(conn, job_id, ok=True)
+        # `doc_ids` = 本次新增/覆盖的 document id（范围化本体提取的白名单）。
+        # 已存在且被 skipped 的**也**在 `before_ids` 里，这里刻意用
+        # `before_ids` 兜底：_ingest_one_file 若因实现变更不再回传 id，
+        # 退化口径是「文件里出现的、非 skipped 的 doc」，而不是空列表 ——
+        # 空列表会让数字人卡片上传后静默不提取（run#29 的同类静默故障）。
+        if not new_doc_ids and added:
+            rows = conn.execute(
+                "SELECT id FROM documents WHERE name IN (%s)"
+                % ",".join("?" for _ in added), added).fetchall()
+            new_doc_ids = [int(r["id"]) for r in rows]
+            new_chunks = int(conn.execute(
+                "SELECT COUNT(*) c FROM chunks WHERE doc_id IN (%s)"
+                % ",".join("?" for _ in new_doc_ids), new_doc_ids
+            ).fetchone()["c"]) if new_doc_ids else 0
         return {
             "job_id": job_id,
             "added": added,
             "skipped": skipped,
             "conflicts": conflicts,
             "errors": errors,
+            "doc_ids": new_doc_ids,
+            "chunks": new_chunks,
         }
     except jobs.JobPaused:
         jobs.auto_pause(conn, job_id, "upload-files 被用户暂停")
@@ -1245,6 +1293,193 @@ def trigger_assembly(body: AssembleBody):
 @app.get("/api/ontology/assembly")
 def get_assembly(identity_id: int | None = None):
     return assembly.pending_summary(db.get_conn(), identity_id)
+
+
+# ------- 数字人卡片：上传文档 → 录入 RAG → 导出本体 → 融入该数字人（design §13.7）-------
+#
+# 用户诉求（2026-09-14）：单一数字人卡片上要有一个**专门上传文档的按钮**，
+# 上传后自动录入 RAG 并导出本体、融入到当前数字人。
+#
+# 设计要点：
+#   ① **范围化提取** —— 只提取本次上传产生的 chunk（`doc_ids` 白名单），
+#      不重跑全库。这是本功能存在的意义：全库 ≈90s/chunk，为几份新文件
+#      重跑全库既慢又会把已提取的 chunk 再喂一遍 LLM。
+#   ② **融入走装配、不直写** —— 提取出的候选本体进入 L0/L1/L2 三道筛，
+#      产出**待确认**清单，由用户一键终审（用户是唯一终审点，体系铁律）。
+#      卡片上不出现"自动采纳进本体段"这种绕过终审的按钮。
+#   ③ **串行成一条父 job** —— 三步各自是子 job，任一步不 done 即中止并
+#      带步骤号报错，用户在「任务与事件」抽屉里能看到完整链路。
+
+class PersonaExtractBody(BaseModel):
+    doc_ids: list[int] = []
+
+
+@app.post("/api/ontology/identities/{identity_id}/upload")
+async def persona_upload(
+    identity_id: int,
+    files: list[UploadFile] = File(...),
+    overwrite_names: str = Form(default=""),
+):
+    """① 只做「上传 → 录入 RAG」，返回本次新增的 `doc_ids`。
+
+    与 `/api/rag/upload-files` 同构（复用同一套按名判重 + content_hash + uuid
+    落盘规则），差别只在返回体额外带 `doc_ids`（供第 ② 步范围化提取）与该
+    数字人的 id 校验。命名为「录入」而非「训练」，因为这一步纯确定性。
+    """
+    conn = db.get_conn()
+    row = conn.execute("SELECT id, name FROM identities WHERE id=?",
+                       (identity_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": f"数字人 #{identity_id} 不存在"},
+                            status_code=404)
+    return await _do_upload(conn, files, overwrite_names,
+                            detail=f"数字人「{row['name']}」上传资料")
+
+
+@app.post("/api/ontology/identities/{identity_id}/extract")
+def persona_extract(identity_id: int, body: PersonaExtractBody):
+    """② 只提取这些 doc 的本体（范围化，不重跑全库）。"""
+    conn = db.get_conn()
+    if not conn.execute("SELECT id FROM identities WHERE id=?",
+                        (identity_id,)).fetchone():
+        return JSONResponse({"error": f"数字人 #{identity_id} 不存在"},
+                            status_code=404)
+    doc_ids = [int(d) for d in (body.doc_ids or [])]
+    if not doc_ids:
+        return JSONResponse({"error": "doc_ids 不能为空（先上传）"},
+                            status_code=400)
+    ph = ",".join("?" for _ in doc_ids)
+    n = conn.execute(
+        f"SELECT COUNT(*) c FROM chunks WHERE doc_id IN ({ph})",
+        doc_ids).fetchone()["c"]
+    if n == 0:
+        return JSONResponse({"error": "这些文档没有 chunk，先确认上传成功"},
+                            status_code=400)
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS)
+    if active:
+        return JSONResponse(
+            {"error": f"任务 #{active['id']} 正在运行（{active['status']}），"
+                      "请先暂停或删除它再触发"},
+            status_code=409)
+    job_id = jobs.create_job(conn, "ontology", n,
+                             detail=f"范围化本体提取 · {len(doc_ids)} 份文档",
+                             ref_id=identity_id)
+    jobs.run_in_background(job_id, ontology.run_extraction, doc_ids)
+    return {"job_id": job_id, "chunks": n, "docs": len(doc_ids)}
+
+
+@app.post("/api/ontology/identities/{identity_id}/assemble")
+def persona_assemble(identity_id: int):
+    """③ 装配 → 待确认清单（复用既有装配 job；终审仍在用户手上）。"""
+    conn = db.get_conn()
+    if not conn.execute("SELECT id FROM identities WHERE id=?",
+                        (identity_id,)).fetchone():
+        return JSONResponse({"error": f"数字人 #{identity_id} 不存在"},
+                            status_code=404)
+    if not llm.llm2_configured():
+        return JSONResponse(
+            {"error": "本体装配需要配置判别模型 GLM——请到设置页填 GLM token"},
+            status_code=400)
+    job_id = jobs.create_job(conn, "assemble", total=0,
+                             detail="数字人卡片上传后装配（待人工确认）",
+                             ref_id=identity_id)
+    jobs.run_in_background(job_id, assembly.run_assembly, identity_id)
+    return {"job_id": job_id}
+
+
+def _run_persona_ingest(conn, job_id: int, identity_id: int,
+                        doc_ids_resolver) -> None:
+    """把三步串成一个父 job：范围化提取 → 装配。
+
+    `doc_ids_resolver` 是**已在提交前存好的**本次上传 doc_ids 列表 ——
+    上传必须发生在创建父 job 之前（HTTP 请求里已经 await 完），否则
+    后台线程拿不到刚写入的 documents.id。
+    """
+    doc_ids = list(doc_ids_resolver or [])
+    if not doc_ids:
+        jobs.finish_job(conn, job_id, ok=False, error="本次上传没有新增文档")
+        return
+    # step 1: 范围化本体提取
+    jobs.update_progress(conn, job_id, 0, 2)
+    jobs.emit(conn, job_id, "pipeline.step",
+              {"step": 1, "name": "本体提取（仅新文档）", "status": "running"})
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM chunks WHERE doc_id IN (%s)"
+        % ",".join("?" for _ in doc_ids), doc_ids).fetchone()["c"]
+    ont_job = jobs.create_job(conn, "ontology", n,
+                              detail="范围化本体提取（数字人卡片上传）",
+                              ref_id=identity_id, parent_id=job_id)
+    jobs.run_in_background(ont_job, ontology.run_extraction, doc_ids)
+    st = jobs.wait_job(conn, ont_job)
+    if st != "done":
+        jobs.finish_job(conn, job_id, ok=False,
+                        error=f"步骤1「本体提取」{st}")
+        return
+    jobs.emit(conn, job_id, "pipeline.step",
+              {"step": 1, "name": "本体提取（仅新文档）", "status": "done"})
+    # step 2: 装配（产出待确认清单；用户一键终审）
+    jobs.update_progress(conn, job_id, 1, 2)
+    jobs.emit(conn, job_id, "pipeline.step",
+              {"step": 2, "name": "本体装配（待人工确认）", "status": "running"})
+    asm_job = jobs.create_job(conn, "assemble", 0,
+                              detail="数字人卡片上传后装配（待人工确认）",
+                              ref_id=identity_id, parent_id=job_id)
+    jobs.run_in_background(asm_job, assembly.run_assembly, identity_id)
+    st = jobs.wait_job(conn, asm_job)
+    if st != "done":
+        jobs.finish_job(conn, job_id, ok=False, error=f"步骤2「本体装配」{st}")
+        return
+    jobs.emit(conn, job_id, "pipeline.step",
+              {"step": 2, "name": "本体装配（待人工确认）", "status": "done"})
+    jobs.update_progress(conn, job_id, 2, 2)
+    jobs.finish_job(conn, job_id, ok=True)
+
+
+@app.post("/api/ontology/identities/{identity_id}/ingest-and-assemble")
+async def persona_ingest_and_assemble(
+    identity_id: int,
+    files: list[UploadFile] = File(...),
+    overwrite_names: str = Form(default=""),
+):
+    """一条命令跑完整条链：上传 → 录入 RAG → 范围化提取 → 装配（待确认）。
+
+    上传**同步做完**（拿 doc_ids 必须等 HTTP 处理完），提取与装配放后台
+    父 job 串行跑。返回体里 `doc_ids` 是本次新增的，若为新增 0 份
+    （全部 skipped/conflict）则不创建后台 job，直接回报。
+    """
+    conn = db.get_conn()
+    row = conn.execute("SELECT id, name FROM identities WHERE id=?",
+                       (identity_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": f"数字人 #{identity_id} 不存在"},
+                            status_code=404)
+    if not llm.llm2_configured():
+        return JSONResponse(
+            {"error": "融入本体需要配置判别模型 GLM——请到设置页填 GLM token"},
+            status_code=400)
+    up = await _do_upload(conn, files, overwrite_names,
+                          detail=f"数字人「{row['name']}」上传资料")
+    if isinstance(up, JSONResponse):      # 上传失败（409/400）原样回传
+        return up
+    if not up.get("doc_ids"):
+        up["job_id"] = 0
+        up["note"] = ("本次没有新增文档（全部为内容一致或待确认冲突），"
+                      "未启动提取")
+        return up
+    active = jobs.active_job_in_set(conn, _MUTEX_KINDS | {"assemble", "pipeline"})
+    if active:
+        up["note"] = (f"文档已录入 RAG（{len(up['doc_ids'])} 份），但任务 "
+                      f"#{active['id']} 正在运行，提取/装配已跳过；"
+                      "请稍后在「知识与本体」卡片点「装配本体」")
+        return up
+    job_id = jobs.create_job(
+        conn, "pipeline", 2,
+        detail=f"数字人「{row['name']}」上传 → 提取 → 装配",
+        ref_id=identity_id)
+    up["job_id"] = job_id
+    jobs.run_in_background(job_id, _run_persona_ingest, identity_id,
+                           up["doc_ids"])
+    return up
 
 
 # ---------------- persona actions (六元组 actions 维度) ----------------

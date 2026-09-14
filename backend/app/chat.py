@@ -902,7 +902,19 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 
 # ---------------- answer / compare ----------------
 
-MAX_ACTION_ROUNDS = 8
+#: 单个 nominate 节点的工具调用轮数上限。
+#:
+#: 为什么要抬高到 14（2026-09-14 job#31 实测）：汇总节点（aggregate-sod-ap）
+#: 一轮里要完成「搜部件 → 逐族查历史 → 批量查 AP（模型按 3~4 条一批、
+#: 分 4 轮）→ 问专家 → 取待确认清单 → 核验专家引用 → 写行」，8 轮在第 3
+#: 批 AP 查询处就见底了。模型被逼到轮数耗尽后只能走「只准写结论」的兜底
+#: 分支，结果是 **SW 族案例根本没取回**（它在正文里自己写明
+#: 「SW 族 3 条案例未能取回，因本轮工具调用次数已用尽」），
+#: 「基带与固件」「连接与漫游管理」两个子系统整行缺失。
+#:
+#: 这是**工程边界**而不是放宽生成标准：来源闭集校验、AP 以表为准、
+#: 逐格来源标注一律不放松；抬高的只是「允许它把该查的查完」的空间。
+MAX_ACTION_ROUNDS = 14
 _TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)(?:</[^>]*>|\Z)", re.DOTALL)
 #: LLM 常臆造结束标记（如 `</arg_value>`），抠 JSON 前先剥掉尾部伪标签
 _TAG_TAIL = re.compile(r"</[^>]*>")
@@ -1164,6 +1176,25 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
         reply = _dispatch(provider, messages, ollama_model, usage)
         if attempted == 0:
             break       # 本轮没有任何新调用 -> 再循环也不会有新信息
+
+    # 轮数用尽或兜底退出时，`reply` 可能**仍停在裸 tool_call 草稿**。
+    # 这是 2026-09-13 实测的一大类交付缺陷：汇总节点（上下文最长、要吃下
+    # 多份上游交接物）反复调工具直到 8 轮耗尽，最终产出就是
+    #     <tool_call>{"name": "查 AP / S-O-D 准则表", "args": {}}</tool_call>
+    # 整段 65 字，没有表、没有数值。下游复核门只能判 FAIL，整条 pipeline 白跑，
+    # 而且报错读起来像「复核员挑刺」，真实原因（上游压根没答）被掩盖。
+    #
+    # 修法：**再给一次「只准写结论」的机会**（不新增工具结果，避免又诱发调用）。
+    # 这不是替模型干活，只是把「轮数耗尽」这个**工程边界**显式告知它，
+    # 让它把已经查到的信息整理成正文 —— 证据早已在 messages 里。
+    if _parse_tool_calls(reply):
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content":
+                         "工具调用轮数已用尽。**不要再输出任何 <tool_call> 或工具草稿** —— "
+                         "请立即基于**上面已经取回的所有工具结果**，直接给出最终交付物正文。"
+                         "若某项信息确实没查到，就在正文里写明「该项无证据」。"
+                         "现在直接输出最终答复正文。"})
+        reply = _dispatch(provider, messages, ollama_model, usage)
 
     prompt_tokens = usage.get("prompt_tokens")
     estimate = not isinstance(prompt_tokens, int)

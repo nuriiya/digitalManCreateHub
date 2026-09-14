@@ -21,8 +21,10 @@ services:
     environment:
       RAG_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rag
       EMBEDDING_BASE_URL: http://127.0.0.1:11434
-      # 外网 LLM 出口代理：容器 host 网络下 127.0.0.1:6789 = 宿主 mihomo
-      LLM_PROXY: http://127.0.0.1:6789
+      # LLM 出口代理：**默认直连**（2026-09-13 实测直连 6/6 OK 且比走代理快 5
+      # 倍；`.env` 里「deepseek 必须走代理」是旧网络环境的结论，已不成立）。
+      # 走代理时明确设成 http://127.0.0.1:6789；也可用 off 显式关闭。
+      LLM_PROXY: ${LLM_PROXY_WSL:-}
 
   pg:
     restart: unless-stopped

@@ -241,8 +241,19 @@ def _rule_extract(chunk_text: str) -> dict:
     return {"entities": entities[:MAX_EXTRACT], "relations": []}
 
 
-def run_extraction(conn, job_id: int) -> None:
+def run_extraction(conn, job_id: int, doc_ids: list[int] | None = None) -> None:
     """Ontology job: nominate + validate + store pending, CONCURRENCY workers.
+
+    `doc_ids`（可选，design §13.7「数字人卡片上传」）：**限定只提取这些 document
+    的 chunk**。用于「给某个数字人上传文档 → 只把新文档的知识喂给它」的增量场景，
+    避免为几份新文件重跑全库（实测全库 592 chunk ≈ 90s/chunk）。
+
+    与全量提取的**语义差异**（重要）：
+      - 全量提取的 `progress_current` 是**全库序号检查点**，resume 靠它跳过已提取
+        的 chunk；
+      - 限定范围时序号是**本次子集内**的位置，跨 job resume 会张冠李戴 ——
+        因此**限定模式不做 resume**，每次都从子集头部重跑（子集通常很小，
+        且新文档的 chunk 尚未提取过，重跑无副作用）。
 
     Concurrency model (thread-safe by construction):
       - workers ONLY call the LLM + run the pure gates (zero DB access: their
@@ -278,12 +289,26 @@ def run_extraction(conn, job_id: int) -> None:
 
     from . import identity as identity_mod
 
-    rows = conn.execute("SELECT id, text FROM chunks ORDER BY doc_id, seq").fetchall()
+    # 限定范围（数字人卡片上传的增量提取）：只取这些 document 的 chunk。
+    scope_ids = [int(d) for d in (doc_ids or []) if d is not None]
+    if scope_ids:
+        ph = ",".join("?" for _ in scope_ids)
+        rows = conn.execute(
+            f"SELECT id, text FROM chunks WHERE doc_id IN ({ph})"
+            " ORDER BY doc_id, seq", scope_ids).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, text FROM chunks ORDER BY doc_id, seq").fetchall()
     total = len(rows)
     jrow = conn.execute(
         "SELECT progress_current FROM jobs WHERE id=?", (job_id,)).fetchone()
     # clamp: chunks may have been deleted/re-ingested since the checkpoint
-    start = min(int(jrow["progress_current"] or 0), total) if jrow else 0
+    # 限定模式**不 resume**（子集序号与全库检查点不同源，续跑会错位）
+    start = 0 if scope_ids else (min(int(jrow["progress_current"] or 0), total)
+                                 if jrow else 0)
+    if scope_ids:
+        jobs.emit(conn, job_id, "ontology.scoped",
+                  {"docs": len(scope_ids), "chunks": total})
     jobs.update_progress(conn, job_id, start, total)
     jobs.emit(conn, job_id, "ontology.start",
               {"chunks": total, "resumed_from": start} if start
