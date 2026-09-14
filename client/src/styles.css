@@ -578,11 +578,15 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
 }
 
 /* ---------------- persona chat (数字人对话) ---------------- */
-.chat-wrap { display: flex; gap: 16px; min-height: 520px; }
+/* 固定视口高度：让侧栏列表与聊天窗各自内部滚动（而不是把页面撑长） */
+.chat-wrap {
+  display: flex; gap: 16px;
+  height: calc(100vh - 300px); min-height: 480px; max-height: 900px;
+}
 .chat-side {
   width: 260px; min-width: 260px; max-width: 260px; flex-shrink: 0;
   border-right: 1px solid var(--border); padding-right: 16px;
-  display: flex; flex-direction: column; gap: 8px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; overflow: hidden;
 }
 .chat-persona {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
@@ -605,7 +609,14 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
   margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 10px;
 }
 .btn.tiny { padding: 2px 8px; font-size: 11px; height: auto; }
-.chat-sess-list { display: flex; flex-direction: column; gap: 4px; }
+.btn.ghost.on { border-color: var(--accent); color: var(--accent); background: rgba(93,202,165,0.08); }
+.chat-sess-list {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.chat-sess-list::-webkit-scrollbar { width: 6px; }
+.chat-sess-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .chat-sess {
   display: flex; align-items: center; gap: 6px; padding: 6px 8px;
   border: 1px solid transparent; border-radius: 6px; cursor: pointer; user-select: none;
@@ -731,7 +742,7 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
 .cmp-sent { display: flex; flex-direction: column; gap: 4px; }
 .cmp-sent-title { font-size: 11px; color: var(--accent); font-weight: 600; }
 .chat-log {
-  flex: 1; min-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   padding: 14px; background: #101216; border: 1px solid var(--border); border-radius: 8px;
   scrollbar-width: thin; scrollbar-color: var(--border) transparent;
 }

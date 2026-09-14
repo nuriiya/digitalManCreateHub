@@ -45,6 +45,9 @@ export default function ConversationPage({ refreshKey }: Props) {
   // 多选删除（design §13 配套）：selectMode 开关 + 选中 id 集合
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  // 左侧对话组（topic）多选删除
+  const [sessSelectMode, setSessSelectMode] = useState(false)
+  const [sessSelectedIds, setSessSelectedIds] = useState<Set<number>>(new Set())
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
@@ -292,6 +295,38 @@ export default function ConversationPage({ refreshKey }: Props) {
       if (sessionId === id) { setSessionId(null); setMessages([]) }
     } catch (e: any) { toast(e.message, 'err') }
   }
+
+  // ---- 左侧对话组（topic）多选删除 ----
+  const toggleSessSelect = (id: number) => {
+    setSessSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const toggleSessSelectAll = () => {
+    if (sessions.length > 0 && sessions.every((s) => sessSelectedIds.has(s.id))) {
+      setSessSelectedIds(new Set())
+    } else {
+      setSessSelectedIds(new Set(sessions.map((s) => s.id)))
+    }
+  }
+  const doDeleteSelectedSessions = async () => {
+    if (sessSelectedIds.size === 0) return
+    const n = sessSelectedIds.size
+    if (!confirm(`删除选中的 ${n} 个对话组及其全部消息？`)) return
+    let ok = 0, fail = 0
+    for (const id of sessSelectedIds) {
+      try { await deleteChatSession(id); ok++ } catch { fail++ }
+    }
+    setSessions((list) => list.filter((s) => !sessSelectedIds.has(s.id)))
+    if (sessionId != null && sessSelectedIds.has(sessionId)) {
+      setSessionId(null); setMessages([])
+    }
+    setSessSelectedIds(new Set())
+    toast(`已删除 ${ok} 个对话组${fail ? `（失败 ${fail}）` : ''}`, fail ? 'err' : 'ok')
+    refreshSessions()
+  }
   const doClear = async () => {
     if (sessionId == null) return
     const sess = sessions.find((s) => s.id === sessionId)
@@ -357,8 +392,28 @@ export default function ConversationPage({ refreshKey }: Props) {
         <div className="chat-side">
           <div className="chat-sess-head">
             <span className="note">对话组</span>
-            <button className="btn ghost tiny" onClick={newSession} title="新建对话">＋ 新建</button>
+            <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+              <button className={`btn ghost tiny ${sessSelectMode ? 'on' : ''}`}
+                onClick={() => { setSessSelectMode((v) => !v); setSessSelectedIds(new Set()) }}
+                disabled={sessions.length === 0}
+                title="多选对话组后批量删除">
+                {sessSelectMode ? '✓ 多选中' : '多选'}
+              </button>
+              <button className="btn ghost tiny" onClick={newSession} title="新建对话">＋ 新建</button>
+            </span>
           </div>
+          {sessSelectMode && (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <button className="btn ghost tiny" onClick={toggleSessSelectAll}
+                disabled={sessions.length === 0}>
+                {sessions.length > 0 && sessions.every((s) => sessSelectedIds.has(s.id)) ? '取消全选' : '全选'}
+              </button>
+              <button className="btn red tiny" onClick={doDeleteSelectedSessions}
+                disabled={sessSelectedIds.size === 0}>
+                删除所选 ({sessSelectedIds.size})
+              </button>
+            </div>
+          )}
           <div className="chat-sess-list">
             {sessions.length === 0 && (
               <div className="note" style={{ padding: '4px 0' }}>暂无对话，发送消息即自动创建。</div>
@@ -366,7 +421,19 @@ export default function ConversationPage({ refreshKey }: Props) {
             {sessions.map((s) => (
               <div key={s.id}
                 className={`chat-sess ${s.id === sessionId ? 'on' : ''}`}
-                onClick={() => switchSession(s.id)}>
+                style={sessSelectMode ? {
+                  cursor: 'pointer',
+                  background: sessSelectedIds.has(s.id) ? 'rgba(93,202,165,0.14)' : undefined,
+                  borderColor: sessSelectedIds.has(s.id) ? 'rgba(93,202,165,0.5)' : undefined,
+                } : undefined}
+                onClick={sessSelectMode ? () => toggleSessSelect(s.id) : () => switchSession(s.id)}>
+                {sessSelectMode && (
+                  <input type="checkbox"
+                    checked={sessSelectedIds.has(s.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleSessSelect(s.id)}
+                    style={{ flex: '0 0 auto', width: 'auto', accentColor: 'var(--accent)' }} />
+                )}
                 {renamingId === s.id ? (
                   <input
                     className="chat-sess-input"
@@ -384,7 +451,7 @@ export default function ConversationPage({ refreshKey }: Props) {
                   <span className="chat-sess-title" title={s.title}>{s.title}</span>
                 )}
                 <span className="chat-sess-count">{s.message_count}</span>
-                {renamingId !== s.id && (
+                {!sessSelectMode && renamingId !== s.id && (
                   <span className="chat-sess-ops" onClick={(e) => e.stopPropagation()}>
                     <button className="op" title="重命名" onClick={() => startRename(s)}>✎</button>
                     <button className="op del" title="删除" onClick={() => removeSession(s.id)}>×</button>
