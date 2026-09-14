@@ -510,6 +510,7 @@ export interface StreamChatCallbacks {
   onSession?: (session_id: number) => void
   onToken?: (text: string) => void
   onTool?: (ev: { name: string; ok: boolean; reason?: string | null; result?: any }) => void
+  onAsk?: (ev: { question: string; options: string[]; note?: string }) => void
   onDone?: (data: { reply: string; messages: ChatMessage[]; context?: any; session_id: number }) => void
   onError?: (error: string) => void
 }
@@ -578,6 +579,10 @@ export async function streamChat(
                         ok: Boolean(evt.ok),
                         reason: evt.reason ?? null,
                         result: evt.result })
+        } else if (evt.event === 'ask_user') {
+          cb.onAsk?.({ question: String(evt.question || ''),
+                       options: Array.isArray(evt.options) ? evt.options.map(String) : [],
+                       note: evt.note ?? '' })
         } else if (evt.event === 'done') {
           cb.onDone?.(evt)
         } else if (evt.event === 'error') {

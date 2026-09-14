@@ -364,6 +364,13 @@
 | R-23.3 | 三层入口：数字人动作（返回 markdown 下载链接）/ API / PipelineCard 按钮 | **已实现**（design §21.2） | 动作 `fmea_export_excel` 已绑定 DFMEA 工程师 #9 并入模板蓝图 |
 | R-23.4 | 聊天链接下载通道：`?token=` 查询参数认证（范围最小化白名单）+ RFC 5987 中文文件名 | **已实现**（design §21.2） | `_TOKEN_QUERY_API_PATHS={/api/fmea/export}`；中文 part 过滤 200（直接塞 header 会 500，已修） |
 | R-23.5 | 无可导出行时明确报错（404），不返回空文件 | **已实现**（design §21.2） | 空库实测 404 + 错误信息 |
+| R-24 | 数字人询问用户须弹出**可点选选项气泡**（2~4 个选项）；无法给明确选项就不询问直接做 | **已实现**（design §22） | ask_user 动作 + event:ask_user 暂停流 + 前端选项气泡 + 询问纪律注入 |
+| R-24.1 | `ask_user` 动作校验：question 非空、options 2~4 个 | **已实现**（design §22.1①） | 合法→标记；选项<2→拒绝；空 question→拒绝 |
+| R-24.2 | 流式循环拦截 ask_user：发 event 暂停、保存问题、等用户点选 | **已实现**（design §22.1②） | stream_answer 内 type==ask_user 时 return |
+| R-24.3 | 非流式（pipeline）降级：无交互用户时引导假设继续，不停住 | **已实现**（design §22.1③） | chat_answer 回灌 user_unavailable |
+| R-24.4 | 前端选项气泡：点选即发下一条消息；「跳过」按钮 | **已实现**（design §22.1④） | .chat-ask-bubble + answerAsk |
+| R-24.5 | 询问纪律注入：绑 ask_user 的 persona 在动作清单里看到纪律条款 | **已实现**（design §22.1⑤） | _actions_block 条件追加 |
+| R-24.6 | 绑定到会提问的数字人（需求分析师 #1 / DFMEA 工程师 #9）并入模板蓝图 | **已实现**（design §22.2） | 幂等绑定 + verify_persona_templates OK |
 
 ---
 

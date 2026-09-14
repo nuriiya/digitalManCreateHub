@@ -2604,6 +2604,42 @@ part=天线 过滤命中 1 行；API 三通道（Bearer / query-token / 中文 p
 
 **状态**：**已实现（2026-09-14）**。需求编号 R-23；指标 test-metrics §T-N 续。
 
+## 22. 数字人询问用户（可点选选项气泡）—— 已实现（2026-09-14）
+
+用户诉求：数字人需要澄清时，**弹出可点选选项气泡**让用户一键选择，而不是
+用纯文本提问逼用户打自由文本；若无法给出明确选项，就**不询问直接做**。
+
+### 22.1 机制
+
+**① 新内置动作 `ask_user`（询问用户·弹出选项）**：`question` + `options`
+（2~4 个，强制）+ 可选 `note`。`_exec_ask_user` 校验后返回特殊标记
+`{"type":"ask_user", ...}`。
+
+**② 流式循环拦截**：`stream_answer` 看到 `type=="ask_user"` 时发
+`event: ask_user` 给前端，保存问题为 assistant 消息，**暂停**流，等待用户
+点选。用户点选后前端把选项作为下一条消息回传继续。
+
+**③ 非流式（pipeline）降级**：`chat_answer` 里 ask_user 没有交互气泡 → 回灌
+「无交互用户，请假设继续」引导，绝不停住（否则 pipeline 节点空转）。
+
+**④ 前端**：`onAsk` 回调 + `pendingAsk` 状态 → 渲染 `.chat-ask-bubble`（问题 +
+选项按钮 + 「跳过」）。点选走 `doSend(choice)` 复用完整路由/流式链路。
+
+**⑤ 询问纪律注入**（`_actions_block`）：当 persona 绑定 ask_user 时追加：
+「要么给 2~4 个明确选项，要么不询问直接假设继续并注明假设；绝不纯文本提问停住」。
+
+### 22.2 验证
+
+- `_exec_ask_user`：合法 → 正确标记；选项 <2 → 拒绝；空 question → 拒绝
+- `_actions_block`：含「询问纪律」段落 + ask_user 动作行
+- 已绑定：需求分析师 #1、DFMEA 工程师 #9（幂等）；dfmea_engineer 模板蓝图
+  新增该动作（`verify_persona_templates.py` RESULT: OK）
+
+**状态**：**已实现（2026-09-14）**。需求编号 R-24；指标 test-metrics §T-N 续。
+
+---
+*v1.12（2026-09-14）新增 §22 数字人询问用户：ask_user 动作 + 流式 event:ask_user 暂停 + 非流式降级 + 前端选项气泡 + 询问纪律注入。*
+
 ---
 *v1.11（2026-09-14）新增 §21 FMEA Excel 导出：用户口径列集 + RPN 计算列 + 三层入口（动作/ API/卡片）+ ?token= 下载通道 + RFC 5987 中文文件名。*
 

@@ -1015,6 +1015,12 @@ def _actions_block(actions_list: list[dict]) -> str:
         "<tool_call>{\"name\": \"动作名\", \"args\": {\"参数名\": \"值\"}}</tool_call>\n"
         "JSON 必须完整合法（括号闭合）。然后停止，等待执行结果。"
         "不需要动作时直接回答。"
+        + ("\n\n【询问纪律】需要用户澄清或做选择时：用「询问用户（弹出选项）」"
+           "动作，且必须给出 2~4 个明确可点选选项。若无法给出明确选项，"
+           "**不要询问**——直接基于现有信息做合理假设并继续，在最终回答里注明"
+           "「此处我假设了 XXX」。**绝不输出纯文本提问后停住。**"
+           if any((a.get("builtin_name") == "ask_user") for a in actions_list)
+           else "")
     )
 
 
@@ -1231,6 +1237,17 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
                 # 由它自行纠正参数或换一种方式完成。
                 result = {"ok": False,
                           "error": f"动作执行异常：{type(e).__name__}: {e}"}
+            # ask_user 在 pipeline（非流式）里没有交互气泡 —— 直接引导模型
+            # 假设并继续（design §22 铁律：否则就不要询问直接做）。
+            if result.get("ok") and isinstance(result.get("result"), dict) \
+                    and result["result"].get("type") == "ask_user":
+                q = result["result"]
+                tool_calls.append({"name": name, "ok": True,
+                                   "result": "user_unavailable"})
+                lines.append("· 动作「询问用户」：当前环境无交互用户，"
+                             "请基于现有信息做出合理假设并继续，"
+                             "在最终回答里注明你做的假设。")
+                continue
             tool_calls.append({"name": name, "ok": result.get("ok", False),
                                "result": (result.get("result") if result.get("ok")
                                           else result.get("error"))})
@@ -1535,6 +1552,22 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
             except Exception as e:  # noqa: BLE001
                 result = {"ok": False,
                           "error": f"动作执行异常：{type(e).__name__}: {e}"}
+            # —— ask_user 特殊拦截（design §22 / R-24）——
+            # 数字人想询问用户：不把结果回灌给 LLM 继续生成，而是发
+            # `event: ask_user` 给前端渲染选项气泡，然后**暂停**整个流。
+            # 用户点选后由前端把选项作为下一条消息回传，继续对话。
+            if result.get("ok") and isinstance(result.get("result"), dict) \
+                    and result["result"].get("type") == "ask_user":
+                q = result["result"]
+                yield {"event": "ask_user",
+                       "question": q.get("question", ""),
+                       "options": q.get("options") or [],
+                       "note": q.get("note") or "",
+                       "session_id": session_id}
+                _save(conn, identity_id, "user", message, session_id)
+                _save(conn, identity_id, "assistant",
+                      q.get("question", ""), session_id)
+                return
             tool_calls.append({"name": name,
                                "ok": result.get("ok", False),
                                "result": (result.get("result")

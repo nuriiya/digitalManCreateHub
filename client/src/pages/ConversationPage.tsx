@@ -48,6 +48,11 @@ export default function ConversationPage({ refreshKey }: Props) {
   // 左侧对话组（topic）多选删除
   const [sessSelectMode, setSessSelectMode] = useState(false)
   const [sessSelectedIds, setSessSelectedIds] = useState<Set<number>>(new Set())
+  // 数字人询问用户（design §22 / R-24）：等待点选的选项气泡
+  const [pendingAsk, setPendingAsk] = useState<null | {
+    question: string; options: string[]; note?: string;
+    identityId: number; sessionId: number | null;
+  }>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
@@ -111,8 +116,8 @@ export default function ConversationPage({ refreshKey }: Props) {
     return groups
   }, [messages])
 
-  const doSend = async () => {
-    const text = input.trim()
+  const doSend = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim()
     if (!text || sending) return
     // 创建 pipeline 模式：输入作为需求，LLM 设计节点+关系并落库 draft
     if (genPipelineMode) {
@@ -268,6 +273,20 @@ export default function ConversationPage({ refreshKey }: Props) {
             }
             refreshSessions()
           },
+          onAsk: (ev) => {
+            // 数字人询问用户：把问题展示成可点选选项气泡（design §22 / R-24）
+            streamFinished = true
+            updateAssistant({
+              identity_name: route.identity_name,
+              content: ev.question + (ev.note ? `\n\n*${ev.note}*` : ''),
+            })
+            setPendingAsk({
+              question: ev.question, options: ev.options,
+              note: ev.note, identityId: route.identity_id,
+              sessionId,
+            })
+            refreshSessions()
+          },
           onError: (err) => {
             updateAssistant({
               identity_name: '错误',
@@ -293,6 +312,14 @@ export default function ConversationPage({ refreshKey }: Props) {
   const newSession = () => {
     setSessionId(null)
     setMessages([])
+  }
+  // 用户点选数字人给的选项 → 作为下一条消息发送（design §22 / R-24）
+  const answerAsk = (choice: string) => {
+    const ask = pendingAsk
+    setPendingAsk(null)
+    if (!ask) return
+    // 把选项作为用户回答发送（带上下文标记，让数字人知道这是对它的回答）
+    doSend(`（回答你的问题）${choice}`)
   }
   const switchSession = (id: number) => { if (id !== sessionId) setSessionId(id) }
   const startRename = (s: ChatSession) => { setRenamingId(s.id); setRenameDraft(s.title) }
@@ -554,6 +581,27 @@ export default function ConversationPage({ refreshKey }: Props) {
                 （initial identity_name='系统' + content='判断路由中…'，
                 流式 token 累加时实时更新），不再渲染静态 typing 气泡
                 —— 否则会和占位气泡重复，造成视觉混乱。 */}
+            {/* 数字人询问用户：可点选选项气泡（design §22 / R-24） */}
+            {pendingAsk && (
+              <div className="chat-ask-bubble">
+                <div className="chat-ask-title">💬 数字人想确认一下</div>
+                {pendingAsk.note && (
+                  <div className="chat-ask-note">{pendingAsk.note}</div>
+                )}
+                <div className="chat-ask-options">
+                  {pendingAsk.options.map((opt) => (
+                    <button key={opt} className="chat-ask-option"
+                      onClick={() => answerAsk(opt)}>
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+                <button className="chat-ask-skip"
+                  onClick={() => { setPendingAsk(null); toast('已跳过，数字人将自行假设继续', 'ok') }}>
+                  跳过，让数字人自行决定
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 生成的 pipeline：就地展示摘要 + 校验/批准/运行 + DFMEA 产出
@@ -585,7 +633,7 @@ export default function ConversationPage({ refreshKey }: Props) {
                 🔗 创建 pipeline
               </button>
               <span className="bubble-spacer" />
-              <button className="btn green" onClick={doSend}
+              <button className="btn green" onClick={() => doSend()}
                 disabled={!input.trim() || sending || (!genMcpMode && !genPipelineMode && approved.length === 0)}>
                 {genMcpMode ? '生成 MCP' : genPipelineMode ? '创建 pipeline' : '发送'}
               </button>

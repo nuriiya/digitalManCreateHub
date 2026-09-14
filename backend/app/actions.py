@@ -166,6 +166,28 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                                         "question": {"type": "string"}},
                          "required": ["expert", "question"]},
     },
+    # 询问**用户**（人类）：弹出可点选选项气泡（design §22 / R-24）。
+    # 铁律：要么给 2~4 个明确选项（前端渲染成按钮），要么**不询问直接做**——
+    # 绝不输出纯文本提问后停住（那会让用户被迫打自由文本，体验最差）。
+    "ask_user": {
+        "name": "询问用户（弹出选项）",
+        "description": ("当你需要用户澄清或做选择时调用。**必须在 options 里给出 2~4 个"
+                        "具体、互斥、可点选的选项**，前端会把它们渲染成按钮让用户点选。"
+                        "如果问题本质是开放式的、无法给出明确选项，就**不要调用本动作**——"
+                        "直接基于现有信息做出合理假设继续，并在最终回答里注明"
+                        "「此处我假设了 XXX」。绝不输出纯文本提问后停住。"),
+        "input_schema": {"type": "object",
+                         "properties": {
+                             "question": {"type": "string",
+                                          "description": "要问用户的问题（一句话，明确）"},
+                             "options": {"type": "array",
+                                         "items": {"type": "string"},
+                                         "minItems": 2, "maxItems": 4,
+                                         "description": "2~4 个可点选选项"},
+                             "note": {"type": "string",
+                                      "description": "可选：补充说明/为什么问"}},
+                         "required": ["question", "options"]},
+    },
     "fmea_write_row": {
         "name": "写入 DFMEA 记录",
         "description": ("写入 DFMEA 行并**逐格**标注来源。单行模式直接传字段；"
@@ -252,6 +274,8 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_fmea_export_excel(conn, args)
     if builtin_name == "ask_expert":
         return _exec_ask_expert(conn, identity_id, args)
+    if builtin_name == "ask_user":
+        return _exec_ask_user(conn, args)
     if builtin_name == "fmea_write_row":
         return _exec_fmea_write_row(conn, args)
     return {"ok": False, "error": f"未知内置动作 {builtin_name}"}
@@ -516,6 +540,31 @@ def _exec_ask_expert(conn, identity_id: int, args: dict) -> dict:
         "expert": nm, "expert_id": eid, "answer": r.get("reply") or "",
         "source": f"expert:{nm}",
         "citation_hint": f"该格来源请标注为 expert:{nm}（可带引用号）"}}
+
+
+def _exec_ask_user(conn, args: dict) -> dict:
+    """询问用户（人类）：校验问题与选项后，返回**特殊标记结果**供流式循环拦截
+    （design §22 / R-24）。前端把 options 渲染成可点选按钮。
+
+    返回 `{"ok": True, "result": {"type": "ask_user", "question", "options", "note"}}`
+    —— 流式循环看到 `type == "ask_user"` 时发 `event: ask_user` 并**暂停**，等待
+    用户点选后把选项作为下一条消息回传继续。
+    """
+    a = args or {}
+    question = (a.get("question") or "").strip()
+    options = a.get("options") or []
+    note = (a.get("note") or "").strip()
+    if not question:
+        return {"ok": False, "error": "question 不能为空"}
+    if not isinstance(options, list) or not (2 <= len(options) <= 4):
+        return {"ok": False, "error": "options 必须是 2~4 个可点选选项"}
+    opts = [str(o).strip() for o in options if str(o).strip()]
+    if len(opts) < 2:
+        return {"ok": False, "error": "options 至少要有 2 个非空选项"}
+    return {"ok": True, "result": {
+        "type": "ask_user", "question": question,
+        "options": opts[:4], "note": note,
+    }}
 
 
 def _exec_fmea_write_row(conn, args: dict) -> dict:

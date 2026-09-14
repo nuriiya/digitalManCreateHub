@@ -500,6 +500,11 @@
 | N-79 中文文件名 | Content-Disposition 含中文 part 不 500 | RFC 5987 filename* | 修复后 200（直塞 header 会 500）✅ |
 | N-80 空库行为 | 无 dfmea_rows 时导出 | 404 + 错误信息，无空文件 | 实测 404 ✅ |
 | N-81 动作返回链接 | `fmea_export_excel` 执行体 | ok + rows + 可点击 url | 带专属 token 的 URL ✅ |
+| N-82 ask_user 注册 | ask_user 在 BUILTIN_ACTIONS 且 _exec_ask_user 存在 | 均存在 | PASS ✅ |
+| N-83 ask_user 校验 | 合法 / 选项<2 / 空 question | 标记 / 拒绝 / 拒绝 | 3/3 ✅ |
+| N-84 询问纪律注入 | 绑 ask_user 的 persona 动作清单含纪律条款 | 含 | PASS ✅ |
+| N-85 ask_user 绑定 | 需求分析师 #1 + DFMEA 工程师 #9 幂等绑定 | 2/2 | bound ✅ |
+| N-86 模板无回归 | 蓝图新增 ask_user 后 verify_persona_templates | RESULT: OK | OK ✅ |
 
 ---
 
