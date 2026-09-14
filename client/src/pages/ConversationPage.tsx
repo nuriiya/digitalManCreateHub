@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
-  deleteChatSession, renameChatSession, clearChat, generateMcp, generatePipeline,
+  deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute,
 } from '../api'
 import { useToast } from '../Toast'
@@ -42,6 +42,9 @@ export default function ConversationPage({ refreshKey }: Props) {
   const [pipelineIds, setPipelineIds] = useState<number[]>([])
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  // 多选删除（design §13 配套）：selectMode 开关 + 选中 id 集合
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
@@ -73,6 +76,7 @@ export default function ConversationPage({ refreshKey }: Props) {
   }, [idents.length])
 
   useEffect(() => {
+    setSelectedIds(new Set())
     if (sessionId == null) { setMessages([]); return }
     const sess = sessions.find((s) => s.id === sessionId)
     const sessIdentityId = sess?.identity_id ?? approved[0]?.id ?? 0
@@ -297,6 +301,35 @@ export default function ConversationPage({ refreshKey }: Props) {
     try {
       await clearChat(sessIdentityId, sessionId)
       setMessages([])
+      setSelectedIds(new Set())
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
+  // ---- 多选删除 ----
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const toggleSelectAll = () => {
+    // 只选真实消息（id>0）；临时占位气泡（负数 id）不可选
+    const realIds = messages.filter((m) => m.id > 0).map((m) => m.id)
+    if (selectedIds.size >= realIds.length && realIds.every((id) => selectedIds.has(id))) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(realIds))
+    }
+  }
+  const doDeleteSelected = async () => {
+    if (selectedIds.size === 0) return
+    if (!confirm(`删除选中的 ${selectedIds.size} 条消息？`)) return
+    try {
+      const r = await deleteChatMessages([...selectedIds])
+      setMessages((ms) => ms.filter((m) => !selectedIds.has(m.id)))
+      setSelectedIds(new Set())
+      toast(`已删除 ${r.deleted} 条消息`, 'ok')
     } catch (e: any) { toast(e.message, 'err') }
   }
 
@@ -368,6 +401,26 @@ export default function ConversationPage({ refreshKey }: Props) {
             <span className="note" style={{ flex: 1 }}>
               {approved.length === 0 ? '尚无已批准数字人，请先在本体图谱页创建/批准。' : `已就绪 ${approved.length} 个数字人，自动路由中。`}
             </span>
+            <button className={`btn ghost small ${selectMode ? 'on' : ''}`}
+              onClick={() => { setSelectMode((v) => !v); setSelectedIds(new Set()) }}
+              disabled={sessionId == null || messages.length === 0}
+              title="多选消息后批量删除">
+              {selectMode ? '✓ 多选中' : '多选'}
+            </button>
+            {selectMode && (
+              <>
+                <button className="btn ghost small" onClick={toggleSelectAll}
+                  disabled={messages.filter((m) => m.id > 0).length === 0}>
+                  {(() => {
+                    const real = messages.filter((m) => m.id > 0).map((m) => m.id)
+                    return real.length > 0 && real.every((id) => selectedIds.has(id)) ? '取消全选' : '全选'
+                  })()}
+                </button>
+                <button className="btn red small" onClick={doDeleteSelected} disabled={selectedIds.size === 0}>
+                  删除所选 ({selectedIds.size})
+                </button>
+              </>
+            )}
             <button className="btn ghost small" onClick={doClear} disabled={sessionId == null || messages.length === 0}>
               清空对话
             </button>
@@ -382,7 +435,16 @@ export default function ConversationPage({ refreshKey }: Props) {
               <div key={g.key} className="chat-day">
                 <div className="chat-day-label">{g.label}</div>
                 {g.items.map((m) => (
-                  <div key={m.id} className={`chat-msg ${m.role}`}>
+                  <div key={m.id} className={`chat-msg ${m.role}`}
+                    style={selectMode && m.id > 0 ? { cursor: 'pointer', outline: selectedIds.has(m.id) ? '1.5px solid var(--accent)' : '1px dashed transparent', outlineOffset: '2px', borderRadius: 6 } : undefined}
+                    onClick={selectMode && m.id > 0 ? () => toggleSelect(m.id) : undefined}>
+                    {selectMode && m.id > 0 && (
+                      <input type="checkbox"
+                        checked={selectedIds.has(m.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelect(m.id)}
+                        style={{ flex: '0 0 auto', width: 'auto', marginRight: 6, accentColor: 'var(--accent)' }} />
+                    )}
                     {m.role === 'assistant' && m.identity_name && (
                       <span className="cv-identity">由「{m.identity_name}」回答</span>
                     )}

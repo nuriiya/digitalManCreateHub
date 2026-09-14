@@ -363,6 +363,23 @@ def clear_messages(conn, identity_id: int, session_id: int | None = None) -> int
     return cur.rowcount
 
 
+def delete_messages(conn, ids: list[int]) -> int:
+    """批量删除消息（按 id）。只删 id 精确匹配的行；空列表返回 0。"""
+    ids = [int(i) for i in (ids or []) if int(i) > 0]
+    if not ids:
+        return 0
+    # 分批 IN（防超长 SQL）；幂等：不存在的 id 静默跳过
+    n = 0
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        qs = ",".join("?" for _ in chunk)
+        cur = conn.execute(
+            f"DELETE FROM chat_messages WHERE id IN ({qs})", tuple(chunk))
+        n += cur.rowcount
+    conn.commit()
+    return n
+
+
 # ---------------- chat sessions (multi-session history) ----------------
 
 def _auto_title(message: str) -> str:

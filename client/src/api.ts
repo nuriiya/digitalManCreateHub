@@ -621,6 +621,9 @@ export const clearChat = (identityId: number, sessionId?: number | null) =>
   api<{ ok: boolean; deleted: number }>(
     `/api/chat/messages?identity_id=${identityId}${sessionId != null ? `&session_id=${sessionId}` : ''}`,
     { method: 'DELETE' })
+export const deleteChatMessages = (ids: number[]) =>
+  api<{ ok: boolean; deleted: number }>('/api/chat/messages/delete',
+    { method: 'POST', body: JSON.stringify({ ids }) })
 
 // ---------------- chat sessions (多会话历史) ----------------
 export const getChatSessions = (identityId?: number | null) =>

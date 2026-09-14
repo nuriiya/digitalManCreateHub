@@ -1898,6 +1898,16 @@ def clear_chat_messages(identity_id: int, session_id: int | None = None):
     return {"ok": True, "deleted": chat.clear_messages(db.get_conn(), identity_id, session_id)}
 
 
+class MessageBatchDeleteBody(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/chat/messages/delete")
+def batch_delete_chat_messages(body: MessageBatchDeleteBody):
+    """多选删除消息（按 id 批量）。"""
+    return {"ok": True, "deleted": chat.delete_messages(db.get_conn(), body.ids)}
+
+
 # ---------------- chat sessions (multi-session history) ----------------
 
 class SessionCreateBody(BaseModel):
