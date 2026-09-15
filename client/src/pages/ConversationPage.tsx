@@ -218,8 +218,11 @@ export default function ConversationPage({ refreshKey }: Props) {
     const text = (overrideText ?? input).trim()
     if (!text || sending) return
     setChatTrace(null)      // 新一轮开始：清掉上一轮的对话明细
-    // 创建 pipeline 模式：输入作为需求，LLM 设计节点+关系并落库 draft
-    if (genPipelineMode) {
+    // 创建 pipeline：① 点「🔗 创建 pipeline」按钮进入的模式；② 对话里直接说
+    // 「创建/新建/生成 pipeline」自动识别（2026-09-15 实验：此前只会路由到
+    // Pipeline 训练师，而训练师本体只懂「训练 pipeline」→ 拒绝创建）
+    const createIntent = /(创建|新建|生成|设计|搭建|建立|做一个|做个|写一个|写个|create|build|design|new|make)\s*(一个|一条|个|a|an)?\s*pipeline/i.test(text)
+    if (genPipelineMode || createIntent) {
       setSending(true)
       setInput('')
       try {
