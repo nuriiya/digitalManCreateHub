@@ -375,7 +375,18 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
                       ? <div className="note" style={{ padding: 48, textAlign: 'center', border: '1.5px dashed var(--border)', borderRadius: 10 }}>
                         暂无节点 —— 把左侧「组件气泡」拖进来，或去「编辑」页添加。
                       </div>
-                      : <PipelineGraph cur={cur} baseLayout={layout} personaName={personaName} />}
+                      : <PipelineGraph cur={cur} baseLayout={layout} personaName={personaName}
+                          onLink={async (fromId, toId) => {
+                            if (!sel) return
+                            try {
+                              await addPipelineRelation(sel, {
+                                from_node_id: fromId, to_node_id: toId,
+                                relation_type: 'handoff',
+                              })
+                              toast('已建立关系（handoff）', 'ok')
+                              reloadOne(sel)
+                            } catch (e: any) { toast(e.message, 'err') }
+                          }} />}
                   </div>
                 </div>
                 <div className="btnrow" style={{ marginTop: 8 }}>
@@ -489,11 +500,12 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
   )
 }
 
-// 自绘 SVG 流程图（DAG）— 可拖动 / 缩放 / 撤销重做 / 位置持久化
-function PipelineGraph({ cur, baseLayout, personaName }: {
+// 自绘 SVG 流程图（DAG）— 可拖动 / 缩放 / 撤销重做 / 位置持久化 / 拖线建关系
+function PipelineGraph({ cur, baseLayout, personaName, onLink }: {
   cur: Pipeline
   baseLayout: Record<number, { x: number; y: number; w: number }>
   personaName: (id: number | null) => string
+  onLink: (fromId: number, toId: number) => void
 }) {
   // 位置覆盖：用户拖动后的位置。key=node_id, value={x,y}
   const [positions, setPositions] = useState<Record<number, { x: number; y: number }>>(() => {
@@ -514,6 +526,8 @@ function PipelineGraph({ cur, baseLayout, personaName }: {
   const [redoStack, setRedoStack] = useState<Record<number, { x: number; y: number }>[]>([])
   // 画布视口：平移 + 缩放
   const [view, setView] = useState({ x: 0, y: 0, w: 1, zoom: 1 })
+  // 拖线建关系：from=起始节点，x/y=临时终点（画布坐标）
+  const [linkDrag, setLinkDrag] = useState<{ from: number; x: number; y: number } | null>(null)
   const dragRef = useRef<{ kind: 'node' | 'pan'; id?: number; startX: number; startY: number; orig?: { x: number; y: number }; origView?: { x: number; y: number } } | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
@@ -569,11 +583,33 @@ function PipelineGraph({ cur, baseLayout, personaName }: {
              y: positions[nid]?.y ?? baseLayout[nid]?.y ?? 0 },
     }
   }
+  // 屏幕坐标 → 画布坐标（用于拖线建关系）
+  const screenToCanvas = (cx: number, cy: number) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return { x: 0, y: 0 }
+    return {
+      x: (cx - rect.left) / view.zoom + vbX,
+      y: (cy - rect.top) / view.zoom + vbY,
+    }
+  }
+  // 从节点右侧出口圆点按下：开始拖线
+  const onMouseDownPort = (e: React.MouseEvent, nid: number) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const p = screenToCanvas(e.clientX, e.clientY)
+    setLinkDrag({ from: nid, x: p.x, y: p.y })
+  }
   const onMouseDownBg = (e: React.MouseEvent) => {
     e.preventDefault()
     dragRef.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, origView: { x: view.x, y: view.y } }
   }
   const onMouseMove = (e: React.MouseEvent) => {
+    // 拖线建关系：更新临时终点
+    if (linkDrag) {
+      const p = screenToCanvas(e.clientX, e.clientY)
+      setLinkDrag({ ...linkDrag, x: p.x, y: p.y })
+      return
+    }
     const d = dragRef.current
     if (!d) return
     const dxScreen = e.clientX - d.startX
@@ -589,7 +625,19 @@ function PipelineGraph({ cur, baseLayout, personaName }: {
       setView({ ...view, x: d.origView.x - dxScreen * k, y: d.origView.y - dyScreen * k })
     }
   }
-  const onMouseUp = () => {
+  const onMouseUp = (e: React.MouseEvent) => {
+    // 拖线建关系：松手判断是否落在某节点上
+    if (linkDrag) {
+      const p = screenToCanvas(e.clientX, e.clientY)
+      const target = cur.nodes.find((n) => {
+        const b = layout[n.id]
+        if (!b || n.id === linkDrag.from) return false
+        return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + NODE_H
+      })
+      if (target) onLink(linkDrag.from, target.id)
+      setLinkDrag(null)
+      return
+    }
     const d = dragRef.current
     if (d?.kind === 'node' && d.id != null) {
       // commit：压入 undoStack、清 redoStack、持久化到后端
@@ -622,7 +670,7 @@ function PipelineGraph({ cur, baseLayout, personaName }: {
         <button className="btn ghost small" disabled={undoStack.length === 0} onClick={undo}>↶ 撤销 ({undoStack.length})</button>
         <button className="btn ghost small" disabled={redoStack.length === 0} onClick={redo}>↷ 重做 ({redoStack.length})</button>
         <button className="btn ghost small" onClick={() => setView({ x: 0, y: 0, w: 1, zoom: 1 })}>居中</button>
-        <span style={{ color: 'var(--muted)' }}>滚轮缩放 · 拖空白处平移 · 拖节点移动 · Ctrl+Z 撤销</span>
+        <span style={{ color: 'var(--muted)' }}>滚轮缩放 · 拖空白处平移 · 拖节点移动 · 拖节点右侧圆点连线 · Ctrl+Z 撤销</span>
         <span style={{ marginLeft: 'auto' }}>缩放 {(view.zoom * 100).toFixed(0)}%</span>
       </div>
       <div style={{ overflow: 'hidden', border: '0.5px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)' }}>
@@ -694,9 +742,23 @@ function PipelineGraph({ cur, baseLayout, personaName }: {
                 <text x={p.x + 24} y={p.y + 79} fontSize="11" fill="#E5ECF2">{iface(inKinds.length ? inKinds.join(' / ') : '（无）', p.w - 36)}</text>
                 <text x={p.x + 10} y={p.y + 95} fontSize="10.5" fontWeight="700" fill="#D6B988">出</text>
                 <text x={p.x + 24} y={p.y + 95} fontSize="11" fill="#E5ECF2">{iface(outKinds.length ? outKinds.join(' / ') : '（无）', p.w - 36)}</text>
+                {/* 出口圆点：从这里拖到另一个节点，松手建立关系 */}
+                <circle cx={p.x + p.w} cy={p.y + NODE_H / 2} r={6.5}
+                  fill={stroke} stroke="#FFF" strokeWidth="1.3"
+                  style={{ cursor: 'crosshair' }}
+                  onMouseDown={(e) => onMouseDownPort(e, n.id)} />
               </g>
             )
           })}
+          {/* 拖线建关系：临时连线 */}
+          {linkDrag && (() => {
+            const a = layout[linkDrag.from]
+            if (!a) return null
+            return (
+              <line x1={a.x + a.w} y1={a.y + NODE_H / 2} x2={linkDrag.x} y2={linkDrag.y}
+                stroke="#5DCAA8" strokeWidth="2" strokeDasharray="6,4" markerEnd="url(#parrow)" />
+            )
+          })()}
         </svg>
       </div>
     </div>
