@@ -6,6 +6,7 @@ import {
   routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken, createChatSession,
   startPipelineSession, updatePipelineProgress, getJobEvents, getSessionEvents,
   type Identity, type ChatMessage, type ChatSession, type ChatRoute, type JobEvent,
+  type PipelineRoute,
 } from '../api'
 import { useToast } from '../Toast'
 import PipelineCard from '../components/PipelineCard'
@@ -67,6 +68,10 @@ export default function ConversationPage({ refreshKey }: Props) {
   // 普通对话的明细（E1）：模型每步收到什么/回了什么/调了什么工具
   const [chatTrace, setChatTrace] = useState<null | {
     sessionId: number; events: JobEvent[]
+  }>(null)
+  // 「创建 pipeline」意图 + 命中已有 pipeline 时的选择气泡
+  const [pendingChoice, setPendingChoice] = useState<null | {
+    assistantId: number; candidates: PipelineRoute[]; message: string
   }>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
@@ -214,15 +219,70 @@ export default function ConversationPage({ refreshKey }: Props) {
     } catch (e: any) { toast(e?.message || String(e), 'err') }
   }
 
+  // 选择气泡的应答：'create' = 创建新 pipeline；'run' = 运行候选 pipeline
+  const answerChoice = async (kind: 'create' | 'run', pid?: number, pname?: string) => {
+    const pc = pendingChoice
+    if (!pc) return
+    setPendingChoice(null)
+    setMessages((m) => m.filter((x) => x.id !== pc.assistantId))
+    if (kind === 'create') {
+      setSending(true)
+      try {
+        const r = await generatePipeline(pc.message)
+        if (r.ok) {
+          toast(`已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），待审批`, 'ok')
+          if (r.pipeline_id) setPipelineIds((v) => [...v, r.pipeline_id as number])
+          const tid = -Date.now()
+          setMessages((m) => [...m, {
+            id: tid, identity_id: 0, role: 'user', content: `创建 pipeline：${pc.message}`, created_at: Date.now() / 1000,
+          }, {
+            id: tid - 1, identity_id: 0, role: 'assistant',
+            content: `已生成 pipeline「${r.name}」（${r.nodes} 节点 / ${r.relations} 关系），状态 draft —— 见下方卡片，可就地**校验 / 批准 / 运行**。`,
+            created_at: Date.now() / 1000,
+          }])
+        } else {
+          toast(r.error || '生成失败', 'err')
+        }
+      } catch (e: any) {
+        toast(e.message, 'err')
+      } finally {
+        setSending(false)
+      }
+      return
+    }
+    if (pid == null) return
+    try {
+      const ps = await startPipelineSession({
+        message: pc.message, pipeline_id: pid, pipeline_name: pname || '',
+        session_id: sessionId,
+      })
+      setSessionId(ps.session_id)
+      setMessages((m) => [...m, {
+        id: -Date.now(), identity_id: 0, role: 'user', content: pc.message, created_at: Date.now() / 1000,
+      }, {
+        id: -Date.now() - 1, identity_id: 0, role: 'assistant',
+        identity_name: `pipeline「${pname}」`,
+        content: `🔗 **${pname}** 已触发，加载阶段进度…`,
+        created_at: Date.now() / 1000,
+      }])
+      const run = await runPipeline(pid)
+      setPipelineProgress({ pipelineId: pid, name: pname || '', assistantId: ps.assistant_msg_id, sessionId: ps.session_id, jobId: run.job_id })
+      toast(`已触发 pipeline「${pname}」运行`, 'ok')
+      refreshSessions()
+    } catch (e: any) {
+      toast(e?.message || String(e), 'err')
+    }
+  }
+
   const doSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
     if (!text || sending) return
     setChatTrace(null)      // 新一轮开始：清掉上一轮的对话明细
-    // 创建 pipeline：① 点「🔗 创建 pipeline」按钮进入的模式；② 对话里直接说
-    // 「创建/新建/生成 pipeline」自动识别（2026-09-15 实验：此前只会路由到
-    // Pipeline 训练师，而训练师本体只懂「训练 pipeline」→ 拒绝创建）
-    const createIntent = /(创建|新建|生成|设计|搭建|建立|做一个|做个|写一个|写个|create|build|design|new|make)\s*(一个|一条|个|a|an)?\s*pipeline/i.test(text)
-    if (genPipelineMode || createIntent) {
+    // 创建 pipeline 模式（点「🔗 创建 pipeline」按钮进入）：输入作为需求直接生成。
+    // 注：对话里直接说「创建 pipeline」现在走**训练师路由**（训练师本体已赋予
+    // 创建权限 + 绑定「生成 pipeline」动作，2026-09-15 治本改造），此处只保留
+    // 手动按钮入口。
+    if (genPipelineMode) {
       setSending(true)
       setInput('')
       try {
@@ -310,6 +370,14 @@ export default function ConversationPage({ refreshKey }: Props) {
     //    不渲染大卡片（user 2026-09-14：保持界面干净）——
     try {
       const pr = await routePipeline(text)
+      // 「创建 pipeline」意图 + 同时命中已有 pipeline → 弹选择气泡让用户定
+      // （2026-09-15：此前靠规则强行拦截，用户不认可；改为把选择权交回用户）
+      if (pr.create_intent && pr.candidates.length > 0) {
+        updateAssistant({ identity_name: '选择', content: '' })
+        setPendingChoice({ assistantId, candidates: pr.candidates, message: text })
+        setSending(false)
+        return
+      }
       const matchedPipeline = pr.pipeline
       if (matchedPipeline) {
         // WorkBuddy 式上下文保存（design §23.4）：后端立刻建组 + 持久化
@@ -780,6 +848,24 @@ export default function ConversationPage({ refreshKey }: Props) {
                   onClick={() => { setPendingAsk(null); toast('已跳过，数字人将自行假设继续', 'ok') }}>
                   跳过，让数字人自行决定
                 </button>
+              </div>
+            )}
+            {/* 「创建 pipeline」意图 + 命中已有 pipeline：让用户选（治本：选择权交回用户） */}
+            {pendingChoice && (
+              <div className="chat-ask-bubble">
+                <div className="chat-ask-title">🔀 你提到「创建 pipeline」，同时匹配到已有的 pipeline</div>
+                <div className="chat-ask-options">
+                  <button className="chat-ask-option"
+                    onClick={() => answerChoice('create')}>
+                    🆕 创建新 pipeline
+                  </button>
+                  {pendingChoice.candidates.map((c) => (
+                    <button key={c.pipeline_id} className="chat-ask-option"
+                      onClick={() => answerChoice('run', c.pipeline_id, c.name)}>
+                      ▶ 运行「{c.name}」
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>

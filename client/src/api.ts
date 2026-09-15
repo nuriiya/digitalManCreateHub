@@ -504,8 +504,13 @@ export interface PipelineRoute {
   pipeline_id: number; name: string; score: number; matched: string[];
   primary_persona_id?: number | null;
 }
+export interface PipelineRouteResult {
+  pipeline: PipelineRoute | null;
+  candidates: PipelineRoute[];
+  create_intent: boolean;
+}
 export const routePipeline = (message: string) =>
-  api<{ pipeline: PipelineRoute | null }>('/api/chat/route-pipeline', {
+  api<PipelineRouteResult>('/api/chat/route-pipeline', {
     method: 'POST', body: JSON.stringify({ message }),
   })
 

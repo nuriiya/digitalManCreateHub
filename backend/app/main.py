@@ -1923,7 +1923,7 @@ def chat_route_pipeline(body: RouteBody):
     手撸 tool-use（手撸有格式漂移/跳步/问是否开始三个坑）。"""
     from . import pipeline as pipeline_mod
     r = pipeline_mod.route_pipeline(db.get_conn(), body.message)
-    return {"pipeline": r}
+    return r
 
 
 class PipelineSessionBody(BaseModel):

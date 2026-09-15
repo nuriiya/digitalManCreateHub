@@ -66,6 +66,17 @@ BUILTIN_ACTIONS: dict[str, dict] = {
                          "required": ["path", "content"]},
         "category": "fs",
     },
+    # ---- 编排类动作：把自然语言需求转成 pipeline 结构 ----
+    "generate_pipeline": {
+        "name": "生成 pipeline",
+        "description": ("根据自然语言需求设计一个数字人协作的 pipeline（节点+关系），"
+                        "落库为 draft 待审批。这是「创建 pipeline」的核心动作："
+                        "把用户一句需求转成可运行的编排结构"),
+        "input_schema": {"type": "object",
+                         "properties": {"request": {"type": "string"}},
+                         "required": ["request"]},
+        "category": "exec",
+    },
     # ---- DFMEA 领域动作（design §15.3 的 C0~C4）----
     # 取值优先级链的执行体：搜部件(起) → 查历史(1) → 查表(2) → 问专家(3) → AI 推断(4)。
     # 都是**读证据 / 写结果**的知识型动作，不含任何领域判定逻辑。
@@ -278,6 +289,13 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
         return _exec_ask_user(conn, args)
     if builtin_name == "fmea_write_row":
         return _exec_fmea_write_row(conn, args)
+    if builtin_name == "generate_pipeline":
+        from . import pipeline
+        r = pipeline.generate_from_request(conn, (args or {}).get("request", ""))
+        if r.get("ok"):
+            return {"ok": True,
+                    "result": {k: v for k, v in r.items() if k != "ok"}}
+        return {"ok": False, "error": r.get("error", "生成 pipeline 失败")}
     return {"ok": False, "error": f"未知内置动作 {builtin_name}"}
 
 

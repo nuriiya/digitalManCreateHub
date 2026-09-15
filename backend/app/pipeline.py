@@ -108,12 +108,12 @@ def route_pipeline(conn, message: str) -> dict | None:
     """
     msg = (message or "").strip().lower()
     if not msg:
-        return None
-    # 创建/生成意图 → 不匹配已存在的 pipeline，交回数字人路由
-    # （2026-09-15 实测：消息含「pipeline」一词就被 wifi-module-dfmea-pipeline
-    #   的 name token 抢先命中并触发运行，而用户其实是要「创建」一个新 pipeline）
-    if _CREATE_PIPELINE_INTENT.search(msg):
-        return None
+        return {"pipeline": None, "candidates": [], "create_intent": False}
+    # 创建/生成意图 → 不自动运行已存在的 pipeline；把「创建意图 + 命中候选」一并
+    # 交回前端弹**选择气泡**（「创建新 pipeline」vs「运行已有 pipeline」）。
+    # 2026-09-15 实测：消息含「pipeline」一词就被 wifi-module-dfmea-pipeline 的
+    # name token 抢先命中并触发运行，而用户其实是要「创建」新 pipeline。
+    create_intent = bool(_CREATE_PIPELINE_INTENT.search(msg))
     rows = conn.execute(
         "SELECT id, name, description, tags FROM pipelines"
         " WHERE status=? AND COALESCE(is_archived, false)=false ORDER BY id DESC",
@@ -130,6 +130,7 @@ def route_pipeline(conn, message: str) -> dict | None:
         return out
 
     best: dict | None = None
+    candidates: list[dict] = []
     for p in rows:
         score = 0
         matched: list[str] = []
@@ -149,7 +150,7 @@ def route_pipeline(conn, message: str) -> dict | None:
         if desc and len(desc) >= 2 and (desc in msg or msg in desc):
             score += 2
             matched.append("描述")
-        if score > 0 and (best is None or score > best["score"]):
+        if score > 0:
             # primary_persona_id：第一个 nominate 节点绑定的数字人。
             # 对话层命中后用它**立刻**创建对话组（design §23.4：用户发送后
             # 左侧立刻出现新组，不等运行/回复完成）。
@@ -157,10 +158,16 @@ def route_pipeline(conn, message: str) -> dict | None:
                 "SELECT persona_id FROM pipeline_nodes WHERE pipeline_id=?"
                 " AND kind=? AND persona_id IS NOT NULL ORDER BY id LIMIT 1",
                 (p["id"], KIND_NOMINATE)).fetchone()
-            best = {"pipeline_id": p["id"], "name": p["name"],
+            cand = {"pipeline_id": p["id"], "name": p["name"],
                     "score": score, "matched": list(dict.fromkeys(matched)),
                     "primary_persona_id": (pp["persona_id"] if pp else None)}
-    return best
+            candidates.append(cand)
+            if best is None or score > best["score"]:
+                best = cand
+    if create_intent:
+        # 创建意图：pipeline 置空（不自动运行），候选列表供前端气泡让用户选
+        return {"pipeline": None, "candidates": candidates, "create_intent": True}
+    return {"pipeline": best, "candidates": candidates, "create_intent": False}
 
 
 # ---------------- 运行记录 / 交接物（读取侧） ----------------
