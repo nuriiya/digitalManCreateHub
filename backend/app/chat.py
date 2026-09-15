@@ -1042,6 +1042,14 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 #: 逐格来源标注一律不放松；抬高的只是「允许它把该查的查完」的空间。
 MAX_ACTION_ROUNDS = 14
 _TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)(?:</[^>]*>|\Z)", re.DOTALL)
+# XML 风格工具调用（2026-09-15 实测）：<invoke name="X"><parameter name="Y">V</parameter></invoke>
+_INVOKE_RE = re.compile(r"<invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</invoke>",
+                        re.DOTALL)
+_PARAM_RE = re.compile(r"<parameter\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</parameter>",
+                       re.DOTALL)
+# 这些参数在 XML 风格下常见「多行=数组」的写法，拆成列表
+_LIST_PARAM_KEYS = {"options", "rows", "items", "tags", "parts", "list",
+                    "queries", "keywords"}
 #: LLM 常臆造结束标记（如 `</arg_value>`），抠 JSON 前先剥掉尾部伪标签
 _TAG_TAIL = re.compile(r"</[^>]*>")
 
@@ -1148,14 +1156,14 @@ def _salvage_tool_json(raw: str):
 def _parse_tool_calls(reply: str) -> list[tuple[str, dict]]:
     """解析回复里**全部** `<tool_call>`（不是只取第一个）。
 
-    两条来自实测（2026-09-11，DFMEA 全链路空转）的兼容要求：
+    兼容三种实测格式：
 
-      1. **并行调用** —— 模型会一次输出多个 `<tool_call>`（DFMEA 一次查 5 组
-         AP）。只解析第一个会让其余调用**被静默丢弃**，模型以为"还在等其余
-         返回"而反复重试同类调用，直到轮数耗尽、产出停在裸 tool_call。
-      2. **动作名在 JSON 之外** —— 模型也会写出
-         `<tool_call>检索本体{"args": {...}}</tool_call>`（JSON 里没有 name）。
-         此时取 JSON 之前的文本作为动作名。
+      1. **标准 JSON** —— `<tool_call>{"name": "...", "args": {...}}</tool_call>`
+      2. **名字在 JSON 之外** —— `<tool_call>检索本体{"args": {...}}</tool_call>`
+      3. **XML 风格（2026-09-15 实测新增）** —— 模型会输出
+         `<tool_calls><invoke name="询问专家数字人"><parameter name="expert">射频硬件专家
+         </parameter></invoke></tool_calls>`。这种格式此前完全解析不出来 → 工具
+         不执行 → 汇总/复核阶段空转（run #45 产出 0 行的直接原因）。
     """
     out: list[tuple[str, dict]] = []
     for m in _TOOL_CALL.finditer(reply or ""):
@@ -1171,6 +1179,23 @@ def _parse_tool_calls(reply: str) -> list[tuple[str, dict]]:
             name = chunk[:brace].strip().strip('"').strip() if brace > 0 else ""
         if name:
             out.append((name, args))
+    # 格式 3：XML 风格 <invoke name="X"><parameter name="Y">V</parameter></invoke>
+    for im in _INVOKE_RE.finditer(reply or ""):
+        name = (im.group(1) or "").strip()
+        if not name:
+            continue
+        args: dict = {}
+        for pm in _PARAM_RE.finditer(im.group(2) or ""):
+            key = (pm.group(1) or "").strip()
+            val = (pm.group(2) or "").strip()
+            if not key:
+                continue
+            # 数组型参数（如 options/rows）尝试按行/逗号拆
+            if "\n" in val and key in _LIST_PARAM_KEYS:
+                args[key] = [x.strip() for x in val.splitlines() if x.strip()]
+            else:
+                args[key] = val
+        out.append((name, args))
     return out
 
 
