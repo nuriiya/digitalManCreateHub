@@ -1041,7 +1041,9 @@ def _retrieve_context(anchors: list[dict], ontology: list[dict],
 #: 这是**工程边界**而不是放宽生成标准：来源闭集校验、AP 以表为准、
 #: 逐格来源标注一律不放松；抬高的只是「允许它把该查的查完」的空间。
 MAX_ACTION_ROUNDS = 14
-_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)(?:</[^>]*>|\Z)", re.DOTALL)
+_TOOL_CALL = re.compile(
+    r"<tool_call(?:\s+name=[\"']([^\"']+)[\"'])?\s*>(.*?)(?:</[^>]*>|\Z)",
+    re.DOTALL)
 # XML 风格工具调用（2026-09-15 实测）：<invoke name="X"><parameter name="Y">V</parameter></invoke>
 _INVOKE_RE = re.compile(r"<invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</invoke>",
                         re.DOTALL)
@@ -1167,13 +1169,29 @@ def _parse_tool_calls(reply: str) -> list[tuple[str, dict]]:
     """
     out: list[tuple[str, dict]] = []
     for m in _TOOL_CALL.finditer(reply or ""):
-        chunk = (m.group(1) or "").strip()
+        attr_name = (m.group(1) or "").strip()   # <tool_call name="X"> 的属性式名字
+        chunk = (m.group(2) or "").strip()
         data = _salvage_tool_json(chunk)
         if not isinstance(data, dict):
+            # 纯文本内容：两种实测变体
+            #   <tool_call name="name">搜索部件清单</tool_call>（属性值误写成 name）
+            #   <tool_call>检索本体</tool_call>
+            text = re.sub(r"<[^>]+>", " ", chunk).strip()
+            cand = ""
+            if attr_name and attr_name.lower() not in ("name", "tool_call"):
+                cand = attr_name
+            elif text:
+                cand = text.splitlines()[0].strip()[:40]
+            if cand:
+                out.append((cand, {}))
             continue
         args = data.get("args")
         args = args if isinstance(args, dict) else {}
         name = str(data.get("name") or "").strip()
+        if not name:
+            # 属性式名字优先于「JSON 之前的文本」（2026-09-15 实测：
+            # <tool_call name="询问专家数字人">{...}</tool_call>）
+            name = attr_name
         if not name:
             brace = chunk.find("{")
             name = chunk[:brace].strip().strip('"').strip() if brace > 0 else ""
