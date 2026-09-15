@@ -9,6 +9,7 @@
 guard_action 执行前把关）。未经用户审批的动作不可被调用。
 """
 import json
+import re
 
 from . import db, llm
 
@@ -75,6 +76,44 @@ BUILTIN_ACTIONS: dict[str, dict] = {
         "input_schema": {"type": "object",
                          "properties": {"request": {"type": "string"}},
                          "required": ["request"]},
+        "category": "exec",
+    },
+    # ---- 数字人批量生产 + 知识测试 + 迭代（MR 知识官生产线，2026-09-15）----
+    "create_persona": {
+        "name": "创建数字人",
+        "description": ("按「领域专家」模板创建一个数字人（知识官）。传入名称、负责的"
+                        "子系统/模块、知识范围、关键词、领域本体（多行「类型|名称|定义」，"
+                        "类型 ∈ 概念/规则/流程/角色/指标）。确定性写入身份+锚点+本体+动作，"
+                        "按 name 幂等。用于批量生产按模块细分的领域知识官"),
+        "input_schema": {"type": "object",
+                         "properties": {"name": {"type": "string"},
+                                        "subsystem": {"type": "string"},
+                                        "scope": {"type": "string"},
+                                        "keywords": {"type": "string"},
+                                        "domain_ontology": {"type": "string"}},
+                         "required": ["name", "subsystem"]},
+        "category": "exec",
+    },
+    "test_knowledge": {
+        "name": "测试知识官",
+        "description": ("对某数字人跑知识零幻觉测试：用 flash 问它若干领域问题，逐题判定"
+                        "回答是否「有本体依据、无编造、不知道就说不知道」。返回通过率与失败明细"),
+        "input_schema": {"type": "object",
+                         "properties": {"identity_id": {"type": "integer"},
+                                        "questions": {"type": "array",
+                                                      "items": {"type": "string"}}},
+                         "required": ["identity_id"]},
+        "category": "exec",
+    },
+    "train_iterate": {
+        "name": "训练迭代",
+        "description": ("对某数字人做「测试→失败归因→补本体→复测」的迭代：先测知识零幻觉，"
+                        "对失败题用 flash 提炼缺失的本体知识并补入，再复测，返回提升"),
+        "input_schema": {"type": "object",
+                         "properties": {"identity_id": {"type": "integer"},
+                                        "questions": {"type": "array",
+                                                      "items": {"type": "string"}}},
+                         "required": ["identity_id"]},
         "category": "exec",
     },
     # ---- DFMEA 领域动作（design §15.3 的 C0~C4）----
@@ -296,7 +335,142 @@ def execute_builtin(conn, identity_id: int, builtin_name: str, args: dict) -> di
             return {"ok": True,
                     "result": {k: v for k, v in r.items() if k != "ok"}}
         return {"ok": False, "error": r.get("error", "生成 pipeline 失败")}
+    if builtin_name == "create_persona":
+        return _exec_create_persona(conn, args or {})
+    if builtin_name == "test_knowledge":
+        return _exec_test_knowledge(conn, args or {})
+    if builtin_name == "train_iterate":
+        return _exec_train_iterate(conn, args or {})
     return {"ok": False, "error": f"未知内置动作 {builtin_name}"}
+
+
+def _exec_create_persona(conn, args: dict) -> dict:
+    """用「领域专家」模板（part_expert）确定性创建一个数字人/知识官。
+
+    这是「批量生产领域知识官」的核心动作：把名称 + 子系统 + 领域本体（多行
+    「类型|名称|定义」）交给 persona_templates.instantiate，一次写入身份+锚点+
+    本体+动作。按 name 幂等。
+    """
+    from . import persona_templates
+    tpl = persona_templates.get_by_code(conn, "part_expert")
+    if not tpl:
+        return {"ok": False, "error": "领域专家模板 part_expert 不存在"}
+    values = {
+        "name": str(args.get("name") or "").strip(),
+        "subsystem": str(args.get("subsystem") or "").strip(),
+        "scope": str(args.get("scope") or "").strip(),
+        "keywords": str(args.get("keywords") or "").strip(),
+        "domain_ontology": str(args.get("domain_ontology") or "").strip(),
+    }
+    if not values["name"] or not values["subsystem"]:
+        return {"ok": False, "error": "name 和 subsystem 必填"}
+    r = persona_templates.instantiate(conn, tpl, values, status="approved")
+    if r.get("ok"):
+        return {"ok": True, "result": {
+            "identity_id": r.get("identity_id"), "name": r.get("name"),
+            "category": r.get("category"), "counts": r.get("counts") or {}}}
+    return {"ok": False, "error": "; ".join(r.get("errors") or ["创建失败"])}
+
+
+def _exec_test_knowledge(conn, args: dict) -> dict:
+    """知识零幻觉测试：flash 问数字人领域问题，flash 判定是否零幻觉。
+
+    判定三关：① 回答有无本体依据（不编造）；② 是否编造具体数值/引用；
+    ③ 本体没有时是否说「不知道」。返回通过率 + 逐题明细。
+    """
+    identity_id = args.get("identity_id")
+    if not identity_id:
+        return {"ok": False, "error": "identity_id 必填"}
+    from . import trainer, llm
+    onto = trainer.list_ontology(conn, identity_id)
+    onto_text = "\n".join(f"[{o.get('kind')}] {o.get('name')}: {o.get('definition')}"
+                          for o in onto)
+    questions = args.get("questions") or []
+    if not questions:
+        questions = [
+            "请介绍你负责的领域/模块，以及它的核心知识点（只讲本体里有的，不确定的明确说「不知道」）。",
+            "请给出你负责模块里一个具体技术概念的定义；如果本体里没有具体数值，不要编造。",
+        ]
+    if not isinstance(questions, list):
+        questions = [str(questions)]
+    results = []
+    for q in questions:
+        answer = llm.chat([
+            {"role": "system",
+             "content": "你是领域知识官。只能用下面「本体」回答，本体没有的一律说「不知道」，"
+                        "禁止编造具体数值、文献引用或本体里没有的事实。\n\n本体：\n" + onto_text},
+            {"role": "user", "content": str(q)},
+        ], temperature=0.1)
+        verdict_prompt = (
+            "判定下面的「领域知识官回答」是否零幻觉。标准：\n"
+            "1) 内容是否都能在本体里找到依据（无编造）；\n"
+            "2) 是否编造了具体数值、文献引用、或本体里没有的事实；\n"
+            "3) 本体没有时是否明确说「不知道」。\n"
+            "只输出 JSON：{\"pass\": true 或 false, \"reason\": \"一句话\"}\n\n"
+            "本体：\n" + onto_text + "\n\n回答：\n" + answer)
+        vtext = llm.chat([{"role": "user", "content": verdict_prompt}], temperature=0.0)
+        verdict = {"pass": False, "reason": "判定解析失败"}
+        m = re.search(r'"pass"\s*:\s*(true|false)', vtext, re.IGNORECASE)
+        if m:
+            verdict["pass"] = m.group(1).lower() == "true"
+        rm = re.search(r'"reason"\s*:\s*"([^"]*)"', vtext)
+        if rm:
+            verdict["reason"] = rm.group(1)
+        results.append({"question": str(q), "answer": answer[:400],
+                        "pass": verdict["pass"], "reason": verdict["reason"]})
+    passed = sum(1 for r in results if r["pass"])
+    total = len(results)
+    return {"ok": True, "result": {"identity_id": identity_id,
+                                   "passed": passed, "total": total,
+                                   "pass_rate": (passed / total) if total else 0.0,
+                                   "results": results}}
+
+
+def _exec_train_iterate(conn, args: dict) -> dict:
+    """知识迭代：测试 → 失败归因 → 补本体 → 复测（最多补 3 条本体）。
+
+    复用 flash 做「失败归因」：从失败题里提炼一条缺失的本体知识补入，复测看提升。
+    """
+    identity_id = args.get("identity_id")
+    if not identity_id:
+        return {"ok": False, "error": "identity_id 必填"}
+    questions = args.get("questions") or []
+    from . import trainer, llm
+    test = _exec_test_knowledge(conn, {"identity_id": identity_id,
+                                       "questions": questions})
+    if not test.get("ok"):
+        return test
+    res = test["result"]
+    fails = [r for r in res["results"] if not r["pass"]]
+    if not fails:
+        return {"ok": True, "result": {"identity_id": identity_id,
+                                       "pass_rate": res["pass_rate"],
+                                       "added_ontology": 0,
+                                       "note": "首测全过，无需迭代"}}
+    added = 0
+    for f in fails[:3]:
+        seed_prompt = (
+            "领域知识官在回答下面问题时被判为「有幻觉/不准确」。请从问题本身提炼一条"
+            "**该领域的本体知识**（一行「类型|名称|定义」，类型 ∈ 概念/规则/流程），"
+            "补足知识官的本体，让它下次能准确回答。只输出一行。\n\n"
+            f"问题：{f['question']}\n判定理由：{f['reason']}")
+        line = llm.chat([{"role": "user", "content": seed_prompt}],
+                        temperature=0.1).strip()
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3 and parts[1]:
+            trainer.add_ontology(conn, identity_id,
+                                 parts[0] or "概念", parts[1], "|".join(parts[2:]),
+                                 note="知识迭代自动补全")
+            added += 1
+    test2 = _exec_test_knowledge(conn, {"identity_id": identity_id,
+                                        "questions": questions})
+    res2 = test2.get("result", {}) if test2.get("ok") else {}
+    return {"ok": True, "result": {
+        "identity_id": identity_id,
+        "added_ontology": added,
+        "before": res["pass_rate"],
+        "after": res2.get("pass_rate", res["pass_rate"]),
+        "results": res2.get("results", res["results"])}}
 
 
 def _exec_ontology_retrieve(conn, identity_id: int, query: str) -> dict:
