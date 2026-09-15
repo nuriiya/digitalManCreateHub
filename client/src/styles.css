@@ -1184,3 +1184,18 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
 .status-pill.stopped { background: var(--panel2); color: var(--muted); }
 .status-pill.error { background: rgba(226, 75, 74, 0.18); color: #f09595; }
 
+/* 组件气泡面板（拖拽搭建 pipeline，目标 B） */
+.palette { overflow-y: auto; max-height: 560px; }
+.palette-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 9px; margin-bottom: 6px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); cursor: grab; font-size: 12.5px;
+  transition: transform .12s, border-color .12s, background .12s;
+  user-select: none;
+}
+.palette-item:hover { border-color: var(--accent); transform: translateX(2px); }
+.palette-item:active { cursor: grabbing; }
+.palette-ico { font-size: 14px; }
+
+

@@ -254,6 +254,30 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
     } catch (e: any) { toast(e.message, 'err') }
   }
 
+  // —— 拖拽搭建（目标 B）：从组件气泡拖数字人到画布 → 创建节点 ——
+  const autoNodeKey = () => {
+    let k = 1
+    while ((cur?.nodes || []).some((n) => n.node_key === `n${k}`)) k++
+    return `n${k}`
+  }
+  const handleDropPersona = async (e: React.DragEvent) => {
+    e.preventDefault()
+    if (!sel) return
+    const pid = e.dataTransfer.getData('application/persona')
+    if (!pid) return
+    const p = idents.find((i) => i.id === Number(pid))
+    try {
+      await addPipelineNode(sel, {
+        node_key: autoNodeKey(),
+        persona_id: Number(pid),
+        kind: 'nominate',
+        step_name: p?.name || '',
+      })
+      toast(`已添加节点「${p?.name || pid}」`, 'ok')
+      reloadOne(sel)
+    } catch (e: any) { toast(e.message, 'err') }
+  }
+
   const layout = useMemo(() => layoutPipeline(cur, personaName), [cur, idents])
 
   return (
@@ -330,9 +354,30 @@ export default function PipelinePage({ refreshKey }: { refreshKey: number }) {
             {view === 'graph' && (
               <div className="card">
                 <h3>图片化结构流程图</h3>
-                {cur.nodes.length === 0
-                  ? <div className="note">暂无节点，去「编辑」添加数字人节点。</div>
-                  : <PipelineGraph cur={cur} baseLayout={layout} personaName={personaName} />}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+                  {/* 组件气泡面板：拖到画布即可添加节点（目标 B） */}
+                  <div className="palette" style={{ width: 176, flexShrink: 0, borderRight: '1px solid var(--border)', paddingRight: 10 }}>
+                    <b className="note">组件气泡</b>
+                    <div className="desc" style={{ fontSize: 11, marginBottom: 8 }}>拖到右侧画布，松手即添加节点</div>
+                    {idents.filter((i) => i.status === 'approved').map((i) => (
+                      <div key={i.id} draggable
+                        onDragStart={(e) => { e.dataTransfer.setData('application/persona', String(i.id)); e.dataTransfer.effectAllowed = 'copy' }}
+                        className="palette-item" title={`拖到画布添加「${i.name}」节点`}>
+                        <span className="palette-ico">🧩</span>{i.name}
+                      </div>
+                    ))}
+                  </div>
+                  {/* 画布：接收拖入 */}
+                  <div style={{ flex: 1, minWidth: 0 }}
+                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+                    onDrop={handleDropPersona}>
+                    {cur.nodes.length === 0
+                      ? <div className="note" style={{ padding: 48, textAlign: 'center', border: '1.5px dashed var(--border)', borderRadius: 10 }}>
+                        暂无节点 —— 把左侧「组件气泡」拖进来，或去「编辑」页添加。
+                      </div>
+                      : <PipelineGraph cur={cur} baseLayout={layout} personaName={personaName} />}
+                  </div>
+                </div>
                 <div className="btnrow" style={{ marginTop: 8 }}>
                   <button className="btn ghost small" onClick={doValidate}>校验</button>
                   {cur.status !== 'approved' && <button className="btn green small" onClick={doApprove}>批准（打标签入本体库）</button>}
