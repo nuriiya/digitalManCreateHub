@@ -396,19 +396,29 @@ def _brief(value, limit: int = 300) -> str:
 
 
 def _emit_chat_event(conn, session_id, identity_id, type_, fields) -> None:
-    """对话维度事件（实验分支 E1）：job_id 留空，靠 session_id 归组。
+    """对话/阶段维度事件（实验分支 E1）。
 
-    **为什么显式传 session_id**：对话流是生成器，被服务端线程池分段迭代，
-    线程标记（thread-local）在分段之间会丢——所以归属信息必须显式带上。
+    - 对话场景：job 号留空，靠 session_id 归组
+    - pipeline 场景：带 job 号 + 当前阶段标记（node_key），阶段手风琴能看到
+      这一步调了什么工具
+    **为什么显式传**：对话流是生成器，被服务端线程池分段迭代，线程标记
+    （thread-local）在分段之间会丢——所以归属信息必须显式带上。
     """
-    if session_id is None:
-        return
+    job_id = jobs.current_job_id()
+    if session_id is None and job_id is None:
+        return          # 既无对话又无任务：不记，避免污染事件表
     try:
         payload = dict(fields)
-        payload["session_id"] = session_id
+        if session_id is not None:
+            payload["session_id"] = session_id
         if identity_id is not None:
             payload["identity_id"] = identity_id
-        jobs.emit(conn, jobs.current_job_id(), type_, payload)
+        nc = jobs.node_context()
+        if nc.get("node_key"):
+            payload.setdefault("node_key", nc["node_key"])
+            if nc.get("index") is not None:
+                payload.setdefault("node_index", nc["index"])
+        jobs.emit(conn, job_id, type_, payload)
     except Exception:  # noqa: BLE001
         pass  # 记录失败不影响对话
 
@@ -1366,6 +1376,14 @@ def _generate(conn, identity_id: int, message: str, use_ontology: bool,
             tool_calls.append({"name": name, "ok": result.get("ok", False),
                                "result": (result.get("result") if result.get("ok")
                                           else result.get("error"))})
+            # E1：pipeline 阶段内的工具调用也落一条事件（阶段手风琴可见）
+            _emit_chat_event(conn, session_id, identity_id, "tool.exec", {
+                "name": name, "ok": bool(result.get("ok")),
+                "reason": None if result.get("ok") else reason,
+                "result_preview": _brief(result.get("result")
+                                         if result.get("ok")
+                                         else result.get("error")),
+            })
             lines.append(f"· 动作「{name}」执行结果："
                          + json.dumps(result, ensure_ascii=False))
         messages.append({"role": "assistant", "content": reply})

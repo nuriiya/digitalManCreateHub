@@ -4,12 +4,13 @@ import {
   getIdentities, getChatMessages, sendChat, routeChat, streamChat, getChatSessions,
   deleteChatSession, renameChatSession, clearChat, deleteChatMessages, generateMcp, generatePipeline,
   routePipeline, runPipeline, getPipeline, getPipelineRuns, getToken, createChatSession,
-  startPipelineSession, updatePipelineProgress, getJobEvents,
-  type Identity, type ChatMessage, type ChatSession, type ChatRoute,
+  startPipelineSession, updatePipelineProgress, getJobEvents, getSessionEvents,
+  type Identity, type ChatMessage, type ChatSession, type ChatRoute, type JobEvent,
 } from '../api'
 import { useToast } from '../Toast'
 import PipelineCard from '../components/PipelineCard'
 import PipelineProgressCard from '../components/PipelineProgressCard'
+import ChatTraceCard from '../components/ChatTraceCard'
 
 interface Props {
   refreshKey: number
@@ -63,6 +64,10 @@ export default function ConversationPage({ refreshKey }: Props) {
     jobId?: number;
   }>(null)
   const [progressDone, setProgressDone] = useState<null | { runId: number }>(null)
+  // 普通对话的明细（E1）：模型每步收到什么/回了什么/调了什么工具
+  const [chatTrace, setChatTrace] = useState<null | {
+    sessionId: number; events: JobEvent[]
+  }>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
@@ -212,6 +217,7 @@ export default function ConversationPage({ refreshKey }: Props) {
   const doSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
     if (!text || sending) return
+    setChatTrace(null)      // 新一轮开始：清掉上一轮的对话明细
     // 创建 pipeline 模式：输入作为需求，LLM 设计节点+关系并落库 draft
     if (genPipelineMode) {
       setSending(true)
@@ -427,6 +433,14 @@ export default function ConversationPage({ refreshKey }: Props) {
                 identity_name: route.identity_name,
                 content: data.reply || accumulated,
               })
+            }
+            // E1：拉取本轮对话明细（模型每步收到什么/回了什么/调了什么工具）
+            const sid = data.session_id ?? sessionId
+            if (sid) {
+              getSessionEvents(sid)
+                .then((r) => setChatTrace({ sessionId: sid,
+                                            events: r.events ?? [] }))
+                .catch(() => { })
             }
             refreshSessions()
           },
@@ -780,6 +794,11 @@ export default function ConversationPage({ refreshKey }: Props) {
                 ⭳ 下载 FMEA Excel 报告
               </button>
             </div>
+          )}
+
+          {/* 普通对话的明细（E1）：点开看模型每步的收到/回复/工具调用 */}
+          {chatTrace && chatTrace.events.length > 0 && (
+            <ChatTraceCard events={chatTrace.events} />
           )}
 
           <div className={`chat-bubble ${genMcpMode ? 'mcp-on' : ''} ${genPipelineMode ? 'pipe-on' : ''}`}>
