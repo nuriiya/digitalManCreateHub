@@ -87,6 +87,12 @@ def get_pipeline(conn, pipeline_id) -> dict | None:
     return d
 
 
+_CREATE_PIPELINE_INTENT = re.compile(
+    r"(创建|新建|生成|设计|搭建|建立|做一个|做个|写一个|写个|造一个|造个"
+    r"|create|build|design|new|make)\s*(一个|一条|个|a|an)?\s*pipeline"
+)
+
+
 def route_pipeline(conn, message: str) -> dict | None:
     """确定性 pipeline 匹配（0 LLM，design §23 / R-25）：把用户消息匹配到
     最佳 pipeline（仅 approved + 非归档）。
@@ -102,6 +108,11 @@ def route_pipeline(conn, message: str) -> dict | None:
     """
     msg = (message or "").strip().lower()
     if not msg:
+        return None
+    # 创建/生成意图 → 不匹配已存在的 pipeline，交回数字人路由
+    # （2026-09-15 实测：消息含「pipeline」一词就被 wifi-module-dfmea-pipeline
+    #   的 name token 抢先命中并触发运行，而用户其实是要「创建」一个新 pipeline）
+    if _CREATE_PIPELINE_INTENT.search(msg):
         return None
     rows = conn.execute(
         "SELECT id, name, description, tags FROM pipelines"
