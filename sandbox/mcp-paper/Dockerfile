@@ -3,12 +3,15 @@
 # 注册:  image=mcp-paper:latest, transport=stdio, command=""（默认 CMD 启动 server.py）
 # 连接:  MCP client 以 stdio 方式连接容器（docker exec / docker run -i）
 
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
+# 清空代理（build daemon 的 127.0.0.1:6789 在 WSL 里连不通），pip 走清华源直连
+ENV HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy=
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
 COPY server.py .
 
