@@ -1,0 +1,18 @@
+# Line-ending policy (repository level).
+#
+# These files MUST be LF in the worktree:
+#   * .sh                     -> a CRLF shebang breaks `bash ops/wsl_up.sh`
+#                                under WSL ("$'\r': command not found") and
+#                                container exec ("exec /app/entrypoint.sh:
+#                                no such file or directory" — the kernel goes
+#                                looking for "/bin/sh\r").
+#   * Dockerfile / *.yml      -> same class of breakage (entrypoint, apt
+#                                sources, buildx/compose parsing).
+#
+# This machine runs core.autocrlf=true, so without this file git rewrites
+# every checkout of these files to CRLF and silently re-breaks the WSL and
+# container start scripts. Keep this file in the repo.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

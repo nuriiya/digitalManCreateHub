@@ -27,7 +27,7 @@ Thumbs.db
 # Project-local memory (per working memory: do not commit)
 .workbuddy/
 .venv_broken_bak/
-
+.env
 # Build artifacts
 client/tsconfig.tsbuildinfo
 .venv*/

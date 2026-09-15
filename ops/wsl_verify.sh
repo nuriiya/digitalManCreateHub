@@ -9,7 +9,7 @@ TOKEN=$(curl -s -m 8 -X POST -H 'Content-Type: application/json' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 echo "token: ${TOKEN:0:16}..."
 
-curl -s -m 8 -H "Authorization: Bearer $TOKEN" "$BASE/api/identities" > /tmp/_ids.json
+curl -s -m 8 -H "Authorization: Bearer $TOKEN" "$BASE/api/ontology/identities" > /tmp/_ids.json
 python3 - << 'PY'
 import json
 d = json.load(open('/tmp/_ids.json'))
