@@ -44,8 +44,12 @@ export default function PipelineProgressCard({ raw }: { raw: string }) {
     if (cache[i]) return
     try {
       const r = await getJobEvents(data.jobId)
-      const evs = (r.events ?? []).filter((e: JobEvent) =>
-        (e.type === 'llm.call' || e.type === 'llm.reply') &&
+      const mine = (r.events ?? []).filter((e: JobEvent) =>
+        e.type === 'llm.call' || e.type === 'llm.reply' || e.type === 'tool.exec')
+      // 优先按**明确标记**归属（事件自带 node_key，E1 改造后）；没有标记的
+      // 旧事件退回按序号区间判断（兼容历史数据）
+      const explicit = mine.filter((e: JobEvent) => e.payload?.node_key === data.stages[i]?.key)
+      const evs = explicit.length ? explicit : mine.filter((e: JobEvent) =>
         e.seq >= (data.stages[i]?.seqStart ?? 0) &&
         e.seq < (data.stages[i]?.seqEnd ?? Number.MAX_SAFE_INTEGER))
       setCache((c) => ({ ...c, [i]: evs.sort((a: JobEvent, b: JobEvent) => a.seq - b.seq) }))
@@ -77,18 +81,28 @@ export default function PipelineProgressCard({ raw }: { raw: string }) {
                   <div className="ppc-empty">该阶段暂无 LLM 交互记录</div>
                 )}
                 {cache[i]?.map((e) => (
-                  <div key={e.seq} className={`ppc-ev ${e.type === 'llm.call' ? 'call' : 'reply'}`}>
+                  <div key={e.seq}
+                    className={`ppc-ev ${e.type === 'llm.call' ? 'call'
+                      : e.type === 'tool.exec' ? 'tool' : 'reply'}`}>
                     <div className="ppc-ev-head">
-                      {e.type === 'llm.call' ? '📤 发给' : '📥 来自'}
-                      <b> {e.payload?.model || 'LLM'}</b>
+                      {e.type === 'llm.call' ? '📤 发给'
+                        : e.type === 'tool.exec'
+                          ? (e.payload?.ok ? '🔧 工具（成功）' : '🔧 工具（失败）')
+                          : '📥 来自'}
+                      <b> {e.type === 'tool.exec'
+                        ? (e.payload?.name || '动作')
+                        : (e.payload?.model || 'LLM')}</b>
                       <span className="ppc-ev-len">
                         {e.type === 'llm.call'
                           ? `（${e.payload?.prompt_len ?? '?'} 字提示）`
-                          : `（${String(e.payload?.reply_preview || '').length} 字预览）`}
+                          : e.type === 'tool.exec'
+                            ? `（${e.payload?.ok ? '已执行' : (e.payload?.reason || '被拒绝')}）`
+                            : `（${String(e.payload?.reply_preview || '').length} 字预览）`}
                       </span>
                     </div>
                     <pre className="ppc-ev-body">
-                      {String(e.payload?.prompt_preview || e.payload?.reply_preview || '（无内容）')}
+                      {String(e.payload?.prompt_preview || e.payload?.reply_preview
+                        || e.payload?.result_preview || '（无内容）')}
                     </pre>
                   </div>
                 ))}

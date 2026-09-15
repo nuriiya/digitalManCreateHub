@@ -142,6 +142,10 @@ export interface JobEvent {
 }
 export const getJobEvents = (id: number) =>
   api<{ events: JobEvent[] }>(`/api/events?job_id=${id}`)
+
+// 对话维度事件（E1 实验）：每一步的模型调用/回复/工具调用
+export const getSessionEvents = (sessionId: number) =>
+  api<{ events: JobEvent[] }>(`/api/events?session_id=${sessionId}`)
 export const getStats = () => api('/api/rag/stats')
 export const getDocuments = () => api('/api/rag/documents')
 export interface ChunkFilters {

@@ -31,7 +31,7 @@ import os
 import re
 from collections import defaultdict
 
-from . import db, llm, netutil
+from . import db, llm, netutil, jobs
 from .jsonb import maybe_jsonb
 
 HISTORY_LIMIT = 20     # recent messages fed back as conversation context
@@ -383,6 +383,34 @@ def _save(conn, identity_id: int, role: str, content: str,
         " VALUES(?,?,?,?,?)", (identity_id, role, content, db.now(), session_id))
     conn.commit()
     return cur.lastrowid
+
+
+def _brief(value, limit: int = 300) -> str:
+    """把工具结果截成短预览字符串（写入 tool.exec 事件用）。"""
+    try:
+        s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        s = str(value)
+    s = (s or "").strip()
+    return s if len(s) <= limit else s[:limit] + f"…(+{len(s) - limit}字)"
+
+
+def _emit_chat_event(conn, session_id, identity_id, type_, fields) -> None:
+    """对话维度事件（实验分支 E1）：job_id 留空，靠 session_id 归组。
+
+    **为什么显式传 session_id**：对话流是生成器，被服务端线程池分段迭代，
+    线程标记（thread-local）在分段之间会丢——所以归属信息必须显式带上。
+    """
+    if session_id is None:
+        return
+    try:
+        payload = dict(fields)
+        payload["session_id"] = session_id
+        if identity_id is not None:
+            payload["identity_id"] = identity_id
+        jobs.emit(conn, jobs.current_job_id(), type_, payload)
+    except Exception:  # noqa: BLE001
+        pass  # 记录失败不影响对话
 
 
 def start_pipeline_session(conn, identity_id: int, message: str,
@@ -1470,6 +1498,21 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
 
     yield {"event": "session", "session_id": session_id}
 
+    # 实验分支 E1：绑定本次对话上下文 —— 这次对话里所有 llm.* 事件都带
+    # session_id（job_id 留空），对话页因此能展示每一步的模型交互明细
+    jobs.set_chat_context(session_id, identity_id)
+    try:
+        yield from _stream_answer_body(conn, identity_id, ident, message,
+                                       session_id, use_ontology, use_rag,
+                                       provider, ollama_model, created_session)
+    finally:
+        jobs.set_chat_context(None, None)
+
+
+def _stream_answer_body(conn, identity_id, ident, message, session_id,
+                        use_ontology, use_rag, provider, ollama_model,
+                        created_session):
+    """stream_answer 主体（E1 拆出：调用方负责对话上下文的设置/清理）。"""
     model = _provider_model(provider, ollama_model)
     context_window, model_ctx_len = _context_window(provider, model)
     budget_tokens = int(context_window * ONTOLOGY_BUDGET_RATIO)
@@ -1537,13 +1580,29 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
         return n + "|" + json.dumps(a, ensure_ascii=False, sort_keys=True)
 
     def _stream_one() -> str:
-        """stream 一次 LLM 调用，yield token 事件，return 完整 reply。"""
+        """stream 一次 LLM 调用，yield token 事件，return 完整 reply。
+
+        E1：这次调用的「发给模型什么 / 模型回了什么」在此**显式**记事件
+        （带 session_id），对话页展开阶段即可看到明细。"""
         parts: list[str] = []
+        _emit_chat_event(conn, session_id, identity_id, "llm.call", {
+            "model": _provider_model(provider, ollama_model),
+            "channel": provider,
+            "prompt_len": sum(len(m.get("content") or "") for m in messages),
+            "prompt_preview": _brief(
+                (messages[-1].get("content") if messages else "") or "", 600),
+        })
         for tok in llm_mod.stream_pick(provider, messages, ollama_model,
                                        usage_out=usage):
             parts.append(tok)
             yield {"event": "token", "text": tok}
-        return "".join(parts)
+        reply_text = "".join(parts)
+        _emit_chat_event(conn, session_id, identity_id, "llm.reply", {
+            "model": _provider_model(provider, ollama_model),
+            "channel": provider,
+            "reply_preview": _brief(reply_text, 400),
+        })
+        return reply_text
 
     def _drain(gen):
         """把内部生成器的事件转发出来并捕获最终 reply。"""
@@ -1617,6 +1676,15 @@ def stream_answer(conn, identity_id: int, message: str, use_ontology: bool = Tru
                                "result": (result.get("result")
                                           if result.get("ok")
                                           else result.get("error"))})
+            # 实验分支 E1：工具调用落一条事件 —— 对话页「阶段展开」因此能看到
+            # 模型这一步调了什么工具、成不成功、结果摘要（此前只有 llm.call/reply）
+            _emit_chat_event(conn, session_id, identity_id, "tool.exec", {
+                "name": name, "ok": bool(result.get("ok")),
+                "reason": None if result.get("ok") else reason,
+                "result_preview": _brief(result.get("result")
+                                         if result.get("ok")
+                                         else result.get("error")),
+            })
             yield {"event": "tool_executing", "name": name,
                    "ok": result.get("ok", False),
                    "reason": None if result.get("ok") else reason,

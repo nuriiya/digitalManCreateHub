@@ -722,8 +722,13 @@ def delete_job(job_id: int):
 
 
 @app.get("/api/events")
-def get_events(since: int = 0, job_id: int | None = None):
-    return {"events": jobs.events_since(db.get_conn(), since, job_id=job_id)}
+def get_events(since: int = 0, job_id: int | None = None,
+               session_id: int | None = None):
+    """事件流。job_id=任务维度；session_id=对话维度（E1 实验：对话里
+    每一步的模型调用/回复/工具调用，便于对话页展开查看明细）。"""
+    return {"events": jobs.events_since(db.get_conn(), since,
+                                        job_id=job_id,
+                                        session_id=session_id)}
 
 
 @app.websocket("/ws/events")

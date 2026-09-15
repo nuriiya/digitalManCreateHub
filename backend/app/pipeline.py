@@ -982,24 +982,30 @@ def run_pipeline_execution(conn, job_id, pipeline_id) -> None:
         inputs = collect_inputs(conn, run_id, node, p["nodes"], p["relations"])
         if extra_inputs:
             inputs = list(inputs) + list(extra_inputs)
-        if node["kind"] == KIND_DETERMINISTIC:
-            output = _run_deterministic(conn, node, inputs, job_id)
-        else:
-            output = _run_nominate(conn, node, inputs, p["relations"], p["nodes"])
-        rr = refine_node_output(conn, node, output, p["relations"])
-        if rr.get("problem") and node["kind"] != KIND_DETERMINISTIC:
-            jobs.emit(conn, job_id, "pipeline.node",
-                      {"node_key": node["node_key"], "status": "retry",
-                       "index": i, "reason": rr["problem"]})
-            hint = cm.pack_handoff(
-                cm.KIND_GENERIC,
-                "上一轮产出不是可交付物（" + rr["problem"] + "）。"
-                "请**直接给出最终交付物正文** —— 不要再输出工具调用的草稿、"
-                "不要再写 <tool_call> 标记；需要查资料就先查完，"
-                "然后把结论整理成完整正文一次性输出。")
-            output = _run_nominate(conn, node, list(inputs) + [hint],
-                                   p["relations"], p["nodes"])
+        # 实验分支 E1：本节点执行期间发出的全部 llm.* 事件都打上 node_key 标记，
+        # 界面据此**直接归属**到该阶段（不再靠序号区间推断）
+        jobs.set_node_context(node["node_key"], i)
+        try:
+            if node["kind"] == KIND_DETERMINISTIC:
+                output = _run_deterministic(conn, node, inputs, job_id)
+            else:
+                output = _run_nominate(conn, node, inputs, p["relations"], p["nodes"])
             rr = refine_node_output(conn, node, output, p["relations"])
+            if rr.get("problem") and node["kind"] != KIND_DETERMINISTIC:
+                jobs.emit(conn, job_id, "pipeline.node",
+                          {"node_key": node["node_key"], "status": "retry",
+                           "index": i, "reason": rr["problem"]})
+                hint = cm.pack_handoff(
+                    cm.KIND_GENERIC,
+                    "上一轮产出不是可交付物（" + rr["problem"] + "）。"
+                    "请**直接给出最终交付物正文** —— 不要再输出工具调用的草稿、"
+                    "不要再写 <tool_call> 标记；需要查资料就先查完，"
+                    "然后把结论整理成完整正文一次性输出。")
+                output = _run_nominate(conn, node, list(inputs) + [hint],
+                                       p["relations"], p["nodes"])
+                rr = refine_node_output(conn, node, output, p["relations"])
+        finally:
+            jobs.set_node_context(None, None)
         if rr.get("problem") and node["kind"] != KIND_DETERMINISTIC:
             store_handoff(conn, run_id, node["id"], rr["kind"], rr["content"],
                           refined=False,

@@ -40,6 +40,36 @@ def set_current_job(job_id: int | None) -> None:
     _threadlocal.job_id = job_id
 
 
+# ---------------- 事件归属上下文（实验分支 E1，2026-09-15） ----------------
+# 目的：让「这条 llm 事件属于哪个阶段 / 哪次对话」**写在事件里**，
+# 而不是让界面事后靠序号区间去猜（猜法在事件缺失或乱序时会归错）。
+def set_node_context(node_key: str | None, index: int | None = None) -> None:
+    """Bind THIS thread to one pipeline node while it executes: every llm.*
+    event emitted in that window carries node_key/index."""
+    _threadlocal.node_key = node_key
+    _threadlocal.node_index = index
+
+
+def node_context() -> dict:
+    return {"node_key": getattr(_threadlocal, "node_key", None),
+            "index": getattr(_threadlocal, "node_index", None)}
+
+
+def set_chat_context(session_id: int | None, identity_id: int | None = None) -> None:
+    """Bind THIS thread to one conversation turn. Lets llm.* events be recorded
+    even when no job is running (job_id stays NULL, session_id does the
+    grouping) — this is what gives the chat page per-step LLM detail."""
+    if session_id is None and identity_id is None:
+        _threadlocal.chat_ctx = None
+    else:
+        _threadlocal.chat_ctx = {"session_id": session_id,
+                                 "identity_id": identity_id}
+
+
+def chat_context() -> dict | None:
+    return getattr(_threadlocal, "chat_ctx", None)
+
+
 # ---------------- worker telemetry buffer ----------------
 # Concurrent extraction workers must NEVER touch the shared sqlite
 # connection: interleaved write transactions from several threads on one
@@ -332,7 +362,8 @@ def job_to_dict(row) -> dict:
 
 
 def events_since(conn, since_seq: int, limit: int = 500,
-                 job_id: int | None = None) -> list[dict]:
+                 job_id: int | None = None,
+                 session_id: int | None = None) -> list[dict]:
     """Events after seq (ASC). job_id filter + DESC for job detail panels.
 
     `payload` lives in JSONB; psycopg3 hands it back as a Python dict/list
@@ -343,6 +374,12 @@ def events_since(conn, since_seq: int, limit: int = 500,
         rows = conn.execute(
             "SELECT seq, job_id, type, payload, ts FROM events WHERE job_id=?"
             " ORDER BY seq DESC LIMIT ?", (job_id, limit)).fetchall()
+    elif session_id is not None:
+        # 实验分支 E1：对话维度事件（无 job，靠 payload 里的 session_id 归组）
+        rows = conn.execute(
+            "SELECT seq, job_id, type, payload, ts FROM events"
+            " WHERE job_id IS NULL AND payload->>'session_id' = ?"
+            " ORDER BY seq ASC LIMIT ?", (str(session_id), limit)).fetchall()
     else:
         rows = conn.execute(
             "SELECT seq, job_id, type, payload, ts FROM events WHERE seq > ?"

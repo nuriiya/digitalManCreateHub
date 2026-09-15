@@ -611,16 +611,33 @@ def _preview(text: str, limit: int) -> str:
 
 
 def _notify(fields: dict) -> None:
-    """Emit an llm.* event for the job running on this thread (best effort).
+    """Emit an llm.* event for the job (or conversation) on this thread.
 
     Concurrent-extraction worker threads run in buffer mode: their telemetry
     goes to an in-memory queue that the scheduler thread drains - workers
-    never touch the shared sqlite connection from their own thread."""
+    never touch the shared db connection from their own thread.
+
+    实验分支 E1（2026-09-15）：
+      - 事件带上**归属标记**——跑 pipeline 节点时是 node_key/index，跑对话时
+        是 session_id/identity_id。界面按标记分组，不再靠序号区间猜。
+      - 没有 job 也能记（job_id 留空 + session_id 分组）：这样**普通对话**
+        里每次模型调用/回复也能在对话页看到明细。
+    """
     from . import db, jobs
     job_id = jobs.current_job_id()
-    if job_id is None:
-        return
     type_ = fields.pop("type", "llm.call")
+    nc = jobs.node_context()
+    if nc.get("node_key"):
+        fields.setdefault("node_key", nc["node_key"])
+        if nc.get("index") is not None:
+            fields.setdefault("node_index", nc["index"])
+    if job_id is None:
+        cc = jobs.chat_context()
+        if not cc:
+            return       # 无 job 又无对话上下文：不记，避免污染事件表
+        for k, v in cc.items():
+            if v is not None:
+                fields.setdefault(k, v)
     if jobs.telemetry_buffered():
         jobs.buffered_telemetry(job_id, type_, fields)
         return
