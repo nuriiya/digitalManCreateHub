@@ -17,6 +17,7 @@
   - **ID 全部按 name 重映射**：导入侧的新 ID 与导出侧无关（跨库迁移安全）。
   - **不携带任何 RAG 数据**：documents/chunks/mentions 留在源库。
 """
+import json
 import time
 
 from . import db as _db
@@ -218,7 +219,8 @@ def import_bundle(conn, data: dict) -> dict:
             " input_schema, kind, builtin_name, status, created_at)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (iid, it.get("action_name"), it.get("description") or "",
-             it.get("input_schema") or {}, it.get("kind") or "builtin",
+             json.dumps(it.get("input_schema") or {}, ensure_ascii=False),
+             it.get("kind") or "builtin",
              it.get("builtin_name"), it.get("status") or "approved", now))
         conn.commit()
         added += 1
@@ -262,7 +264,8 @@ def import_bundle(conn, data: dict) -> dict:
             (nm, it.get("description") or "", it.get("transport") or "http",
              it.get("image") or "", it.get("command") or "",
              it.get("port") or 0, it.get("status") or "stopped",
-             it.get("tools") or [], it.get("approval_status") or "approved",
+             json.dumps(it.get("tools") or [], ensure_ascii=False),
+             it.get("approval_status") or "approved",
              it.get("source_path") or "", now))
         conn.commit()
         mcp_names.add(nm)
